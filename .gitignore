@@ -1,0 +1,24 @@
+# Ignore build artifacts, tooling caches, and other generated directories.
+
+# Cargo and Rust-specific
+/target/
+/**/*.rs.bk
+
+# Compiler outputs and intermediate directories
+/out/
+/testdata/
+
+# Editor/OS artifacts
+*.log
+*.tmp
+*.cache
+.DS_Store
+Thumbs.db
+
+# Node/NPM (if any tooling is added later)
+node_modules/
+npm-debug.log*
+
+# Python caches (if tooling scripts use Python)
+__pycache__/
+*.py[cod]

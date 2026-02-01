@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_WITNESS_SCHEMA_ID: &str = "admissibility-witness/1";
 const DEFAULT_ARTIFACT_ROOT: &str = "out/artifacts";
+const META_REGISTRY_SCHEMA_ID: &str = "meta-registry/0";
+const META_REGISTRY_KIND: &str = "meta_registry";
+const META_REGISTRY_ENV: &str = "ADMIT_META_REGISTRY";
 
 #[derive(Debug)]
 pub enum DeclareCostError {
@@ -34,6 +37,23 @@ pub enum DeclareCostError {
     ArtifactMissing { kind: String, sha256: String },
     Io(String),
     Json(String),
+    PlanAnswersFileNotFound(String),
+    PlanAnswersMissingPrompt(String),
+    PlanAnswersExtraPrompt(String),
+    PlanAnswersDuplicatePrompt(String),
+    PlanAnswersDecode(String),
+    PlanWitnessMissing(String),
+    MetaRegistryMissing(String),
+    MetaRegistryDecode(String),
+    MetaRegistrySchemaMismatch { expected: String, found: String },
+    MetaRegistryMissingSchemaId(String),
+    MetaRegistryMissingScopeId(String),
+    MetaRegistryDuplicateSchemaId(String),
+    MetaRegistryDuplicateScopeId(String),
+    MetaRegistryDuplicateStdlibModule(String),
+    MetaRegistryInvalidCanonicalEncoding(String),
+    MetaRegistryMissingSelfSchema,
+    MetaRegistrySchemaVersionMismatch { expected: u32, found: u32 },
 }
 
 impl fmt::Display for DeclareCostError {
@@ -111,6 +131,65 @@ impl fmt::Display for DeclareCostError {
             ),
             DeclareCostError::Io(err) => write!(f, "io error: {}", err),
             DeclareCostError::Json(err) => write!(f, "json error: {}", err),
+            DeclareCostError::PlanAnswersFileNotFound(path) => {
+                write!(f, "plan answers file not found: {}", path)
+            }
+            DeclareCostError::PlanAnswersMissingPrompt(prompt_id) => {
+                write!(f, "missing answer for prompt: {}", prompt_id)
+            }
+            DeclareCostError::PlanAnswersExtraPrompt(prompt_id) => {
+                write!(f, "extra answer for unknown prompt: {}", prompt_id)
+            }
+            DeclareCostError::PlanAnswersDuplicatePrompt(prompt_id) => {
+                write!(f, "duplicate answer for prompt: {}", prompt_id)
+            }
+            DeclareCostError::PlanAnswersDecode(err) => {
+                write!(f, "plan answers decode error: {}", err)
+            }
+            DeclareCostError::PlanWitnessMissing(plan_id) => {
+                write!(f, "plan witness not found: {}", plan_id)
+            }
+            DeclareCostError::MetaRegistryMissing(path) => {
+                write!(f, "meta registry not found: {}", path)
+            }
+            DeclareCostError::MetaRegistryDecode(err) => {
+                write!(f, "meta registry decode error: {}", err)
+            }
+            DeclareCostError::MetaRegistrySchemaMismatch { expected, found } => {
+                write!(
+                    f,
+                    "meta registry schema_id mismatch (expected {}, found {})",
+                    expected, found
+                )
+            }
+            DeclareCostError::MetaRegistryMissingSchemaId(schema_id) => {
+                write!(f, "meta registry missing schema_id: {}", schema_id)
+            }
+            DeclareCostError::MetaRegistryMissingScopeId(scope_id) => {
+                write!(f, "meta registry missing scope_id: {}", scope_id)
+            }
+            DeclareCostError::MetaRegistryDuplicateSchemaId(schema_id) => {
+                write!(f, "meta registry duplicate schema_id: {}", schema_id)
+            }
+            DeclareCostError::MetaRegistryDuplicateScopeId(scope_id) => {
+                write!(f, "meta registry duplicate scope_id: {}", scope_id)
+            }
+            DeclareCostError::MetaRegistryDuplicateStdlibModule(module_id) => {
+                write!(f, "meta registry duplicate stdlib module_id: {}", module_id)
+            }
+            DeclareCostError::MetaRegistryInvalidCanonicalEncoding(value) => {
+                write!(f, "meta registry invalid canonical_encoding: {}", value)
+            }
+            DeclareCostError::MetaRegistryMissingSelfSchema => {
+                write!(f, "meta registry missing self schema entry")
+            }
+            DeclareCostError::MetaRegistrySchemaVersionMismatch { expected, found } => {
+                write!(
+                    f,
+                    "meta registry schema_version mismatch (expected {}, found {})",
+                    expected, found
+                )
+            }
         }
     }
 }
@@ -131,6 +210,7 @@ pub struct DeclareCostInput {
     pub program_scope: Option<String>,
     pub timestamp: String,
     pub artifacts_root: Option<PathBuf>,
+    pub meta_registry_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +226,8 @@ pub struct CostDeclaredEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub program_bundle_ref: Option<ArtifactRef>,
     pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +269,8 @@ pub struct AdmissibilityCheckedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts_bundle_hash: Option<String>,
     pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +292,8 @@ pub struct AdmissibilityExecutedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts_bundle_hash: Option<String>,
     pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
 }
 
 
@@ -241,6 +327,52 @@ pub struct ArtifactInput {
     pub ext: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryV0 {
+    pub schema_id: String,
+    pub schema_version: u32,
+    pub registry_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generated_at: Option<String>,
+    #[serde(default)]
+    pub stdlib: Vec<MetaRegistryStdlib>,
+    #[serde(default)]
+    pub schemas: Vec<MetaRegistrySchema>,
+    #[serde(default)]
+    pub scopes: Vec<MetaRegistryScope>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryStdlib {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistrySchema {
+    pub id: String,
+    pub schema_version: u32,
+    pub kind: String,
+    pub canonical_encoding: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryScope {
+    pub id: String,
+    pub version: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeGateMode {
+    Warn,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+struct MetaRegistryResolved {
+    registry: MetaRegistryV0,
+    hash: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct CostDeclaredPayload {
     event_type: String,
@@ -253,6 +385,8 @@ struct CostDeclaredPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     program_bundle_ref: Option<ArtifactRef>,
     program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -272,6 +406,8 @@ struct CheckedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     facts_bundle_hash: Option<String>,
     program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -292,6 +428,8 @@ struct ExecutedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     facts_bundle_hash: Option<String>,
     program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_hash: Option<String>,
 }
 
 struct WitnessInput {
@@ -347,6 +485,9 @@ impl WitnessInput {
 
 pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, DeclareCostError> {
     let witness_input = load_witness(&input)?;
+    let registry_resolved = resolve_meta_registry(input.meta_registry_path.as_deref())?;
+    let registry_ref = registry_resolved.as_ref().map(|r| &r.registry);
+    let registry_hash = registry_resolved.as_ref().map(|r| r.hash.clone());
     let computed_hash = sha256_hex(&witness_input.cbor_bytes);
     if let Some(expected) = &input.witness_sha256 {
         if expected != &computed_hash {
@@ -386,6 +527,7 @@ pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, Declar
         &witness_input.cbor_bytes,
         "cbor",
         projection,
+        registry_ref,
     )?;
     let snapshot_bytes = input
         .snapshot_canonical_bytes
@@ -400,6 +542,7 @@ pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, Declar
         &snapshot_bytes,
         "json",
         None,
+        registry_ref,
     )?;
     let program_bundle_ref = match (
         input.program_bundle_canonical_bytes,
@@ -412,6 +555,7 @@ pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, Declar
             &bytes,
             "json",
             None,
+            registry_ref,
         )?),
         (Some(_), None) => {
             return Err(DeclareCostError::Json(
@@ -441,6 +585,7 @@ pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, Declar
         snapshot_hash,
         program_bundle_ref: program_bundle_ref.clone(),
         program,
+        registry_hash: registry_hash.clone(),
     };
 
     let payload_bytes =
@@ -457,6 +602,7 @@ pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, Declar
         snapshot_hash: payload.snapshot_hash,
         program_bundle_ref: payload.program_bundle_ref,
         program: payload.program,
+        registry_hash,
     })
 }
 
@@ -696,7 +842,15 @@ fn store_artifact(
     bytes: &[u8],
     ext: &str,
     json_projection: Option<Vec<u8>>,
+    registry: Option<&MetaRegistryV0>,
 ) -> Result<ArtifactRef, DeclareCostError> {
+    if let Some(registry) = registry {
+        if !registry_allows_schema(registry, schema_id) {
+            return Err(DeclareCostError::MetaRegistryMissingSchemaId(
+                schema_id.to_string(),
+            ));
+        }
+    }
     let sha256 = sha256_hex(bytes);
     let data_path = artifact_disk_path(root, kind, &sha256, ext);
     write_bytes_if_missing(&data_path, bytes)?;
@@ -711,6 +865,265 @@ fn store_artifact(
         size_bytes: bytes.len() as u64,
         path: Some(artifact_rel_path(kind, &sha256, ext)),
     })
+}
+
+fn registry_allows_schema(registry: &MetaRegistryV0, schema_id: &str) -> bool {
+    registry.schemas.iter().any(|entry| entry.id == schema_id)
+}
+
+fn registry_allows_scope(registry: &MetaRegistryV0, scope_id: &str) -> bool {
+    registry.scopes.iter().any(|entry| entry.id == scope_id)
+}
+
+fn enforce_scope_gate(
+    registry: Option<&MetaRegistryV0>,
+    scope_id: &str,
+    mode: ScopeGateMode,
+) -> Result<(), DeclareCostError> {
+    if let Some(registry) = registry {
+        if !registry_allows_scope(registry, scope_id) {
+            if mode == ScopeGateMode::Error {
+                return Err(DeclareCostError::MetaRegistryMissingScopeId(
+                    scope_id.to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_meta_registry(
+    path: Option<&Path>,
+) -> Result<Option<MetaRegistryResolved>, DeclareCostError> {
+    let resolved_path = match path {
+        Some(path) => Some(path.to_path_buf()),
+        None => std::env::var(META_REGISTRY_ENV).ok().map(PathBuf::from),
+    };
+    let path = match resolved_path {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+    if !path.exists() {
+        return Err(DeclareCostError::MetaRegistryMissing(path.display().to_string()));
+    }
+    let bytes = fs::read(&path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    let registry_raw: MetaRegistryV0 =
+        serde_json::from_slice(&bytes).map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
+    if registry_raw.schema_id != META_REGISTRY_SCHEMA_ID {
+        return Err(DeclareCostError::MetaRegistrySchemaMismatch {
+            expected: META_REGISTRY_SCHEMA_ID.to_string(),
+            found: registry_raw.schema_id.clone(),
+        });
+    }
+    let registry = normalize_meta_registry(registry_raw)?;
+    let value =
+        serde_json::to_value(&registry).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let cbor_bytes = admit_core::encode_canonical_value(&value)
+        .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
+    let hash = sha256_hex(&cbor_bytes);
+    Ok(Some(MetaRegistryResolved {
+        registry,
+        hash,
+    }))
+}
+
+fn load_meta_registry_by_hash(
+    artifacts_root: &Path,
+    hash: &str,
+) -> Result<MetaRegistryV0, DeclareCostError> {
+    let cbor_path = artifact_disk_path(artifacts_root, META_REGISTRY_KIND, hash, "cbor");
+    if !cbor_path.exists() {
+        return Err(DeclareCostError::ArtifactMissing {
+            kind: META_REGISTRY_KIND.to_string(),
+            sha256: hash.to_string(),
+        });
+    }
+    let bytes = fs::read(&cbor_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    let value = decode_cbor_to_value(&bytes)?;
+    let registry_raw = serde_json::from_value::<MetaRegistryV0>(value)
+        .map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
+    if registry_raw.schema_id != META_REGISTRY_SCHEMA_ID {
+        return Err(DeclareCostError::MetaRegistrySchemaMismatch {
+            expected: META_REGISTRY_SCHEMA_ID.to_string(),
+            found: registry_raw.schema_id,
+        });
+    }
+    normalize_meta_registry(registry_raw)
+}
+
+fn load_registry_cached(
+    cache: &mut std::collections::HashMap<String, MetaRegistryV0>,
+    artifacts_root: &Path,
+    hash: &str,
+) -> Result<MetaRegistryV0, DeclareCostError> {
+    if let Some(existing) = cache.get(hash) {
+        return Ok(existing.clone());
+    }
+    let registry = load_meta_registry_by_hash(artifacts_root, hash)?;
+    cache.insert(hash.to_string(), registry.clone());
+    Ok(registry)
+}
+
+pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
+    if let Some(parent) = out_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        }
+    }
+
+    let registry = MetaRegistryV0 {
+        schema_id: META_REGISTRY_SCHEMA_ID.to_string(),
+        schema_version: 0,
+        registry_version: 0,
+        generated_at: None,
+        stdlib: vec![MetaRegistryStdlib {
+            module_id: "module:irrev_std@1".to_string(),
+        }],
+        schemas: vec![
+            MetaRegistrySchema {
+                id: META_REGISTRY_SCHEMA_ID.to_string(),
+                schema_version: 0,
+                kind: META_REGISTRY_KIND.to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "admissibility-witness/1".to_string(),
+                schema_version: 1,
+                kind: "witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "vault-snapshot/0".to_string(),
+                schema_version: 0,
+                kind: "snapshot".to_string(),
+                canonical_encoding: "canonical-json".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "program-bundle/0".to_string(),
+                schema_version: 0,
+                kind: "program_bundle".to_string(),
+                canonical_encoding: "canonical-json".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "facts-bundle/0".to_string(),
+                schema_version: 0,
+                kind: "facts_bundle".to_string(),
+                canonical_encoding: "canonical-json".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "plan-witness/1".to_string(),
+                schema_version: 1,
+                kind: "plan_witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+        ],
+        scopes: vec![
+            MetaRegistryScope {
+                id: "scope:meta.registry".to_string(),
+                version: 0,
+            },
+            MetaRegistryScope {
+                id: "scope:main".to_string(),
+                version: 0,
+            },
+        ],
+    };
+
+    let json =
+        serde_json::to_string_pretty(&registry).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    fs::write(out_path, json).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    Ok(())
+}
+
+pub fn registry_build(
+    input_path: &Path,
+    artifacts_root: &Path,
+) -> Result<ArtifactRef, DeclareCostError> {
+    let bytes = fs::read(input_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    let registry_raw: MetaRegistryV0 =
+        serde_json::from_slice(&bytes).map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
+    if registry_raw.schema_id != META_REGISTRY_SCHEMA_ID {
+        return Err(DeclareCostError::MetaRegistrySchemaMismatch {
+            expected: META_REGISTRY_SCHEMA_ID.to_string(),
+            found: registry_raw.schema_id.clone(),
+        });
+    }
+    let registry = normalize_meta_registry(registry_raw)?;
+
+    let value =
+        serde_json::to_value(&registry).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let cbor_bytes = admit_core::encode_canonical_value(&value)
+        .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
+    let json_projection =
+        serde_json::to_vec(&registry).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+
+    store_artifact(
+        artifacts_root,
+        META_REGISTRY_KIND,
+        META_REGISTRY_SCHEMA_ID,
+        &cbor_bytes,
+        "cbor",
+        Some(json_projection),
+        Some(&registry),
+    )
+}
+
+fn normalize_meta_registry(
+    mut registry: MetaRegistryV0,
+) -> Result<MetaRegistryV0, DeclareCostError> {
+    let mut stdlib_ids = std::collections::HashSet::new();
+    for entry in &registry.stdlib {
+        if !stdlib_ids.insert(entry.module_id.as_str()) {
+            return Err(DeclareCostError::MetaRegistryDuplicateStdlibModule(
+                entry.module_id.clone(),
+            ));
+        }
+    }
+    registry
+        .stdlib
+        .sort_by(|a, b| a.module_id.cmp(&b.module_id));
+
+    let mut schema_ids = std::collections::HashSet::new();
+    let mut has_self_schema = false;
+    for entry in &registry.schemas {
+        if !schema_ids.insert(entry.id.as_str()) {
+            return Err(DeclareCostError::MetaRegistryDuplicateSchemaId(
+                entry.id.clone(),
+            ));
+        }
+        if entry.canonical_encoding != "canonical-cbor"
+            && entry.canonical_encoding != "canonical-json"
+        {
+            return Err(DeclareCostError::MetaRegistryInvalidCanonicalEncoding(
+                entry.canonical_encoding.clone(),
+            ));
+        }
+        if entry.id == registry.schema_id {
+            has_self_schema = true;
+            if entry.schema_version != registry.schema_version {
+                return Err(DeclareCostError::MetaRegistrySchemaVersionMismatch {
+                    expected: registry.schema_version,
+                    found: entry.schema_version,
+                });
+            }
+        }
+    }
+    if !has_self_schema {
+        return Err(DeclareCostError::MetaRegistryMissingSelfSchema);
+    }
+    registry.schemas.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut scope_ids = std::collections::HashSet::new();
+    for entry in &registry.scopes {
+        if !scope_ids.insert(entry.id.as_str()) {
+            return Err(DeclareCostError::MetaRegistryDuplicateScopeId(
+                entry.id.clone(),
+            ));
+        }
+    }
+    registry.scopes.sort_by(|a, b| a.id.cmp(&b.id));
+
+    Ok(registry)
 }
 
 pub fn list_artifacts(root: &Path) -> Result<Vec<ArtifactEntry>, DeclareCostError> {
@@ -1028,6 +1441,7 @@ fn payload_for_event(event: &CostDeclaredEvent) -> CostDeclaredPayload {
         snapshot_hash: event.snapshot_hash.clone(),
         program_bundle_ref: event.program_bundle_ref.clone(),
         program: event.program.clone(),
+        registry_hash: event.registry_hash.clone(),
     }
 }
 
@@ -1100,8 +1514,14 @@ pub fn check_cost_declared(
     timestamp: String,
     compiler_build_id: Option<String>,
     facts_bundle_input: Option<ArtifactInput>,
+    meta_registry_path: Option<&Path>,
+    scope_gate_mode: ScopeGateMode,
 ) -> Result<AdmissibilityCheckedEvent, DeclareCostError> {
     let cost_event = read_cost_declared_event(ledger_path, event_id)?;
+    let registry_resolved = resolve_meta_registry(meta_registry_path)?;
+    let registry_ref = registry_resolved.as_ref().map(|r| &r.registry);
+    let registry_hash = registry_resolved.as_ref().map(|r| r.hash.clone());
+    enforce_scope_gate(registry_ref, &cost_event.program.scope, scope_gate_mode)?;
     if cost_event.snapshot_hash.is_none() {
         return Err(DeclareCostError::SnapshotHashMissing);
     }
@@ -1150,6 +1570,7 @@ pub fn check_cost_declared(
             &input.bytes,
             &input.ext,
             None,
+            registry_ref,
         )?),
         None => None,
     };
@@ -1168,6 +1589,7 @@ pub fn check_cost_declared(
         facts_bundle_ref: facts_bundle_ref.clone(),
         facts_bundle_hash: facts_bundle_hash.clone(),
         program: cost_event.program.clone(),
+        registry_hash: registry_hash.clone(),
     };
     let checked_event_id = payload_hash(&checked_payload)?;
 
@@ -1184,6 +1606,7 @@ pub fn check_cost_declared(
         facts_bundle_ref: checked_payload.facts_bundle_ref,
         facts_bundle_hash: checked_payload.facts_bundle_hash,
         program: checked_payload.program,
+        registry_hash,
     })
 }
 
@@ -1193,12 +1616,18 @@ pub fn execute_checked(
     checked_event_id: &str,
     timestamp: String,
     compiler_build_id: Option<String>,
+    meta_registry_path: Option<&Path>,
+    scope_gate_mode: ScopeGateMode,
 ) -> Result<AdmissibilityExecutedEvent, DeclareCostError> {
     let checked_event = read_checked_event(ledger_path, checked_event_id)?;
+    let registry_resolved = resolve_meta_registry(meta_registry_path)?;
+    let registry_hash = registry_resolved.as_ref().map(|r| r.hash.clone());
     if checked_event.snapshot_hash.is_none() {
         return Err(DeclareCostError::SnapshotHashMissing);
     }
     let cost_event = read_cost_declared_event(ledger_path, &checked_event.cost_declared_event_id)?;
+    let registry_ref = registry_resolved.as_ref().map(|r| &r.registry);
+    enforce_scope_gate(registry_ref, &cost_event.program.scope, scope_gate_mode)?;
     if cost_event.snapshot_hash.is_none() {
         return Err(DeclareCostError::SnapshotHashMissing);
     }
@@ -1209,9 +1638,13 @@ pub fn execute_checked(
         cost_declared_event_id: checked_event.cost_declared_event_id.clone(),
         witness: checked_event.witness.clone(),
         compiler: checked_event.compiler.clone(),
+        snapshot_ref: checked_event.snapshot_ref.clone(),
         snapshot_hash: checked_event.snapshot_hash.clone(),
+        program_bundle_ref: checked_event.program_bundle_ref.clone(),
+        facts_bundle_ref: checked_event.facts_bundle_ref.clone(),
         facts_bundle_hash: checked_event.facts_bundle_hash.clone(),
         program: checked_event.program.clone(),
+        registry_hash: checked_event.registry_hash.clone(),
     };
     let checked_hash = payload_hash(&checked_payload)?;
     if checked_hash != checked_event.event_id {
@@ -1271,6 +1704,7 @@ pub fn execute_checked(
         facts_bundle_ref: checked_event.facts_bundle_ref.clone(),
         facts_bundle_hash: checked_event.facts_bundle_hash.clone(),
         program: cost_event.program.clone(),
+        registry_hash: registry_hash.clone(),
     };
     let event_id = payload_hash(&executed_payload)?;
 
@@ -1288,6 +1722,7 @@ pub fn execute_checked(
         facts_bundle_ref: executed_payload.facts_bundle_ref,
         facts_bundle_hash: executed_payload.facts_bundle_hash,
         program: executed_payload.program,
+        registry_hash,
     })
 }
 
@@ -1308,6 +1743,7 @@ pub fn verify_ledger(
         Default::default();
     let mut executed_by_id: std::collections::HashMap<String, AdmissibilityExecutedEvent> =
         Default::default();
+    let mut registry_cache: std::collections::HashMap<String, MetaRegistryV0> = Default::default();
 
     for (i, line) in contents.lines().enumerate() {
         let line_no = i + 1;
@@ -1469,6 +1905,70 @@ pub fn verify_ledger(
                             "program_bundle",
                         );
                     }
+                    if let Some(registry_hash) = &event.registry_hash {
+                        match load_registry_cached(&mut registry_cache, &artifacts_root, registry_hash)
+                        {
+                            Ok(registry) => {
+                            if !registry_allows_schema(&registry, &event.witness.schema_id) {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "registry missing schema_id for witness: {}",
+                                        event.witness.schema_id
+                                    ),
+                                });
+                            }
+                            if !registry_allows_schema(&registry, &event.snapshot_ref.schema_id) {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "registry missing schema_id for snapshot: {}",
+                                        event.snapshot_ref.schema_id
+                                    ),
+                                });
+                            }
+                            if let Some(program_ref) = &event.program_bundle_ref {
+                                if !registry_allows_schema(&registry, &program_ref.schema_id) {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry missing schema_id for program bundle: {}",
+                                            program_ref.schema_id
+                                        ),
+                                    });
+                                }
+                            }
+                            if !registry_allows_scope(&registry, &event.program.scope) {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "registry missing scope_id for program: {}",
+                                        event.program.scope
+                                    ),
+                                });
+                            }
+                            }
+                            Err(err) => {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "registry load failed (hash {}): {}",
+                                        registry_hash, err
+                                    ),
+                                });
+                            }
+                        }
+                    }
                     cost_by_id.insert(event.event_id.clone(), event);
                 }
                 Err(err) => {
@@ -1503,6 +2003,7 @@ pub fn verify_ledger(
                             facts_bundle_ref: event.facts_bundle_ref.clone(),
                             facts_bundle_hash: event.facts_bundle_hash.clone(),
                             program: event.program.clone(),
+                            registry_hash: event.registry_hash.clone(),
                         };
                         if let Ok(hash) = payload_hash(&payload) {
                             if hash != event.event_id {
@@ -1527,6 +2028,96 @@ pub fn verify_ledger(
                                 &mut issues,
                                 "facts_bundle",
                             );
+                        }
+                        if let Some(registry_hash) = &event.registry_hash {
+                            match load_registry_cached(
+                                &mut registry_cache,
+                                &artifacts_root,
+                                registry_hash,
+                            ) {
+                                Ok(registry) => {
+                                    if !registry_allows_schema(&registry, &event.witness.schema_id)
+                                    {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing schema_id for witness: {}",
+                                                event.witness.schema_id
+                                            ),
+                                        });
+                                    }
+                                    if !registry_allows_schema(
+                                        &registry,
+                                        &event.snapshot_ref.schema_id,
+                                    ) {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing schema_id for snapshot: {}",
+                                                event.snapshot_ref.schema_id
+                                            ),
+                                        });
+                                    }
+                                    if let Some(program_ref) = &event.program_bundle_ref {
+                                        if !registry_allows_schema(
+                                            &registry,
+                                            &program_ref.schema_id,
+                                        ) {
+                                            issues.push(LedgerIssue {
+                                                line: line_no,
+                                                event_id: event_id.clone(),
+                                                event_type: event_type.clone(),
+                                                message: format!(
+                                                    "registry missing schema_id for program bundle: {}",
+                                                    program_ref.schema_id
+                                                ),
+                                            });
+                                        }
+                                    }
+                                    if let Some(facts_ref) = &event.facts_bundle_ref {
+                                        if !registry_allows_schema(
+                                            &registry,
+                                            &facts_ref.schema_id,
+                                        ) {
+                                            issues.push(LedgerIssue {
+                                                line: line_no,
+                                                event_id: event_id.clone(),
+                                                event_type: event_type.clone(),
+                                                message: format!(
+                                                    "registry missing schema_id for facts bundle: {}",
+                                                    facts_ref.schema_id
+                                                ),
+                                            });
+                                        }
+                                    }
+                                    if !registry_allows_scope(&registry, &event.program.scope) {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing scope_id for program: {}",
+                                                event.program.scope
+                                            ),
+                                        });
+                                    }
+                                }
+                                Err(err) => {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry load failed (hash {}): {}",
+                                            registry_hash, err
+                                        ),
+                                    });
+                                }
+                            }
                         }
                         checked_by_id.insert(event.event_id.clone(), event);
                     }
@@ -1562,6 +2153,7 @@ pub fn verify_ledger(
                             facts_bundle_ref: event.facts_bundle_ref.clone(),
                             facts_bundle_hash: event.facts_bundle_hash.clone(),
                             program: event.program.clone(),
+                            registry_hash: event.registry_hash.clone(),
                         };
                         if let Ok(hash) = payload_hash(&payload) {
                             if hash != event.event_id {
@@ -1576,6 +2168,96 @@ pub fn verify_ledger(
                                 });
                             }
                         }
+                        if let Some(registry_hash) = &event.registry_hash {
+                            match load_registry_cached(
+                                &mut registry_cache,
+                                &artifacts_root,
+                                registry_hash,
+                            ) {
+                                Ok(registry) => {
+                                    if !registry_allows_schema(&registry, &event.witness.schema_id)
+                                    {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing schema_id for witness: {}",
+                                                event.witness.schema_id
+                                            ),
+                                        });
+                                    }
+                                    if !registry_allows_schema(
+                                        &registry,
+                                        &event.snapshot_ref.schema_id,
+                                    ) {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing schema_id for snapshot: {}",
+                                                event.snapshot_ref.schema_id
+                                            ),
+                                        });
+                                    }
+                                    if let Some(program_ref) = &event.program_bundle_ref {
+                                        if !registry_allows_schema(
+                                            &registry,
+                                            &program_ref.schema_id,
+                                        ) {
+                                            issues.push(LedgerIssue {
+                                                line: line_no,
+                                                event_id: event_id.clone(),
+                                                event_type: event_type.clone(),
+                                                message: format!(
+                                                    "registry missing schema_id for program bundle: {}",
+                                                    program_ref.schema_id
+                                                ),
+                                            });
+                                        }
+                                    }
+                                    if let Some(facts_ref) = &event.facts_bundle_ref {
+                                        if !registry_allows_schema(
+                                            &registry,
+                                            &facts_ref.schema_id,
+                                        ) {
+                                            issues.push(LedgerIssue {
+                                                line: line_no,
+                                                event_id: event_id.clone(),
+                                                event_type: event_type.clone(),
+                                                message: format!(
+                                                    "registry missing schema_id for facts bundle: {}",
+                                                    facts_ref.schema_id
+                                                ),
+                                            });
+                                        }
+                                    }
+                                    if !registry_allows_scope(&registry, &event.program.scope) {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing scope_id for program: {}",
+                                                event.program.scope
+                                            ),
+                                        });
+                                    }
+                                }
+                                Err(err) => {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry load failed (hash {}): {}",
+                                            registry_hash, err
+                                        ),
+                                    });
+                                }
+                            }
+                        }
                         executed_by_id.insert(event.event_id.clone(), event);
                     }
                     Err(err) => issues.push(LedgerIssue {
@@ -1584,6 +2266,136 @@ pub fn verify_ledger(
                         event_type: event_type.clone(),
                         message: format!("admissibility.executed decode failed: {}", err),
                     }),
+                }
+            }
+            Some("plan.created") => {
+                match serde_json::from_value::<PlanCreatedEvent>(value) {
+                    Ok(event) => {
+                        if event.plan_witness.schema_id != PLAN_WITNESS_SCHEMA_ID {
+                            issues.push(LedgerIssue {
+                                line: line_no,
+                                event_id: event_id.clone(),
+                                event_type: event_type.clone(),
+                                message: format!(
+                                    "plan witness schema_id mismatch (expected {}, found {})",
+                                    PLAN_WITNESS_SCHEMA_ID, event.plan_witness.schema_id
+                                ),
+                            });
+                        }
+                        let payload = PlanCreatedPayload {
+                            event_type: event.event_type.clone(),
+                            timestamp: event.timestamp.clone(),
+                            plan_witness: event.plan_witness.clone(),
+                            producer: event.producer.clone(),
+                            template_id: event.template_id.clone(),
+                            repro: event.repro.clone(),
+                            registry_hash: event.registry_hash.clone(),
+                        };
+                        if let Ok(hash) = payload_hash(&payload) {
+                            if hash != event.event_id {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "event_id mismatch (expected {}, computed {})",
+                                        event.event_id, hash
+                                    ),
+                                });
+                            }
+                        }
+                        let witness_bytes = verify_artifact_ref(
+                            &artifacts_root,
+                            &event.plan_witness,
+                            line_no,
+                            &event_id,
+                            &event_type,
+                            &mut issues,
+                            "plan_witness",
+                        );
+                        if let Some(bytes) = witness_bytes {
+                            match decode_cbor_to_value(&bytes)
+                                .and_then(|val| {
+                                    serde_json::from_value::<admit_core::PlanWitness>(val)
+                                        .map_err(|err| DeclareCostError::Json(err.to_string()))
+                                }) {
+                                Ok(witness) => {
+                                    if witness.schema_id != PLAN_WITNESS_SCHEMA_ID {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "plan witness schema_id mismatch (expected {}, found {})",
+                                                PLAN_WITNESS_SCHEMA_ID, witness.schema_id
+                                            ),
+                                        });
+                                    }
+                                    if witness.schema_id != event.plan_witness.schema_id {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: "plan witness schema_id mismatch vs ref"
+                                                .to_string(),
+                                        });
+                                    }
+                                }
+                                Err(err) => {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "plan witness cbor decode failed: {}",
+                                            err
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                        if let Some(registry_hash) = &event.registry_hash {
+                            match load_registry_cached(
+                                &mut registry_cache,
+                                &artifacts_root,
+                                registry_hash,
+                            ) {
+                                Ok(registry) => {
+                                if !registry_allows_schema(&registry, &event.plan_witness.schema_id)
+                                {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry missing schema_id for plan witness: {}",
+                                            event.plan_witness.schema_id
+                                        ),
+                                    });
+                                }
+                                }
+                                Err(err) => {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry load failed (hash {}): {}",
+                                            registry_hash, err
+                                        ),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        issues.push(LedgerIssue {
+                            line: line_no,
+                            event_id: event_id.clone(),
+                            event_type: event_type.clone(),
+                            message: format!("plan.created decode failed: {}", err),
+                        });
+                    }
                 }
             }
             Some(other) => issues.push(LedgerIssue {
@@ -1790,4 +2602,513 @@ pub fn verify_ledger(
         total: contents.lines().filter(|l| !l.trim().is_empty()).count(),
         issues,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Plan witness types and functions
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanCreatedEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub plan_witness: ArtifactRef,
+    pub producer: PlanProducerRef,
+    pub template_id: String,
+    pub repro: PlanReproRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PlanCreatedPayload {
+    event_type: String,
+    timestamp: String,
+    plan_witness: ArtifactRef,
+    producer: PlanProducerRef,
+    template_id: String,
+    repro: PlanReproRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanProducerRef {
+    pub surface: String,
+    pub tool_version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanReproRef {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_hash: Option<String>,
+    pub template_hash: String,
+    pub answers_file_hash: String,
+}
+
+pub struct PlanNewInput {
+    pub answers_path: PathBuf,
+    pub scope: String,
+    pub target: String,
+    pub surface: String,
+    pub tool_version: String,
+    pub snapshot_hash: Option<String>,
+    pub timestamp: String,
+    pub artifacts_root: Option<PathBuf>,
+    pub meta_registry_path: Option<PathBuf>,
+}
+
+const PLAN_WITNESS_SCHEMA_ID: &str = "plan-witness/1";
+const PLAN_TEMPLATE_ID: &str = "plan:diagnostic@1";
+
+fn diagnostic_prompts() -> Vec<admit_core::PlanPrompt> {
+    vec![
+        admit_core::PlanPrompt {
+            prompt_id: "action_definition".into(),
+            section: 1,
+            title: "Action Definition".into(),
+            guidance: "What specific action is being performed? What system(s) or substrate(s) does it touch? What is the minimal description that distinguishes this action from similar ones?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "boundary_declaration".into(),
+            section: 2,
+            title: "Boundary Declaration".into(),
+            guidance: "What is allowed to change? What must not change? What files, records, artifacts, schemas, or external systems are in scope? What explicit paths/resources are out of bounds?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "persistence_analysis".into(),
+            section: 3,
+            title: "Persistence Analysis".into(),
+            guidance: "After the action completes, what differences remain even if no one uses the result? Which changes persist by default? Which changes would require active effort to undo?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "erasure_cost".into(),
+            section: 4,
+            title: "Erasure Cost".into(),
+            guidance: "If you attempted to undo this action, what would be lost? Classify the erasure cost: Grade 0 (fully reversible, no loss), Grade 1 (reversible with routine effort), Grade 2 (costly or lossy to reverse), Grade 3 (irreversible or externally irreversible). Describe the cost in concrete terms.".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "displacement_ownership".into(),
+            section: 5,
+            title: "Displacement & Ownership".into(),
+            guidance: "Who absorbs the cost if reversal is required? Is the cost borne by the actor, future maintainers, users, or external systems or people? Is this displacement explicit and accepted?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "preconditions".into(),
+            section: 6,
+            title: "Preconditions".into(),
+            guidance: "What facts must be true before execution? What evidence is required to prove those facts? How are those facts snapshotted or attested? If a precondition cannot be witnessed, it must not be assumed.".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "execution_constraints".into(),
+            section: 7,
+            title: "Execution Constraints".into(),
+            guidance: "What constraints must hold during execution? What failure modes are acceptable? What failures must abort the action immediately?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "postconditions".into(),
+            section: 8,
+            title: "Postconditions".into(),
+            guidance: "What evidence will prove what actually happened? How will success be distinguished from partial or failed execution? What artifacts or records must be produced?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "accountability".into(),
+            section: 9,
+            title: "Accountability".into(),
+            guidance: "Who is the acting entity? Under what authority is the action performed? What identifier ties this action to a responsible actor or system?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "acceptance_criteria".into(),
+            section: 10,
+            title: "Acceptance Criteria".into(),
+            guidance: "Under what conditions is the action considered done? What would count as unacceptable even if execution technically succeeded?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "refusal_conditions".into(),
+            section: 11,
+            title: "Refusal Conditions".into(),
+            guidance: "List conditions under which the plan must not be executed. What missing evidence or ambiguity should cause a hard stop?".into(),
+        },
+        admit_core::PlanPrompt {
+            prompt_id: "final_check".into(),
+            section: 12,
+            title: "Final Check".into(),
+            guidance: "Answer yes/no: Are all irreversible effects bounded? Is erasure cost explicitly declared and accepted? Is responsibility assigned without ambiguity? Could a future reader reconstruct why this action happened? If any answer is no, the plan is not admissible.".into(),
+        },
+    ]
+}
+
+fn derive_risks(answers: &[admit_core::PlanAnswer]) -> admit_core::DerivedRisks {
+    let erasure_answer = answers
+        .iter()
+        .find(|a| a.prompt_id == "erasure_cost")
+        .map(|a| a.answer.to_lowercase())
+        .unwrap_or_default();
+
+    let erasure_grade = match max_erasure_grade(&erasure_answer) {
+        3 => admit_core::ErasureGrade::Grade3,
+        2 => admit_core::ErasureGrade::Grade2,
+        1 => admit_core::ErasureGrade::Grade1,
+        _ => admit_core::ErasureGrade::Grade0,
+    };
+
+    let risk_label = match &erasure_grade {
+        admit_core::ErasureGrade::Grade3 => "mutation_destructive",
+        admit_core::ErasureGrade::Grade1 | admit_core::ErasureGrade::Grade2 => {
+            "mutation_non_destructive"
+        }
+        admit_core::ErasureGrade::Grade0 => "none",
+    }
+    .to_string();
+
+    let keywords = [
+        "governance",
+        "irreversibility",
+        "decomposition",
+        "attribution",
+    ];
+    let mut invariants_touched: Vec<String> = keywords
+        .iter()
+        .filter(|kw| {
+            answers
+                .iter()
+                .any(|a| a.answer.to_lowercase().contains(*kw))
+        })
+        .map(|kw| kw.to_string())
+        .collect();
+    invariants_touched.sort();
+
+    admit_core::DerivedRisks {
+        erasure_grade,
+        risk_label,
+        invariants_touched,
+    }
+}
+
+fn max_erasure_grade(answer: &str) -> u8 {
+    let bytes = answer.as_bytes();
+    let mut max_grade = 0u8;
+    let mut i = 0usize;
+    while i + 5 <= bytes.len() {
+        if &bytes[i..i + 5] == b"grade" {
+            let left_ok = i == 0 || !is_word_char(bytes[i - 1]);
+            let mut j = i + 5;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if left_ok && j < bytes.len() && bytes[j].is_ascii_digit() {
+                let digit = bytes[j] - b'0';
+                let right_ok = j + 1 == bytes.len() || !is_word_char(bytes[j + 1]);
+                if right_ok && digit <= 3 && digit > max_grade {
+                    max_grade = digit;
+                }
+            }
+        }
+        i += 1;
+    }
+    max_grade
+}
+
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostError> {
+    let answers_raw = fs::read(&input.answers_path).map_err(|_| {
+        DeclareCostError::PlanAnswersFileNotFound(
+            input.answers_path.display().to_string(),
+        )
+    })?;
+    let answers_file_hash = sha256_hex(&answers_raw);
+    let registry_resolved = resolve_meta_registry(input.meta_registry_path.as_deref())?;
+    let registry_ref = registry_resolved.as_ref().map(|r| &r.registry);
+    let registry_hash = registry_resolved.as_ref().map(|r| r.hash.clone());
+
+    #[derive(Deserialize)]
+    struct RawAnswer {
+        prompt_id: String,
+        answer: String,
+    }
+
+    let raw_answers: Vec<RawAnswer> = serde_json::from_slice(&answers_raw)
+        .map_err(|err| DeclareCostError::PlanAnswersDecode(err.to_string()))?;
+
+    let prompts = diagnostic_prompts();
+    let prompt_ids: std::collections::HashSet<&str> =
+        prompts.iter().map(|p| p.prompt_id.as_str()).collect();
+
+    let mut seen_answers = std::collections::HashSet::new();
+    for ra in &raw_answers {
+        if !seen_answers.insert(ra.prompt_id.clone()) {
+            return Err(DeclareCostError::PlanAnswersDuplicatePrompt(
+                ra.prompt_id.clone(),
+            ));
+        }
+    }
+
+    // Check for extra answers (not in template)
+    for ra in &raw_answers {
+        if !prompt_ids.contains(ra.prompt_id.as_str()) {
+            return Err(DeclareCostError::PlanAnswersExtraPrompt(
+                ra.prompt_id.clone(),
+            ));
+        }
+    }
+
+    // Build answer map from input
+    let answer_map: std::collections::HashMap<&str, &str> = raw_answers
+        .iter()
+        .map(|ra| (ra.prompt_id.as_str(), ra.answer.as_str()))
+        .collect();
+
+    // Check for missing answers and build ordered list
+    let mut answers = Vec::with_capacity(prompts.len());
+    for prompt in &prompts {
+        let answer_text = answer_map
+            .get(prompt.prompt_id.as_str())
+            .ok_or_else(|| {
+                DeclareCostError::PlanAnswersMissingPrompt(prompt.prompt_id.clone())
+            })?;
+        answers.push(admit_core::PlanAnswer {
+            prompt_id: prompt.prompt_id.clone(),
+            answer: answer_text.to_string(),
+        });
+    }
+
+    let derived = derive_risks(&answers);
+
+    // Compute template hash from the canonical prompts list
+    let prompts_value =
+        serde_json::to_value(&prompts).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let template_bytes = admit_core::encode_canonical_value(&prompts_value)
+        .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
+    let template_hash = sha256_hex(&template_bytes);
+
+    let witness = admit_core::PlanWitness {
+        schema_id: PLAN_WITNESS_SCHEMA_ID.to_string(),
+        created_at: input.timestamp.clone(),
+        producer: admit_core::PlanProducer {
+            surface: input.surface.clone(),
+            tool_version: input.tool_version.clone(),
+        },
+        inputs: admit_core::PlanInputs {
+            template_id: PLAN_TEMPLATE_ID.to_string(),
+            scope: input.scope.clone(),
+            target: input.target.clone(),
+        },
+        template: admit_core::PlanTemplate {
+            template_id: PLAN_TEMPLATE_ID.to_string(),
+            template_hash: template_hash.clone(),
+            prompts,
+        },
+        answers,
+        derived,
+        repro: admit_core::PlanRepro {
+            snapshot_hash: input.snapshot_hash.clone(),
+            template_hash: template_hash.clone(),
+            answers_file_hash: answers_file_hash.clone(),
+        },
+    };
+
+    let witness_value = serde_json::to_value(&witness)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let cbor_bytes = admit_core::encode_canonical_value(&witness_value)
+        .map_err(|err| DeclareCostError::Json(err.0))?;
+
+    let json_projection =
+        serde_json::to_vec(&witness).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+
+    let artifacts_root = input.artifacts_root.unwrap_or_else(default_artifacts_dir);
+    let witness_ref = store_artifact(
+        &artifacts_root,
+        "plan_witness",
+        PLAN_WITNESS_SCHEMA_ID,
+        &cbor_bytes,
+        "cbor",
+        Some(json_projection),
+        registry_ref,
+    )?;
+
+    let producer_ref = PlanProducerRef {
+        surface: input.surface,
+        tool_version: input.tool_version,
+    };
+    let repro_ref = PlanReproRef {
+        snapshot_hash: input.snapshot_hash,
+        template_hash,
+        answers_file_hash,
+    };
+
+    let payload = PlanCreatedPayload {
+        event_type: "plan.created".to_string(),
+        timestamp: input.timestamp.clone(),
+        plan_witness: witness_ref.clone(),
+        producer: producer_ref.clone(),
+        template_id: PLAN_TEMPLATE_ID.to_string(),
+        repro: repro_ref.clone(),
+        registry_hash: registry_hash.clone(),
+    };
+    let event_id = payload_hash(&payload)?;
+
+    Ok(PlanCreatedEvent {
+        event_type: payload.event_type,
+        event_id,
+        timestamp: input.timestamp,
+        plan_witness: witness_ref,
+        producer: producer_ref,
+        template_id: PLAN_TEMPLATE_ID.to_string(),
+        repro: repro_ref,
+        registry_hash,
+    })
+}
+
+pub fn append_plan_created_event(
+    ledger_path: &Path,
+    event: &PlanCreatedEvent,
+) -> Result<(), DeclareCostError> {
+    if let Some(parent) = ledger_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        }
+    }
+
+    if ledger_path.exists() {
+        let contents =
+            fs::read_to_string(ledger_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        for line in contents.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value =
+                serde_json::from_str(line).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+            if value
+                .get("event_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| id == event.event_id)
+            {
+                return Err(DeclareCostError::DuplicateEventId(event.event_id.clone()));
+            }
+        }
+    }
+
+    let line =
+        serde_json::to_string(event).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(ledger_path)
+        .and_then(|mut file| {
+            use std::io::Write;
+            writeln!(file, "{}", line)
+        })
+        .map_err(|err| DeclareCostError::Io(err.to_string()))?;
+
+    Ok(())
+}
+
+fn load_plan_witness(
+    artifacts_root: &Path,
+    plan_id: &str,
+) -> Result<admit_core::PlanWitness, DeclareCostError> {
+    // Try CBOR first
+    let cbor_path = artifact_disk_path(artifacts_root, "plan_witness", plan_id, "cbor");
+    if cbor_path.exists() {
+        let bytes =
+            fs::read(&cbor_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        let value = decode_cbor_to_value(&bytes)?;
+        return serde_json::from_value::<admit_core::PlanWitness>(value)
+            .map_err(|err| DeclareCostError::Json(err.to_string()));
+    }
+    // Fall back to JSON projection
+    let json_path = artifact_disk_path(artifacts_root, "plan_witness", plan_id, "json");
+    if json_path.exists() {
+        let bytes =
+            fs::read(&json_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        return serde_json::from_slice::<admit_core::PlanWitness>(&bytes)
+            .map_err(|err| DeclareCostError::Json(err.to_string()));
+    }
+    Err(DeclareCostError::PlanWitnessMissing(plan_id.to_string()))
+}
+
+pub fn render_plan_text(
+    artifacts_root: &Path,
+    plan_id: &str,
+) -> Result<String, DeclareCostError> {
+    let witness = load_plan_witness(artifacts_root, plan_id)?;
+    let mut out = String::new();
+
+    out.push_str(&format!("plan_id={}\n", plan_id));
+    out.push_str(&format!("schema_id={}\n", witness.schema_id));
+    out.push_str(&format!("created_at={}\n", witness.created_at));
+    out.push_str(&format!(
+        "producer={}/{}\n",
+        witness.producer.surface, witness.producer.tool_version
+    ));
+    out.push_str(&format!("scope={}\n", witness.inputs.scope));
+    out.push_str(&format!("target={}\n", witness.inputs.target));
+    out.push_str(&format!(
+        "erasure_grade={:?}\n",
+        witness.derived.erasure_grade
+    ));
+    out.push_str(&format!("risk_label={}\n", witness.derived.risk_label));
+    out.push_str(&format!(
+        "invariants_touched={}\n",
+        witness.derived.invariants_touched.join(",")
+    ));
+
+    for prompt in &witness.template.prompts {
+        let answer_text = witness
+            .answers
+            .iter()
+            .find(|a| a.prompt_id == prompt.prompt_id)
+            .map(|a| a.answer.as_str())
+            .unwrap_or("");
+        out.push_str(&format!(
+            "\n--- Section {}: {} ---\n{}\n",
+            prompt.section, prompt.title, answer_text
+        ));
+    }
+
+    Ok(out)
+}
+
+pub fn export_plan_markdown(
+    artifacts_root: &Path,
+    plan_id: &str,
+) -> Result<String, DeclareCostError> {
+    let witness = load_plan_witness(artifacts_root, plan_id)?;
+    let mut out = String::new();
+
+    // Repro header as HTML comment (survives Markdown rendering)
+    out.push_str("<!-- plan-projection\n");
+    out.push_str(&format!("plan_id: {}\n", plan_id));
+    out.push_str(&format!("witness_created_at: {}\n", witness.created_at));
+    out.push_str(&format!("witness_hash: {}\n", plan_id));
+    out.push_str("identity: plan_id == sha256(canonical_cbor(plan_witness))\n");
+    out.push_str("repro: plan_witness includes created_at; to reproduce plan_id, pass the same created_at and identical answers bytes.\n");
+    out.push_str(&format!("template_id: {}\n", witness.template.template_id));
+    out.push_str("source: plan_witness artifact (canonical CBOR)\n");
+    out.push_str(
+        "NOTE: This is a projection. The CBOR artifact is the source of truth.\n",
+    );
+    out.push_str("-->\n\n");
+
+    out.push_str("## Irreversibility-First Plan Design Prompt\n\n");
+
+    for prompt in &witness.template.prompts {
+        let answer_text = witness
+            .answers
+            .iter()
+            .find(|a| a.prompt_id == prompt.prompt_id)
+            .map(|a| a.answer.as_str())
+            .unwrap_or("");
+
+        out.push_str(&format!(
+            "### {}. {}\n\n{}\n\n---\n\n",
+            prompt.section, prompt.title, answer_text
+        ));
+    }
+
+    Ok(out)
 }

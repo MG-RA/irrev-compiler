@@ -6,13 +6,14 @@ pub(crate) fn lexer(
 ) -> impl Parser<char, Vec<(Token, std::ops::Range<usize>)>, Error = Simple<char>> {
     let number = text::int(10)
         .then(just('.').then(text::digits(10)).or_not())
-        .map(|(int_part, frac)| {
+        .try_map(|(int_part, frac), span| {
             let mut s = int_part;
             if let Some((dot, frac)) = frac {
                 s.push(dot);
                 s.push_str(&frac);
             }
-            s.parse::<f64>().unwrap()
+            s.parse::<f64>()
+                .map_err(|_| Simple::custom(span, "invalid number literal"))
         })
         .map(|value| Token::Number(Number::new(value)));
 
@@ -56,10 +57,13 @@ pub(crate) fn lexer(
         make_keyword("cost", Token::KwCost).boxed(),
         make_keyword("commit", Token::KwCommit).boxed(),
         make_keyword("inadmissible_if", Token::KwInadmissibleIf).boxed(),
+        make_keyword("tag", Token::KwTag).boxed(),
         make_keyword("query", Token::KwQuery).boxed(),
         make_keyword("admissible", Token::KwAdmissible).boxed(),
         make_keyword("witness", Token::KwWitness).boxed(),
         make_keyword("delta", Token::KwDelta).boxed(),
+        make_keyword("lint", Token::KwLint).boxed(),
+        make_keyword("fail_on", Token::KwFailOn).boxed(),
         make_keyword("unit", Token::KwUnit).boxed(),
         make_keyword("allow", Token::KwAllow).boxed(),
         make_keyword("and", Token::KwAnd).boxed(),
@@ -70,6 +74,7 @@ pub(crate) fn lexer(
         make_keyword("has_commit", Token::KwHasCommit).boxed(),
         make_keyword("commit_equals", Token::KwCommitEquals).boxed(),
         make_keyword("commit_cmp", Token::KwCommitCmp).boxed(),
+        make_keyword("vault_rule", Token::KwVaultRule).boxed(),
         make_keyword("true", Token::True).boxed(),
         make_keyword("false", Token::False).boxed(),
     ]);

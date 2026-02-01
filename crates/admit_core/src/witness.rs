@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::ir::{CommitValue, Program, Quantity, ScopeMode};
 use crate::span::Span;
@@ -39,6 +40,14 @@ pub struct WitnessProgram {
 pub enum Verdict {
     Admissible,
     Inadmissible,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -88,6 +97,20 @@ pub enum Fact {
         to: ScopeId,
         mode: ScopeMode,
         span: Span,
+    },
+    #[serde(rename = "lint_finding")]
+    LintFinding {
+        rule_id: String,
+        severity: Severity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invariant: Option<String>,
+        // Vault-relative path (or other domain-relative path) for deterministic output.
+        path: String,
+        // Span is best-effort: always include file; line/col may be None.
+        span: Span,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Value>,
     },
 }
 
@@ -229,7 +252,7 @@ impl WitnessBuilder {
     }
 }
 
-fn fact_sort_key(fact: &Fact) -> (u8, String, u32, u32) {
+fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
     let type_rank = match fact {
         Fact::ConstraintTriggered { .. } => 0,
         Fact::PermissionUsed { .. } => 1,
@@ -238,6 +261,11 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, u32, u32) {
         Fact::PredicateEvaluated { .. } => 4,
         Fact::ScopeChangeUsed { .. } => 5,
         Fact::UnaccountedBoundaryChange { .. } => 6,
+        Fact::LintFinding { .. } => 7,
+    };
+    let aux = match fact {
+        Fact::LintFinding { rule_id, .. } => rule_id.clone(),
+        _ => String::new(),
     };
     let span = match fact {
         Fact::ConstraintTriggered { span, .. } => span,
@@ -247,9 +275,11 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, u32, u32) {
         Fact::PredicateEvaluated { span, .. } => span,
         Fact::ScopeChangeUsed { span, .. } => span,
         Fact::UnaccountedBoundaryChange { span, .. } => span,
+        Fact::LintFinding { span, .. } => span,
     };
     (
         type_rank,
+        aux,
         span.file.clone(),
         span.line.unwrap_or(0),
         span.col.unwrap_or(0),

@@ -16,6 +16,12 @@ pub fn encode_canonical(witness: &Witness) -> Result<Vec<u8>, EvalError> {
     Ok(buf)
 }
 
+pub fn encode_canonical_value(value: &serde_json::Value) -> Result<Vec<u8>, EvalError> {
+    let mut buf = Vec::new();
+    encode_value(value, &mut buf)?;
+    Ok(buf)
+}
+
 fn encode_value(value: &Value, buf: &mut Vec<u8>) -> Result<(), EvalError> {
     match value {
         Value::Null => {

@@ -1,0 +1,95 @@
+# Proposed v0 Vault Lint Ruleset (ADM)
+#
+# Goal: replace `meta/rulesets/core.toml` (legacy Python rule carrier) with an ADM
+# module that the Rust vault-ingestion/lint module can evaluate directly.
+#
+# v0 semantics:
+# - One constraint = one rule.
+# - Each `vault_rule(...)` predicate evaluates the rule and produces a finding set.
+# - `@inadmissible_if vault_rule(...)` means: inadmissible iff there exists >=1 finding.
+# - `tag invariant <id>` and `tag severity <level>` attach machine-readable metadata
+#   to the constraint (avoid "comment truth").
+#
+module:vault_lint@1
+depends [module:irrev_std@1]
+scope vault_lint
+
+# ---------------------------------------------------------------------------
+# Governance invariant
+# ---------------------------------------------------------------------------
+
+constraint forbidden-edge
+tag invariant governance
+tag severity warning
+@inadmissible_if vault_rule("forbidden-edge")
+
+constraint missing-role
+tag invariant governance
+tag severity warning
+@inadmissible_if vault_rule("missing-role")
+
+# ---------------------------------------------------------------------------
+# Irreversibility invariant
+# ---------------------------------------------------------------------------
+
+constraint missing-dependencies
+tag invariant irreversibility
+tag severity error
+@inadmissible_if vault_rule("missing-dependencies")
+
+constraint mechanism-missing-residuals
+tag invariant irreversibility
+tag severity error
+@inadmissible_if vault_rule("mechanism-missing-residuals")
+
+constraint hub-required-headings
+tag invariant irreversibility
+tag severity error
+@inadmissible_if vault_rule("hub-required-headings")
+
+# ---------------------------------------------------------------------------
+# Decomposition invariant
+# ---------------------------------------------------------------------------
+
+constraint layer-violation
+tag invariant decomposition
+tag severity error
+@inadmissible_if vault_rule("layer-violation")
+
+constraint kind-violation
+tag invariant decomposition
+tag severity error
+@inadmissible_if vault_rule("kind-violation")
+
+# ---------------------------------------------------------------------------
+# Attribution invariant
+# ---------------------------------------------------------------------------
+
+constraint responsibility-scope
+tag invariant attribution
+tag severity info
+@inadmissible_if vault_rule("responsibility-scope")
+
+# ---------------------------------------------------------------------------
+# Structural (supports all invariants)
+# ---------------------------------------------------------------------------
+
+constraint dependency-cycle
+tag severity error
+@inadmissible_if vault_rule("dependency-cycle")
+
+constraint broken-link
+tag severity warning
+@inadmissible_if vault_rule("broken-link")
+
+constraint alias-drift
+tag severity info
+@inadmissible_if vault_rule("alias-drift")
+
+constraint registry-drift
+tag severity error
+@inadmissible_if vault_rule("registry-drift")
+
+# CI policy knob (the vault owns policy; CLI may provide an override flag).
+query lint fail_on warning
+query witness

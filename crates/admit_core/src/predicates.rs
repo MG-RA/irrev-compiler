@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use crate::env::Env;
 use crate::error::EvalError;
 use crate::ir::{CmpOp, Predicate};
+use crate::provider::PredicateProvider;
 use crate::span::Span;
 use crate::symbols::{SymbolNamespace, SymbolRef};
 use crate::trace::Trace;
@@ -13,6 +14,16 @@ pub fn eval_pred(
     env: &Env,
     trace: &mut Trace,
     span: &Span,
+) -> Result<bool, EvalError> {
+    eval_pred_with_provider(pred, env, trace, span, None)
+}
+
+pub fn eval_pred_with_provider(
+    pred: &Predicate,
+    env: &Env,
+    trace: &mut Trace,
+    span: &Span,
+    provider: Option<&dyn PredicateProvider>,
 ) -> Result<bool, EvalError> {
     match pred {
         Predicate::EraseAllowed { diff } => Ok(env.is_allowed(diff)),
@@ -49,6 +60,26 @@ pub fn eval_pred(
             } else {
                 Err(EvalError("commit is not a quantity".into()))
             }
+        }
+        Predicate::VaultRule { rule_id } => {
+            let Some(provider) = provider else {
+                return Err(EvalError("vault_rule requires a predicate provider".into()));
+            };
+            let findings = provider.eval_vault_rule(rule_id)?;
+            let triggered = !findings.is_empty();
+            for f in findings {
+                trace.record(Fact::LintFinding {
+                    rule_id: f.rule_id,
+                    severity: f.severity,
+                    invariant: f.invariant,
+                    path: f.path,
+                    span: f.span,
+                    message: f.message,
+                    evidence: f.evidence,
+                });
+            }
+            // v0 coercion: Findings in boolean position is `exists(findings)`.
+            Ok(triggered)
         }
     }
 }
@@ -127,6 +158,7 @@ pub fn predicate_to_string(pred: &Predicate) -> String {
             cmp_op_repr(op),
             quantity_repr(value)
         ),
+        Predicate::VaultRule { rule_id } => format!("vault_rule \"{}\"", rule_id),
     }
 }
 

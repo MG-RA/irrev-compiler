@@ -1,6 +1,6 @@
 # Python → Rust Migration Plan (Semantics Authority)
 
-Status date: 2026-01-29
+Status date: 2026-01-30
 Owner: mg
 
 ## Principle
@@ -36,6 +36,14 @@ Build a Rust `vault scan` that parses the vault into a deterministic IR:
 **Deliverables**
 - Rust scanner crate + canonical JSON output + hash
 - Golden fixtures for a minimal vault sample
+
+**Decision (2026-01-30)**
+- Implement a new Rust vault module (inside the compiler workspace) that ingests the vault directly; Python is deprecated for semantics.
+- Expose the vault module via the existing `admit` CLI as a clearly separated submodule (vault ingestion separate from compiler logic).
+- Replace `meta/rulesets/core.toml` with a `.adm`-equivalent ruleset that can express all 12 legacy lint rules.
+
+**Status note (2026-01-30)**
+- Phase 1 started with the vault module + `.adm` ruleset design as the entry point for CI parity.
 
 ## Phase 2 — Rust vault lint (structural invariants)
 

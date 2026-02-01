@@ -74,6 +74,7 @@ fn tampered_hash_fails_verification() {
         program_scope: None,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         artifacts_root: Some(temp_artifacts_dir()),
+        meta_registry_path: None,
     };
 
     let err = declare_cost(input).expect_err("expected hash mismatch");
@@ -104,6 +105,7 @@ fn identical_input_produces_same_event_id() {
         program_scope: None,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         artifacts_root: Some(temp_artifacts_dir()),
+        meta_registry_path: None,
     };
 
     let event_a = declare_cost(input.clone()).expect("first event");

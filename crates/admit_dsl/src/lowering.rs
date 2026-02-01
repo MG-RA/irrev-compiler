@@ -7,6 +7,7 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
     let mut scope: Option<String> = None;
     let mut depends: Vec<String> = Vec::new();
     let mut pending_constraint_id: Option<String> = None;
+    let mut pending_constraint_tags: Vec<(String, String, crate::span::Span)> = Vec::new();
     let mut decls = Vec::new();
     let mut rest = Vec::new();
     let mut errors = Vec::new();
@@ -123,6 +124,23 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     errors.push(format!("duplicate constraint declaration: {}", name));
                 }
                 pending_constraint_id = Some(name);
+                pending_constraint_tags.clear();
+            }
+            Stmt::Tag(stmt) => {
+                let Some(cur) = pending_constraint_id.as_ref() else {
+                    errors.push("tag declared without preceding constraint".to_string());
+                    continue;
+                };
+
+                if pending_constraint_tags.iter().any(|(k, _, _)| k == &stmt.key) {
+                    errors.push(format!(
+                        "duplicate tag key for constraint {}: {}",
+                        cur, stmt.key
+                    ));
+                    continue;
+                }
+
+                pending_constraint_tags.push((stmt.key, stmt.value, stmt.span));
             }
             Stmt::Persist(stmt) => {
                 let diff = normalize_name("difference", stmt.diff, &mut errors);
@@ -194,6 +212,22 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     ns: admit_core::SymbolNamespace::Constraint,
                     name,
                 });
+                if let Some(constraint_id) = id.as_ref() {
+                    // Emit tags deterministically (key,value ordering) so the program hash is stable.
+                    pending_constraint_tags.sort_by(|(ak, av, _), (bk, bv, _)| {
+                        (ak, av).cmp(&(bk, bv))
+                    });
+                    for (key, value, tag_span) in pending_constraint_tags.drain(..) {
+                        rest.push(admit_core::Stmt::ConstraintMeta {
+                            id: constraint_id.clone(),
+                            key,
+                            value,
+                            span: lower_span(&tag_span),
+                        });
+                    }
+                } else {
+                    pending_constraint_tags.clear();
+                }
                 rest.push(admit_core::Stmt::Constraint {
                     id,
                     expr: lower_expr(expr, &mut errors),
@@ -205,6 +239,13 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     QueryKind::Admissible => admit_core::Query::Admissible,
                     QueryKind::Witness => admit_core::Query::Witness,
                     QueryKind::Delta => admit_core::Query::Delta,
+                    QueryKind::Lint { fail_on } => admit_core::Query::Lint {
+                        fail_on: match fail_on {
+                            crate::ast::LintFailOn::Error => admit_core::LintFailOn::Error,
+                            crate::ast::LintFailOn::Warning => admit_core::LintFailOn::Warning,
+                            crate::ast::LintFailOn::Info => admit_core::LintFailOn::Info,
+                        },
+                    },
                 };
                 rest.push(admit_core::Stmt::Query {
                     query,
@@ -249,8 +290,14 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
         return Err(errors);
     }
 
-    let (module_name, module_major) = module.unwrap();
-    let scope_name = scope.unwrap();
+    let (module_name, module_major) = match module {
+        Some(value) => value,
+        None => return Err(vec!["missing module declaration".to_string()]),
+    };
+    let scope_name = match scope {
+        Some(value) => value,
+        None => return Err(vec!["missing scope declaration".to_string()]),
+    };
 
     let dependencies = depends
         .into_iter()
@@ -363,6 +410,7 @@ fn lower_predicate(pred: Predicate, errors: &mut Vec<String>) -> admit_core::Pre
                 value: admit_core::Quantity { value, unit },
             }
         }
+        Predicate::VaultRule { rule_id } => admit_core::Predicate::VaultRule { rule_id },
     }
 }
 

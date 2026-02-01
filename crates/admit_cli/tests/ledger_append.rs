@@ -84,6 +84,7 @@ fn append_rejects_duplicate_event_id() {
         program_scope: None,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         artifacts_root: Some(artifacts_dir),
+        meta_registry_path: None,
     };
 
     let event = declare_cost(input).expect("event");

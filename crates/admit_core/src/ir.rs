@@ -101,6 +101,13 @@ pub enum Stmt {
         expr: BoolExpr,
         span: Span,
     },
+    #[serde(rename = "ConstraintMeta")]
+    ConstraintMeta {
+        id: SymbolRef,
+        key: String,
+        value: String,
+        span: Span,
+    },
     #[serde(rename = "Commit")]
     Commit {
         diff: SymbolRef,
@@ -125,6 +132,15 @@ pub enum Query {
     Admissible,
     Witness,
     Delta,
+    Lint { fail_on: LintFailOn },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LintFailOn {
+    Error,
+    Warning,
+    Info,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -161,6 +177,8 @@ pub enum Predicate {
         op: CmpOp,
         value: Quantity,
     },
+    #[serde(rename = "VaultRule")]
+    VaultRule { rule_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

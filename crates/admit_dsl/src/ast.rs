@@ -127,6 +127,15 @@ pub enum QueryKind {
     Admissible,
     Witness,
     Delta,
+    Lint { fail_on: LintFailOn },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LintFailOn {
+    Error,
+    Warning,
+    Info,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -177,6 +186,16 @@ pub enum Predicate {
         value: f64,
         unit: String,
     },
+    VaultRule {
+        rule_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TagStmt {
+    pub key: String,
+    pub value: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -195,6 +214,7 @@ pub enum Stmt {
     ErasureRule(ErasureRuleStmt),
     Permission(PermissionStmt),
     Commit(CommitStmt),
+    Tag(TagStmt),
     InadmissibleIf { expr: BoolExpr, span: Span },
     Query(QueryStmt),
 }

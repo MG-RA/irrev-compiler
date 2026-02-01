@@ -11,8 +11,16 @@ and ledger events to keep provenance deterministic and auditable.
 - `vault-snapshot/0` — vault snapshot JSON
 - `program-bundle/0` — ProgramBundle JSON
 - `facts-bundle/0` — FactsBundle JSON
+- `plan-witness/1` — plan witness artifact (diagnostic questions + answers + derived risks)
+- `meta-registry/0` — meta registry allowlist (schema_id and scope_id gates)
 
 ## Planned schema IDs (migration)
+
+- `ledger-projection-updated/0` — witness: DB projection updated for a ledger range
+- `ledger-projection-drift/0` — witness: DB projection drift/mismatch detected
+- `meta-registry/1` — meta registry with scope contracts (phase/determinism/deps)
+- `meta-registry-missing-schema/0` — rejection witness (unknown schema_id)
+- `meta-registry-missing-scope/0` — rejection witness (unknown scope_id)
 
 - `VaultScan@1` — vault scanner output (structural IR)
 - `VaultLintWitness@1` — vault lint witness artifact

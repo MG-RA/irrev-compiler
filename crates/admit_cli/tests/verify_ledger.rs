@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use admit_cli::{
     append_checked_event, append_event, append_executed_event, check_cost_declared, declare_cost,
-    execute_checked, verify_ledger, DeclareCostInput,
+    execute_checked, verify_ledger, DeclareCostInput, ScopeGateMode,
 };
 use sha2::{Digest, Sha256};
 
@@ -87,6 +87,7 @@ fn verify_ledger_reports_no_issues_for_valid_chain() {
         program_scope: None,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         artifacts_root: Some(artifacts_dir.clone()),
+        meta_registry_path: None,
     };
 
     let cost_event = declare_cost(input).expect("cost event");
@@ -100,6 +101,8 @@ fn verify_ledger_reports_no_issues_for_valid_chain() {
         "2026-01-01T00:00:00Z".to_string(),
         Some("check-build".to_string()),
         None,
+        None,
+        ScopeGateMode::Warn,
     )
     .expect("check event");
     append_checked_event(&ledger_path, &checked).expect("append checked");
@@ -110,6 +113,8 @@ fn verify_ledger_reports_no_issues_for_valid_chain() {
         &checked.event_id,
         "2026-01-01T00:00:00Z".to_string(),
         Some("exec-build".to_string()),
+        None,
+        ScopeGateMode::Warn,
     )
     .expect("execute event");
     append_executed_event(&ledger_path, &executed).expect("append executed");

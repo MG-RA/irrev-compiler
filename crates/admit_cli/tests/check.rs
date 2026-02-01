@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use admit_cli::{
     append_checked_event, append_event, check_cost_declared, declare_cost, DeclareCostInput,
+    ScopeGateMode,
 };
 use sha2::{Digest, Sha256};
 
@@ -86,6 +87,7 @@ fn check_appends_admissibility_checked_event() {
         program_scope: None,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
         artifacts_root: Some(artifacts_dir.clone()),
+        meta_registry_path: None,
     };
 
     let cost_event = declare_cost(input).expect("cost event");
@@ -99,6 +101,8 @@ fn check_appends_admissibility_checked_event() {
         "2026-01-01T00:00:00Z".to_string(),
         Some("check-build".to_string()),
         None,
+        None,
+        ScopeGateMode::Warn,
     )
     .expect("check event");
     append_checked_event(&ledger_path, &checked).expect("append checked");

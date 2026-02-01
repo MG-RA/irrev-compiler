@@ -183,6 +183,43 @@ inadmissible_if displaced_total(boundary_loss) > 1 "risk_points"
     }
 
     #[test]
+    fn parse_and_lower_constraint_tags_and_lint_query() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope vault_lint
+
+constraint broken-link
+tag severity warning
+@inadmissible_if vault_rule("broken-link")
+
+query lint fail_on warning
+query witness
+"#;
+        let program = parse_program(source, "tags-and-lint.adm").expect("parse program");
+        assert!(program.statements.iter().any(|s| matches!(s, Stmt::Tag(_))));
+        assert!(program
+            .statements
+            .iter()
+            .any(|s| matches!(s, Stmt::Query(q) if matches!(q.kind, crate::ast::QueryKind::Lint { .. }))));
+
+        let ir = lower_to_ir(program).expect("lower to ir");
+        assert!(ir
+            .statements
+            .iter()
+            .any(|s| matches!(s, admit_core::Stmt::ConstraintMeta { .. })));
+        assert!(ir.statements.iter().any(|s| {
+            matches!(
+                s,
+                admit_core::Stmt::Query {
+                    query: admit_core::Query::Lint { .. },
+                    ..
+                }
+            )
+        }));
+    }
+
+    #[test]
     fn parse_allow_scope_change_is_unambiguous() {
         let source = r#"
 module test@1

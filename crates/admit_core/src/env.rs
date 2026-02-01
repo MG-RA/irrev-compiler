@@ -76,6 +76,7 @@ impl Env {
                     env.constraints
                         .push((id.clone(), expr.clone(), span.clone()));
                 }
+                Stmt::ConstraintMeta { .. } => {}
                 Stmt::Query { .. } => {}
             }
         }

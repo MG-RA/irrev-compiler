@@ -3,10 +3,12 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use admit_cli::{
-    append_checked_event, append_event, append_executed_event, check_cost_declared, declare_cost,
-    default_artifacts_dir, default_ledger_path, execute_checked, list_artifacts,
-    read_artifact_projection, read_file_bytes, verify_ledger, verify_witness, ArtifactInput,
-    DeclareCostInput, VerifyWitnessInput,
+    append_checked_event, append_event, append_executed_event, append_plan_created_event,
+    check_cost_declared, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
+    execute_checked, export_plan_markdown, list_artifacts, read_artifact_projection,
+    read_file_bytes, registry_build, registry_init, render_plan_text, verify_ledger,
+    verify_witness, ArtifactInput, DeclareCostInput, MetaRegistryV0, PlanNewInput,
+    ScopeGateMode, VerifyWitnessInput,
 };
 
 #[derive(Parser)]
@@ -27,6 +29,8 @@ enum Commands {
     Observe(ObserveArgs),
     ListArtifacts(ListArtifactsArgs),
     ShowArtifact(ShowArtifactArgs),
+    Registry(RegistryArgs),
+    Plan(PlanArgs),
 }
 
 #[derive(Parser)]
@@ -64,6 +68,9 @@ struct DeclareCostArgs {
     /// Timestamp string for the event (default: current UTC ISO-8601)
     #[arg(long)]
     timestamp: Option<String>,
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
     /// Ledger path (default: out/ledger.jsonl)
     #[arg(long)]
     ledger: Option<PathBuf>,
@@ -108,6 +115,9 @@ struct CheckArgs {
     /// Timestamp string for the event (default: current UTC ISO-8601)
     #[arg(long)]
     timestamp: Option<String>,
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
     /// Ledger path (default: out/ledger.jsonl)
     #[arg(long)]
     ledger: Option<PathBuf>,
@@ -120,6 +130,9 @@ struct CheckArgs {
     /// Do not append to ledger
     #[arg(long)]
     dry_run: bool,
+    /// Scope gate mode (warn|error) when registry is present
+    #[arg(long, default_value = "warn", value_name = "MODE")]
+    scope_gate: String,
 }
 
 #[derive(Parser)]
@@ -133,6 +146,9 @@ struct ExecuteArgs {
     /// Timestamp string for the event (default: current UTC ISO-8601)
     #[arg(long)]
     timestamp: Option<String>,
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
     /// Ledger path (default: out/ledger.jsonl)
     #[arg(long)]
     ledger: Option<PathBuf>,
@@ -145,6 +161,9 @@ struct ExecuteArgs {
     /// Do not append to ledger
     #[arg(long)]
     dry_run: bool,
+    /// Scope gate mode (warn|error) when registry is present
+    #[arg(long, default_value = "warn", value_name = "MODE")]
+    scope_gate: String,
 }
 
 #[derive(Parser)]
@@ -227,6 +246,122 @@ struct ShowArtifactArgs {
     json: bool,
 }
 
+#[derive(Parser)]
+struct PlanArgs {
+    #[command(subcommand)]
+    command: PlanCommands,
+}
+
+#[derive(Parser)]
+struct RegistryArgs {
+    #[command(subcommand)]
+    command: RegistryCommands,
+}
+
+#[derive(Subcommand)]
+enum RegistryCommands {
+    Init(RegistryInitArgs),
+    Build(RegistryBuildArgs),
+    Verify(RegistryVerifyArgs),
+}
+
+#[derive(Parser)]
+struct RegistryInitArgs {
+    /// Output path for the registry JSON
+    #[arg(long, value_name = "PATH", default_value = "out/meta-registry.json")]
+    out: PathBuf,
+}
+
+#[derive(Parser)]
+struct RegistryBuildArgs {
+    /// Input registry JSON path
+    #[arg(long, value_name = "PATH", default_value = "out/meta-registry.json")]
+    input: PathBuf,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct RegistryVerifyArgs {
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+enum PlanCommands {
+    New(PlanNewArgs),
+    Show(PlanShowArgs),
+    Export(PlanExportArgs),
+}
+
+#[derive(Parser)]
+struct PlanNewArgs {
+    /// Path to JSON answers file
+    #[arg(long, value_name = "PATH", required = true)]
+    answers: PathBuf,
+    /// Scope description for the plan
+    #[arg(long, required = true)]
+    scope: String,
+    /// Target description for the plan
+    #[arg(long, required = true)]
+    target: String,
+    /// Surface attribution (default: cli)
+    #[arg(long, default_value = "cli")]
+    surface: String,
+    /// Compiler/tool version identifier
+    #[arg(long)]
+    tool_version: Option<String>,
+    /// Vault snapshot hash (optional, binds plan to a vault state)
+    #[arg(long)]
+    snapshot_hash: Option<String>,
+    /// Witness created_at timestamp (included in plan_id; default: current UTC ISO-8601)
+    #[arg(long = "created-at", alias = "timestamp")]
+    created_at: Option<String>,
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+    /// Do not append to ledger
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Parser)]
+struct PlanShowArgs {
+    /// Plan ID (SHA256 hex of the canonical CBOR witness)
+    #[arg(value_name = "PLAN_ID")]
+    plan_id: String,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct PlanExportArgs {
+    /// Plan ID (SHA256 hex of the canonical CBOR witness)
+    #[arg(value_name = "PLAN_ID")]
+    plan_id: String,
+    /// Output path for the Markdown projection
+    #[arg(long, value_name = "PATH", required = true)]
+    out: PathBuf,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -240,6 +375,12 @@ fn main() {
         Commands::Observe(args) => run_observe(args),
         Commands::ListArtifacts(args) => run_list_artifacts(args),
         Commands::ShowArtifact(args) => run_show_artifact(args),
+        Commands::Registry(args) => run_registry(args),
+        Commands::Plan(args) => match args.command {
+            PlanCommands::New(new_args) => run_plan_new(new_args),
+            PlanCommands::Show(show_args) => run_plan_show(show_args),
+            PlanCommands::Export(export_args) => run_plan_export(export_args),
+        },
     };
 
     if let Err(err) = result {
@@ -314,6 +455,7 @@ fn run_declare_cost(args: DeclareCostArgs) -> Result<(), String> {
         program_scope: args.program_scope,
         timestamp,
         artifacts_root: args.artifacts_dir,
+        meta_registry_path: args.meta_registry,
     };
 
     let event = declare_cost(input).map_err(|err| err.to_string())?;
@@ -405,6 +547,7 @@ fn run_check(args: CheckArgs) -> Result<(), String> {
         (None, None) => None,
     };
 
+    let scope_gate_mode = parse_scope_gate_mode(&args.scope_gate)?;
     let event = check_cost_declared(
         &ledger_path,
         Some(artifacts_dir.as_path()),
@@ -412,8 +555,14 @@ fn run_check(args: CheckArgs) -> Result<(), String> {
         timestamp,
         args.compiler_build_id,
         facts_bundle_input,
+        args.meta_registry.as_deref(),
+        scope_gate_mode,
     )
     .map_err(|err| err.to_string())?;
+
+    if scope_gate_mode == ScopeGateMode::Warn {
+        warn_missing_scope(args.meta_registry.as_deref(), &event.program.scope)?;
+    }
 
     if !args.dry_run {
         append_checked_event(&ledger_path, &event).map_err(|err| err.to_string())?;
@@ -444,14 +593,21 @@ fn run_execute(args: ExecuteArgs) -> Result<(), String> {
         .timestamp
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
 
+    let scope_gate_mode = parse_scope_gate_mode(&args.scope_gate)?;
     let event = execute_checked(
         &ledger_path,
         Some(artifacts_dir.as_path()),
         &args.checked_event_id,
         timestamp,
         args.compiler_build_id,
+        args.meta_registry.as_deref(),
+        scope_gate_mode,
     )
     .map_err(|err| err.to_string())?;
+
+    if scope_gate_mode == ScopeGateMode::Warn {
+        warn_missing_scope(args.meta_registry.as_deref(), &event.program.scope)?;
+    }
 
     if !args.dry_run {
         append_executed_event(&ledger_path, &event).map_err(|err| err.to_string())?;
@@ -468,6 +624,40 @@ fn run_execute(args: ExecuteArgs) -> Result<(), String> {
         if args.dry_run {
             println!("dry_run=true");
         }
+    }
+    Ok(())
+}
+
+fn parse_scope_gate_mode(value: &str) -> Result<ScopeGateMode, String> {
+    match value {
+        "warn" => Ok(ScopeGateMode::Warn),
+        "error" => Ok(ScopeGateMode::Error),
+        other => Err(format!("invalid scope gate mode: {}", other)),
+    }
+}
+
+fn resolve_meta_registry_path(path: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    path.map(|p| p.to_path_buf())
+        .or_else(|| std::env::var("ADMIT_META_REGISTRY").ok().map(std::path::PathBuf::from))
+}
+
+fn warn_missing_scope(path: Option<&std::path::Path>, scope_id: &str) -> Result<(), String> {
+    let path = match resolve_meta_registry_path(path) {
+        Some(path) => path,
+        None => return Ok(()),
+    };
+    if !path.exists() {
+        return Err(format!("meta registry not found: {}", path.display()));
+    }
+    let bytes =
+        std::fs::read(&path).map_err(|err| format!("read meta registry: {}", err))?;
+    let registry: MetaRegistryV0 =
+        serde_json::from_slice(&bytes).map_err(|err| format!("meta registry decode: {}", err))?;
+    if !registry.scopes.iter().any(|entry| entry.id == scope_id) {
+        eprintln!(
+            "warning: meta registry missing scope_id (mode=warn): {}",
+            scope_id
+        );
     }
     Ok(())
 }
@@ -653,5 +843,109 @@ fn run_show_artifact(args: ShowArtifactArgs) -> Result<(), String> {
         println!("size_bytes={}", size);
         println!("path={}/{}.cbor", args.kind, args.sha256);
     }
+    Ok(())
+}
+
+fn run_registry(args: RegistryArgs) -> Result<(), String> {
+    match args.command {
+        RegistryCommands::Init(init_args) => {
+            registry_init(&init_args.out).map_err(|err| err.to_string())?;
+            println!("registry_written={}", init_args.out.display());
+            Ok(())
+        }
+        RegistryCommands::Build(build_args) => {
+            let artifacts_dir = build_args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+            let reference =
+                registry_build(&build_args.input, &artifacts_dir).map_err(|err| err.to_string())?;
+            println!("registry_hash={}", reference.sha256);
+            println!("registry_path={}", reference.path.unwrap_or_default());
+            Ok(())
+        }
+        RegistryCommands::Verify(verify_args) => {
+            let ledger_path = verify_args.ledger.unwrap_or_else(default_ledger_path);
+            let artifacts_dir = verify_args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+            let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path()))
+                .map_err(|err| err.to_string())?;
+            println!("ledger={}", ledger_path.display());
+            println!("entries={}", report.total);
+            println!("issues={}", report.issues.len());
+            for issue in &report.issues {
+                let event_id = issue.event_id.as_deref().unwrap_or("-");
+                let event_type = issue.event_type.as_deref().unwrap_or("-");
+                println!(
+                    "issue line={} event_id={} event_type={} message={}",
+                    issue.line, event_id, event_type, issue.message
+                );
+            }
+            if report.issues.is_empty() {
+                Ok(())
+            } else {
+                Err("registry verification found issues".to_string())
+            }
+        }
+    }
+}
+
+fn run_plan_new(args: PlanNewArgs) -> Result<(), String> {
+    let created_at = args
+        .created_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+
+    let input = PlanNewInput {
+        answers_path: args.answers,
+        scope: args.scope,
+        target: args.target,
+        surface: args.surface,
+        tool_version: args.tool_version.unwrap_or_else(|| "unknown".to_string()),
+        snapshot_hash: args.snapshot_hash,
+        timestamp: created_at,
+        artifacts_root: args.artifacts_dir,
+        meta_registry_path: args.meta_registry,
+    };
+
+    let event = create_plan(input).map_err(|err| err.to_string())?;
+    let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
+    if !args.dry_run {
+        append_plan_created_event(&ledger_path, &event).map_err(|err| err.to_string())?;
+    }
+
+    if args.json {
+        let json =
+            serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("event_id={}", event.event_id);
+        println!("plan_id={}", event.plan_witness.sha256);
+        println!("template_id={}", event.template_id);
+        println!("ledger={}", ledger_path.display());
+        if args.dry_run {
+            println!("dry_run=true");
+        }
+    }
+
+    Ok(())
+}
+
+fn run_plan_show(args: PlanShowArgs) -> Result<(), String> {
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let text =
+        render_plan_text(&artifacts_dir, &args.plan_id).map_err(|err| err.to_string())?;
+    print!("{}", text);
+    Ok(())
+}
+
+fn run_plan_export(args: PlanExportArgs) -> Result<(), String> {
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let md =
+        export_plan_markdown(&artifacts_dir, &args.plan_id).map_err(|err| err.to_string())?;
+
+    if let Some(parent) = args.out.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("create out dir: {}", err))?;
+        }
+    }
+    std::fs::write(&args.out, &md).map_err(|err| format!("write export: {}", err))?;
+    println!("exported={}", args.out.display());
     Ok(())
 }

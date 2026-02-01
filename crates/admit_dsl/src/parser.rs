@@ -67,6 +67,17 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         bool_value.map(CommitValue::Bool),
     ));
 
+    let rule_id_value = choice::<_, Simple<Token>>((
+        string
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen)),
+        ident
+            .clone()
+            .delimited_by(just(Token::LParen), just(Token::RParen)),
+        string.clone(),
+        ident.clone(),
+    ));
+
     let predicate = choice::<_, Simple<Token>>((
         just(Token::KwEraseAllowed)
             .ignore_then(ident_or_paren.clone())
@@ -101,6 +112,9 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
                 value,
                 unit,
             }),
+        just(Token::KwVaultRule)
+            .ignore_then(rule_id_value.clone())
+            .map(|rule_id| Predicate::VaultRule { rule_id }),
     ));
 
     let expr = recursive(|expr| {
@@ -173,12 +187,13 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
 
     let scope_stmt = just(Token::KwScope)
         .ignore_then(ident.clone())
-        .map_with_span(|raw: String, span| {
-            let name = resolve_prefixed("scope", &raw);
-            Stmt::Scope(ScopeDecl {
+        .try_map(|raw: String, span| {
+            let name = resolve_prefixed("scope", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::Scope(ScopeDecl {
                 name,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let scope_mode = ident
@@ -268,14 +283,16 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         .then(ident.clone())
         .then(scope_mode)
         .then(scope_change_block.or_not())
-        .map_with_span(|(((from_raw, to_raw), mode), block), span| {
-            let from = resolve_prefixed("scope", &from_raw);
-            let to = resolve_prefixed("scope", &to_raw);
+        .try_map(|(((from_raw, to_raw), mode), block), span| {
+            let from = resolve_prefixed("scope", &from_raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            let to = resolve_prefixed("scope", &to_raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
             let mut stmts = vec![Stmt::ScopeChange(ScopeChangeStmt {
                 from: from.clone(),
                 to: to.clone(),
                 mode,
-                span: make_span(file, span, &line_index),
+                span: make_span(file, span.clone(), &line_index),
             })];
             if let Some(block) = block {
                 if let Some(allow_span) = block.allow_span {
@@ -286,7 +303,8 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
                     }));
                 }
                 if let Some(cost) = block.cost {
-                    let bucket = resolve_prefixed("bucket", &cost.bucket);
+                    let bucket = resolve_prefixed("bucket", &cost.bucket)
+                        .map_err(|msg| Simple::custom(span.clone(), msg))?;
                     stmts.push(Stmt::ScopeChangeRule(ScopeChangeRuleStmt {
                         from,
                         to,
@@ -297,21 +315,23 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
                     }));
                 }
             }
-            stmts
+            Ok(stmts)
         });
 
     let allow_scope_change_stmt = just(Token::KwAllowScopeChange)
         .ignore_then(ident.clone())
         .then_ignore(just(Token::Arrow))
         .then(ident.clone())
-        .map_with_span(|(from_raw, to_raw), span| {
-            let from = resolve_prefixed("scope", &from_raw);
-            let to = resolve_prefixed("scope", &to_raw);
-            Stmt::AllowScopeChange(AllowScopeChangeStmt {
+        .try_map(|(from_raw, to_raw), span| {
+            let from = resolve_prefixed("scope", &from_raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            let to = resolve_prefixed("scope", &to_raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::AllowScopeChange(AllowScopeChangeStmt {
                 from,
                 to,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let scope_change_rule_stmt = just(Token::KwScopeChangeRule)
@@ -323,66 +343,73 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         .then(string.clone())
         .then_ignore(just(Token::Arrow))
         .then(ident.clone())
-        .map_with_span(
+        .try_map(
             |((((from_raw, to_raw), cost_value), cost_unit), bucket): (
                 (((String, String), f64), String),
                 String,
             ),
              span| {
-                let from = resolve_prefixed("scope", &from_raw);
-                let to = resolve_prefixed("scope", &to_raw);
-                let bucket = resolve_prefixed("bucket", &bucket);
-                Stmt::ScopeChangeRule(ScopeChangeRuleStmt {
+                let from = resolve_prefixed("scope", &from_raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                let to = resolve_prefixed("scope", &to_raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                let bucket = resolve_prefixed("bucket", &bucket)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::ScopeChangeRule(ScopeChangeRuleStmt {
                     from,
                     to,
                     cost_value,
                     cost_unit,
                     bucket,
                     span: make_span(file, span, &line_index),
-                })
+                }))
             },
         );
 
     let difference_stmt = just(Token::KwDifference)
         .ignore_then(ident.clone())
         .then(just(Token::KwUnit).ignore_then(string.clone()).or_not())
-        .map_with_span(|(raw, unit): (String, Option<String>), span| {
-            let name = resolve_prefixed("difference", &raw);
-            Stmt::Difference(DifferenceDecl {
+        .try_map(|(raw, unit): (String, Option<String>), span| {
+            let name = resolve_prefixed("difference", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::Difference(DifferenceDecl {
                 name,
                 unit,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let transform_stmt = just(Token::KwTransform)
         .ignore_then(ident.clone())
-        .map_with_span(|raw: String, span| {
-            let name = resolve_prefixed("transform", &raw);
-            Stmt::Transform(TransformDecl {
+        .try_map(|raw: String, span| {
+            let name = resolve_prefixed("transform", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::Transform(TransformDecl {
                 name,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let bucket_stmt = just(Token::KwBucket)
         .ignore_then(ident.clone())
-        .map_with_span(|raw: String, span| {
-            let name = resolve_prefixed("bucket", &raw);
-            Stmt::Bucket(BucketDecl {
+        .try_map(|raw: String, span| {
+            let name = resolve_prefixed("bucket", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::Bucket(BucketDecl {
                 name,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let constraint_stmt = just(Token::KwConstraint)
         .ignore_then(ident.clone())
-        .map_with_span(|raw: String, span| {
-            let name = resolve_prefixed("constraint", &raw);
-            Stmt::Constraint(ConstraintDecl {
+        .try_map(|raw: String, span| {
+            let name = resolve_prefixed("constraint", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::Constraint(ConstraintDecl {
                 name,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let persist_stmt = just(Token::KwPersist)
@@ -394,17 +421,21 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
                 .separated_by(just(Token::Comma))
                 .delimited_by(just(Token::LBracket), just(Token::RBracket)),
         )
-        .map_with_span(|(raw, under): (String, Vec<String>), span| {
-            let diff = resolve_prefixed("difference", &raw);
+        .try_map(|(raw, under): (String, Vec<String>), span| {
+            let diff = resolve_prefixed("difference", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
             let under = under
                 .into_iter()
-                .map(|u| resolve_prefixed("transform", &u))
-                .collect();
-            Stmt::Persist(PersistStmt {
+                .map(|u| {
+                    resolve_prefixed("transform", &u)
+                        .map_err(|msg| Simple::custom(span.clone(), msg))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Stmt::Persist(PersistStmt {
                 diff,
                 under,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let erasure_rule_stmt = just(Token::KwErasureRule)
@@ -414,40 +445,44 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         .then(string.clone())
         .then_ignore(just(Token::Arrow))
         .then(ident.clone())
-        .map_with_span(
+        .try_map(
             |(((raw, cost_value), cost_unit), bucket): (((String, f64), String), String), span| {
-                let diff = resolve_prefixed("difference", &raw);
-                let bucket = resolve_prefixed("bucket", &bucket);
-                Stmt::ErasureRule(ErasureRuleStmt {
+                let diff = resolve_prefixed("difference", &raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                let bucket = resolve_prefixed("bucket", &bucket)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::ErasureRule(ErasureRuleStmt {
                     diff,
                     cost_value,
                     cost_unit,
                     bucket,
                     span: make_span(file, span, &line_index),
-                })
+                }))
             },
         );
 
     let permission_stmt = choice::<_, Simple<Token>>((
         just(Token::KwAllowErase)
             .ignore_then(ident.clone())
-            .map_with_span(|raw: String, span| {
-                let diff = resolve_prefixed("difference", &raw);
-                Stmt::Permission(PermissionStmt {
+            .try_map(|raw: String, span| {
+                let diff = resolve_prefixed("difference", &raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::Permission(PermissionStmt {
                     kind: PermissionKind::Allow,
                     diff,
                     span: make_span(file, span, &line_index),
-                })
+                }))
             }),
         just(Token::KwDenyErase)
             .ignore_then(ident.clone())
-            .map_with_span(|raw: String, span| {
-                let diff = resolve_prefixed("difference", &raw);
-                Stmt::Permission(PermissionStmt {
+            .try_map(|raw: String, span| {
+                let diff = resolve_prefixed("difference", &raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::Permission(PermissionStmt {
                     kind: PermissionKind::Deny,
                     diff,
                     span: make_span(file, span, &line_index),
-                })
+                }))
             }),
     ));
 
@@ -455,13 +490,14 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         .ignore_then(ident.clone())
         .then_ignore(just(Token::Eq))
         .then(commit_value.clone())
-        .map_with_span(|(raw, value): (String, CommitValue), span| {
-            let diff = resolve_prefixed("difference", &raw);
-            Stmt::Commit(CommitStmt {
+        .try_map(|(raw, value): (String, CommitValue), span| {
+            let diff = resolve_prefixed("difference", &raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            Ok(Stmt::Commit(CommitStmt {
                 diff,
                 value,
                 span: make_span(file, span, &line_index),
-            })
+            }))
         });
 
     let inadmissible_if_stmt = just(Token::KwInadmissibleIf)
@@ -484,10 +520,42 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             just(Token::KwAdmissible).to(QueryKind::Admissible),
             just(Token::KwWitness).to(QueryKind::Witness),
             just(Token::KwDelta).to(QueryKind::Delta),
+            just(Token::KwLint)
+                .ignore_then(
+                    just(Token::KwFailOn)
+                        .ignore_then(ident.clone())
+                        .or_not(),
+                )
+                .try_map(|fail_on: Option<String>, span| {
+                    let raw = fail_on.unwrap_or_else(|| "error".to_string());
+                    let kind = match raw.as_str() {
+                        "error" => crate::ast::LintFailOn::Error,
+                        "warning" => crate::ast::LintFailOn::Warning,
+                        "info" => crate::ast::LintFailOn::Info,
+                        _ => {
+                            return Err(Simple::custom(
+                                span,
+                                "invalid fail_on (expected error|warning|info)",
+                            ))
+                        }
+                    };
+                    Ok(QueryKind::Lint { fail_on: kind })
+                }),
         )))
         .map_with_span(|kind, span| {
             Stmt::Query(QueryStmt {
                 kind,
+                span: make_span(file, span, &line_index),
+            })
+        });
+
+    let tag_stmt = just(Token::KwTag)
+        .ignore_then(ident.clone())
+        .then(choice::<_, Simple<Token>>((ident.clone(), string.clone())))
+        .map_with_span(|(key, value): (String, String), span| {
+            Stmt::Tag(TagStmt {
+                key,
+                value,
                 span: make_span(file, span, &line_index),
             })
         });
@@ -503,6 +571,7 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         transform_stmt.map(|s| vec![s]),
         bucket_stmt.map(|s| vec![s]),
         constraint_stmt.map(|s| vec![s]),
+        tag_stmt.map(|s| vec![s]),
         persist_stmt.map(|s| vec![s]),
         erasure_rule_stmt.map(|s| vec![s]),
         permission_stmt.map(|s| vec![s]),
@@ -574,6 +643,10 @@ fn parse_module_ref(raw: &str) -> Result<String, String> {
     Ok(format!("{}@{}", name, major))
 }
 
-fn resolve_prefixed(prefix: &str, raw: &str) -> String {
-    parse_prefixed(prefix, raw).unwrap_or_else(|_| raw.to_string())
+fn resolve_prefixed(prefix: &str, raw: &str) -> Result<String, String> {
+    if raw.contains(':') {
+        parse_prefixed(prefix, raw)
+    } else {
+        Ok(raw.to_string())
+    }
 }

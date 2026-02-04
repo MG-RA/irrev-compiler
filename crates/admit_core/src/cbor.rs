@@ -1,3 +1,16 @@
+//! Canonical CBOR encoding implementation
+//!
+//! This module implements `scope:encode.canonical@0` - a foundational
+//! scope providing RFC 8949 canonical CBOR encoding for witness identity
+//! computation and content-addressable serialization.
+//!
+//! **Contract**: meta/encode-canonical-scope-contract.md
+//! **Fixtures**: tests/encode_canonical_fixtures.rs
+//! **Registry**: out/meta-registry.json (scope:encode.canonical@0)
+//!
+//! All witness identities in the Irreversibility compiler depend on
+//! canonical encoding: `witness_id = sha256(canonical_cbor(payload))`
+
 #![allow(dead_code)]
 
 const FRACTION_TOLERANCE: f64 = 1.0e-9;

@@ -170,3 +170,110 @@ fn registry_requires_self_schema_entry() {
         other => panic!("unexpected error: {}", other),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Determinism: pinned canonical hash for the shipped meta-registry/0
+// ---------------------------------------------------------------------------
+
+fn shipped_registry_json() -> serde_json::Value {
+    serde_json::json!({
+        "schema_id": "meta-registry/0",
+        "schema_version": 0,
+        "registry_version": 0,
+        "generated_at": null,
+        "stdlib": [
+            { "module_id": "module:irrev_std@1" }
+        ],
+        "schemas": [
+            { "id": "meta-registry/0",        "schema_version": 0, "kind": "meta_registry", "canonical_encoding": "canonical-cbor" },
+            { "id": "admissibility-witness/1","schema_version": 1, "kind": "witness",        "canonical_encoding": "canonical-cbor" },
+            { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
+            { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
+            { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
+            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" }
+        ],
+        "scopes": [
+            { "id": "scope:meta.registry", "version": 0 },
+            { "id": "scope:main",          "version": 0 }
+        ]
+    })
+}
+
+/// Pin: the canonical-CBOR hash of the shipped meta-registry/0 must not change
+/// without an intentional registry version bump.
+#[test]
+fn registry_canonical_hash_is_pinned() {
+    let dir = temp_dir("pin");
+    let artifacts_dir = dir.join("artifacts");
+    let path = dir.join("registry.json");
+
+    write_registry(&path, shipped_registry_json());
+    let artifact_ref = registry_build(&path, &artifacts_dir).expect("build shipped registry");
+
+    assert_eq!(
+        artifact_ref.sha256,
+        "3697683bfe1d86e38745ab4e7deb663e062060d0fb18b9875f136b6189d86dd6",
+        "pinned registry hash changed — update pin or bump registry_version"
+    );
+}
+
+/// Normalization sorts schemas, scopes, and stdlib before encoding.
+/// Two stdlib entries supplied in reverse order must yield the same hash
+/// as when supplied in sorted order.
+#[test]
+fn registry_list_order_policy_sorts_before_hash() {
+    let dir = temp_dir("list-order");
+    let artifacts_dir = dir.join("artifacts");
+
+    let mut sorted = shipped_registry_json();
+    sorted["stdlib"] = serde_json::json!([
+        { "module_id": "module:irrev_std@1" },
+        { "module_id": "module:zzz@1" }
+    ]);
+
+    let mut reversed = shipped_registry_json();
+    reversed["stdlib"] = serde_json::json!([
+        { "module_id": "module:zzz@1" },
+        { "module_id": "module:irrev_std@1" }
+    ]);
+    reversed["schemas"].as_array_mut().unwrap().reverse();
+    reversed["scopes"].as_array_mut().unwrap().reverse();
+
+    let path_sorted = dir.join("sorted.json");
+    let path_reversed = dir.join("reversed.json");
+    write_registry(&path_sorted, sorted);
+    write_registry(&path_reversed, reversed);
+
+    let ref_sorted = registry_build(&path_sorted, &artifacts_dir).expect("build sorted");
+    let ref_reversed = registry_build(&path_reversed, &artifacts_dir).expect("build reversed");
+
+    assert_eq!(
+        ref_sorted.sha256, ref_reversed.sha256,
+        "list order policy: sorted and reverse-sorted inputs must produce identical hash"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Schema gate: refusal for unknown schema_id
+// ---------------------------------------------------------------------------
+
+#[test]
+fn registry_schema_gate_refuses_unknown_schema() {
+    use admit_cli::MetaRegistryV0;
+
+    let dir = temp_dir("schema-gate");
+    let path = dir.join("registry.json");
+    write_registry(&path, shipped_registry_json());
+
+    let bytes = std::fs::read(&path).expect("read registry");
+    let registry: MetaRegistryV0 =
+        serde_json::from_slice(&bytes).expect("decode registry");
+
+    // Known schemas must be present
+    assert!(registry.schemas.iter().any(|s| s.id == "admissibility-witness/1"));
+    assert!(registry.schemas.iter().any(|s| s.id == "vault-snapshot/0"));
+    assert!(registry.schemas.iter().any(|s| s.id == "meta-registry/0"));
+
+    // Unknown schema must be absent
+    assert!(!registry.schemas.iter().any(|s| s.id == "nonexistent-schema/99"));
+}

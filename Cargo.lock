@@ -10,6 +10,7 @@ dependencies = [
  "chrono",
  "clap",
  "facts_bundle",
+ "hex",
  "program_bundle",
  "serde",
  "serde_json",

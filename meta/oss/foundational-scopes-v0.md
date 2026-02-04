@@ -94,9 +94,27 @@ Provides:
 Unlocks: proof portability ("verify anywhere, trust nowhere") and registry correctness.
 
 Example scopes:
-- `hash.content` (digest of bytes)
+- `hash.content` (digest of bytes) ← **IMPLEMENTED** (`@0`)
 - `hash.verify` (bytes vs claimed digest)
 - `hash.execution` (digest of an execution context; depends on other domains/scopes)
+
+### `encode` (domain)
+
+Purpose: make canonical encoding deterministic and governable.
+
+Provides:
+- canonical CBOR encoding (RFC 8949)
+- deterministic byte representations
+- content-addressable identity primitives
+
+Unlocks: witness identity computation; tamper-evident serialization; independent versioning of encoding rules.
+
+Example scopes:
+- `encode.canonical` (JSON → canonical CBOR) ← **IMPLEMENTED** (`@0`)
+- `encode.json` (future: canonical JSON-JCS)
+- `encode.msgpack` (future: canonical MessagePack)
+
+**Note:** The `encode.canonical@0` scope makes explicit the universal dependency on canonical encoding used throughout the compiler for witness identity computation (`witness_id = sha256(canonical_cbor(payload))`).
 
 ### `binary` (related domain)
 
@@ -192,6 +210,6 @@ If yes, consider formalizing it as a scope authority.
 
 Highest leverage options:
 
-- `hash.content` + `hash.verify` (portability + registry correctness)
+- `encode.canonical` + `hash.content` + `hash.verify` ← **DONE** (`encode.canonical@0`, `hash.content@0`)
 - `identity.delegate` + `identity.verify` (delegation + self-governing scopes)
 - `patch.plan` (unifies most mechanisms under a single change object)

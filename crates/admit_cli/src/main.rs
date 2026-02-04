@@ -9,6 +9,9 @@ use admit_cli::{
     read_file_bytes, registry_build, registry_init, render_plan_text, verify_ledger,
     verify_witness, ArtifactInput, DeclareCostInput, MetaRegistryV0, PlanNewInput,
     ScopeGateMode, VerifyWitnessInput,
+    scope_add, scope_verify, scope_list, scope_show,
+    ScopeAddArgs as ScopeAddArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
+    ScopeListArgs as ScopeListArgsLib, ScopeShowArgs as ScopeShowArgsLib,
 };
 
 #[derive(Parser)]
@@ -263,6 +266,10 @@ enum RegistryCommands {
     Init(RegistryInitArgs),
     Build(RegistryBuildArgs),
     Verify(RegistryVerifyArgs),
+    ScopeAdd(ScopeAddArgs),
+    ScopeVerify(ScopeVerifyArgs),
+    ScopeList(ScopeListArgs),
+    ScopeShow(ScopeShowArgs),
 }
 
 #[derive(Parser)]
@@ -290,6 +297,122 @@ struct RegistryVerifyArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct ScopeAddArgs {
+    /// Scope (format: "scope:domain.name@version" OR use --scope-id and --version)
+    #[arg(long, conflicts_with_all = &["scope_id", "version"])]
+    scope: Option<String>,
+
+    /// Scope ID (format: "scope:domain.name" - NO @version)
+    #[arg(long, requires = "version")]
+    scope_id: Option<String>,
+
+    /// Scope version number
+    #[arg(long)]
+    version: Option<u32>,
+
+    /// Snapshot schema ID (optional Phase 2 field)
+    #[arg(long)]
+    snapshot_schema_id: Option<String>,
+
+    /// Phase (p0, p1, p2, p3, p4) (optional Phase 2 field)
+    #[arg(long)]
+    phase: Option<String>,
+
+    /// Is deterministic (optional Phase 2 field)
+    #[arg(long)]
+    deterministic: Option<bool>,
+
+    /// Is foundational (optional Phase 2 field)
+    #[arg(long)]
+    foundational: Option<bool>,
+
+    /// Witness schemas emitted (repeatable)
+    #[arg(long = "emits", value_name = "SCHEMA_ID")]
+    emits: Vec<String>,
+
+    /// Witness schemas consumed (repeatable)
+    #[arg(long = "consumes", value_name = "SCHEMA_ID")]
+    consumes: Vec<String>,
+
+    /// Scope dependencies (repeatable)
+    #[arg(long = "deps", value_name = "SCOPE_ID")]
+    deps: Vec<String>,
+
+    /// Scope role (foundation, transform, verification, governance, integration, application)
+    #[arg(long)]
+    role: Option<String>,
+
+    /// Path to scope contract markdown
+    #[arg(long)]
+    contract_ref: Option<String>,
+
+    /// Registry JSON path to update
+    #[arg(long, default_value = "out/meta-registry.json")]
+    registry: PathBuf,
+
+    /// Validation level (phase1 or phase2)
+    #[arg(long, default_value = "phase1")]
+    validation_level: String,
+
+    /// Dry run (don't update registry)
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Parser)]
+struct ScopeVerifyArgs {
+    /// Scope ID to verify
+    #[arg(long, required = true)]
+    scope_id: String,
+
+    /// Registry JSON path
+    #[arg(long, default_value = "out/meta-registry.json")]
+    registry: PathBuf,
+
+    /// Validation level (phase1 or phase2)
+    #[arg(long, default_value = "phase1")]
+    validation_level: String,
+
+    /// Output JSON instead of text
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct ScopeListArgs {
+    /// Registry JSON path
+    #[arg(long, default_value = "out/meta-registry.json")]
+    registry: PathBuf,
+
+    /// Filter by phase
+    #[arg(long)]
+    phase: Option<String>,
+
+    /// Filter by role
+    #[arg(long)]
+    role: Option<String>,
+
+    /// Output JSON instead of text
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct ScopeShowArgs {
+    /// Scope ID to show
+    #[arg(required = true)]
+    scope_id: String,
+
+    /// Registry JSON path
+    #[arg(long, default_value = "out/meta-registry.json")]
+    registry: PathBuf,
+
+    /// Output JSON instead of text
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -883,6 +1006,10 @@ fn run_registry(args: RegistryArgs) -> Result<(), String> {
                 Err("registry verification found issues".to_string())
             }
         }
+        RegistryCommands::ScopeAdd(args) => run_scope_add(args),
+        RegistryCommands::ScopeVerify(args) => run_scope_verify(args),
+        RegistryCommands::ScopeList(args) => run_scope_list(args),
+        RegistryCommands::ScopeShow(args) => run_scope_show(args),
     }
 }
 
@@ -947,5 +1074,165 @@ fn run_plan_export(args: PlanExportArgs) -> Result<(), String> {
     }
     std::fs::write(&args.out, &md).map_err(|err| format!("write export: {}", err))?;
     println!("exported={}", args.out.display());
+    Ok(())
+}
+
+fn run_scope_add(args: ScopeAddArgs) -> Result<(), String> {
+    // Convert main.rs args to scope_commands args
+    let cmd_args = ScopeAddArgsLib {
+        scope: args.scope,
+        scope_id: args.scope_id,
+        version: args.version,
+        snapshot_schema_id: args.snapshot_schema_id,
+        phase: args.phase,
+        deterministic: args.deterministic,
+        foundational: args.foundational,
+        emits: args.emits,
+        consumes: args.consumes,
+        deps: args.deps,
+        role: args.role,
+        contract_ref: args.contract_ref,
+        registry: args.registry.clone(),
+        validation_level: args.validation_level,
+        dry_run: args.dry_run,
+    };
+
+    let witness = scope_add(cmd_args).map_err(|err| err.to_string())?;
+
+    println!("scope_id={}", witness.scope_id);
+    println!("scope_version={}", witness.scope_version);
+    println!("registry_version={} -> {}", witness.registry_version_before, witness.registry_version_after);
+    println!("registry_hash_before={}", witness.registry_hash_before);
+    println!("registry_hash_after={}", witness.registry_hash_after);
+    println!("registry={}", args.registry.display());
+
+    if args.dry_run {
+        println!("dry_run=true (registry not modified)");
+    }
+
+    // Show validation results
+    let warnings: Vec<_> = witness.validations.iter()
+        .filter(|v| !v.passed && v.severity.to_string() == "warning")
+        .collect();
+
+    if !warnings.is_empty() {
+        eprintln!("\nWarnings:");
+        for w in warnings {
+            eprintln!("  {}: {}", w.check, w.message.as_deref().unwrap_or("failed"));
+        }
+    }
+
+    Ok(())
+}
+
+fn run_scope_verify(args: ScopeVerifyArgs) -> Result<(), String> {
+    let cmd_args = ScopeVerifyArgsLib {
+        scope_id: args.scope_id.clone(),
+        registry: args.registry.clone(),
+        validation_level: args.validation_level,
+        json: args.json,
+    };
+
+    let validations = scope_verify(cmd_args).map_err(|err| err.to_string())?;
+
+    if args.json {
+        let json = serde_json::to_string(&validations)
+            .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("scope_id={}", args.scope_id);
+        println!("registry={}", args.registry.display());
+        println!("validations={}", validations.len());
+
+        let passed = validations.iter().filter(|v| v.passed).count();
+        let failed = validations.len() - passed;
+        println!("passed={} failed={}", passed, failed);
+
+        for v in &validations {
+            let status = if v.passed { "PASS" } else { "FAIL" };
+            let msg = v.message.as_deref().unwrap_or("");
+            println!("{} [{}] {}: {}", status, v.severity, v.check, msg);
+        }
+
+        if failed > 0 {
+            return Err(format!("validation failed with {} error(s)", failed));
+        }
+    }
+
+    Ok(())
+}
+
+fn run_scope_list(args: ScopeListArgs) -> Result<(), String> {
+    let cmd_args = ScopeListArgsLib {
+        registry: args.registry.clone(),
+        phase: args.phase,
+        role: args.role,
+        json: args.json,
+    };
+
+    let scopes = scope_list(cmd_args).map_err(|err| err.to_string())?;
+
+    if args.json {
+        let json = serde_json::to_string(&scopes)
+            .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("registry={}", args.registry.display());
+        println!("count={}", scopes.len());
+        for scope in &scopes {
+            let phase_str = scope.phase.map(|p| format!("{:?}", p)).unwrap_or_else(|| "-".to_string());
+            let role_str = scope.role.as_ref().map(|r| format!("{:?}", r)).unwrap_or_else(|| "-".to_string());
+            println!("scope id={} version={} phase={} role={}", scope.id, scope.version, phase_str, role_str);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_scope_show(args: ScopeShowArgs) -> Result<(), String> {
+    let cmd_args = ScopeShowArgsLib {
+        scope_id: args.scope_id.clone(),
+        registry: args.registry.clone(),
+        json: args.json,
+    };
+
+    let scope = scope_show(cmd_args).map_err(|err| err.to_string())?;
+
+    if args.json {
+        let json = serde_json::to_string(&scope)
+            .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("scope_id={}", scope.id);
+        println!("version={}", scope.version);
+        if let Some(phase) = scope.phase {
+            println!("phase={:?}", phase);
+        }
+        if let Some(role) = scope.role.as_ref() {
+            println!("role={:?}", role);
+        }
+        if let Some(det) = scope.deterministic {
+            println!("deterministic={}", det);
+        }
+        if let Some(found) = scope.foundational {
+            println!("foundational={}", found);
+        }
+        if let Some(snapshot_id) = scope.snapshot_schema_id.as_ref() {
+            println!("snapshot_schema_id={}", snapshot_id);
+        }
+        if let Some(emits) = scope.emits.as_ref() {
+            println!("emits={}", emits.join(", "));
+        }
+        if let Some(consumes) = scope.consumes.as_ref() {
+            println!("consumes={}", consumes.join(", "));
+        }
+        if let Some(deps) = scope.deps.as_ref() {
+            println!("deps={}", deps.join(", "));
+        }
+        if let Some(contract) = scope.contract_ref.as_ref() {
+            println!("contract_ref={}", contract);
+        }
+    }
+
     Ok(())
 }

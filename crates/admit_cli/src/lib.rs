@@ -8,6 +8,7 @@ mod verify;
 mod plan;
 mod scope_validation;
 mod scope_commands;
+pub mod calc_commands;
 
 // Re-export all public types
 pub use types::*;

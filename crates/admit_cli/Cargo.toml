@@ -14,3 +14,6 @@ chrono = { version = "0.4.39", default-features = false, features = ["clock"] }
 vault_snapshot = { path = "../vault_snapshot" }
 program_bundle = { path = "../program_bundle" }
 facts_bundle = { path = "../facts_bundle" }
+
+[dev-dependencies]
+tempfile = "3.8"

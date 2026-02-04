@@ -53,17 +53,24 @@ Encode a JSON value to canonical CBOR bytes.
 **Properties:**
 - Fully deterministic
 - No environment dependencies
-- Constant-time operation (linear in input size)
+- Time complexity: O(n log n) dominated by map key sorting (n = total elements)
+- Space complexity: O(n) for output buffer
 - Maximum output size: 100 MB CBOR
 
 **Type mapping (JSON → CBOR):**
 - `null` → CBOR null (0xF6)
 - `true` → CBOR true (0xF5)
 - `false` → CBOR false (0xF4)
-- Numbers → CBOR integers (i64/u64 only, no floats)
+- Numbers → CBOR integers (see numeric constraints below)
 - Strings → CBOR text strings (UTF-8)
 - Arrays → CBOR arrays
 - Objects → CBOR maps (with sorted keys)
+
+**Numeric type constraints:**
+- **Integer-representable values only**: JSON numbers must be exactly representable as i64 (-2^63 to 2^63-1) or u64 (0 to 2^64-1)
+- **Fraction tolerance**: Values parsed as f64 by serde_json are accepted if `abs(fract()) < 1e-9` (e.g., `1.0`, `1e3` round to integers)
+- **Rejected**: Non-finite values (NaN, ±Infinity), values with fractional parts exceeding tolerance (e.g., `3.14`, `0.1`)
+- **Source text independence**: The encoding depends on the parsed JSON value, not the source representation (e.g., `1000` and `1e3` produce identical CBOR if both parse to integer 1000)
 
 **Constraints:**
 - **Rejects floats:** Any JSON number with fractional part is rejected
@@ -93,6 +100,7 @@ Encode a witness structure to canonical CBOR bytes.
 - Uses `encode.canonical_value()` internally
 - Serializes witness to JSON first, then encodes to CBOR
 - Deterministic witness identity
+- Time complexity: O(n log n) where n = witness structure size
 
 **Process:**
 1. Serialize witness struct to JSON (via serde)
@@ -125,9 +133,11 @@ The scope obeys these laws:
    encode({"a": 1, "b": 2}) == encode({"b": 2, "a": 1})
    ```
 
-3. **Bijection invariant:**
+3. **Bijection invariant (scoped to supported subset):**
    ```
-   decode(encode(value)) == value  // Lossless round-trip
+   decode_json(encode(value)) == value
+   // For the supported JSON subset (no floats, valid UTF-8, integer-representable numbers)
+   // CBOR → JSON decoding preserves structure and values
    ```
 
 4. **Byte-level uniqueness:**
@@ -165,8 +175,14 @@ The scope obeys these laws:
 This scope depends on:
 
 1. **RFC 8949 specification:** Canonical CBOR encoding rules (Section 4.2)
-2. **serde_cbor crate:** CBOR encoding implementation (version pinned)
-3. **Meta-registry/0:** Schema and scope registration
+2. **serde_json crate:** JSON value representation (version "1.0", pinned in Cargo.toml)
+3. **Manual CBOR encoder:** Custom implementation in `cbor.rs` (no external CBOR library dependency)
+4. **Meta-registry/0:** Schema and scope registration
+
+**Dependency pinning mechanism:**
+- `serde_json = "1.0"` in `crates/admit_core/Cargo.toml`
+- No external CBOR encoding library (implementation is self-contained)
+- Wire format stability guaranteed by golden fixtures, not library versioning
 
 **Scopes that depend on this scope (implicitly):**
 
@@ -217,11 +233,13 @@ The canonical encoding rules are **frozen** for version 0:
 ## Security Considerations
 
 1. **Determinism guarantee:** Encoding is pure and deterministic (no side-channels)
-2. **No timing attacks:** Encoding time is linear in input size (no data-dependent branches)
+2. **Timing characteristics:** Encoding time is O(n log n) dominated by map key sorting; individual key comparisons are data-dependent (lexicographic ordering)
 3. **No injection attacks:** CBOR type system prevents injection (no string escaping needed)
 4. **Memory safety:** Maximum size limits prevent OOM attacks (100 MB cap)
 5. **Integer overflow protection:** Numbers validated to fit in i64/u64 range
 6. **UTF-8 validation:** Invalid UTF-8 rejected at encoding time
+
+**Note on timing:** This implementation does NOT provide constant-time guarantees against timing side-channels. Map key sorting performs lexicographic comparisons that may leak information about key values through timing. For applications requiring constant-time encoding, a separate scope version would be needed.
 
 **Threat model:**
 - **Malicious inputs:** Encoding rejects invalid inputs (floats, invalid UTF-8)
@@ -246,6 +264,27 @@ The canonical encoding rules are **frozen** for version 0:
 - `EvalError::ValueTooLarge`: CBOR output exceeds 100 MB
 - `EvalError::IntegerOutOfRange`: Number doesn't fit in i64/u64
 
+## Provenance Tracking (Recommended Pattern)
+
+While `scope:encode.canonical@0` does not emit its own witness schema, proof packs and execution bundles SHOULD include an encoding scope reference for audit trails:
+
+```json
+{
+  "reproducibility_metadata": {
+    "encoding_scope_id": "scope:encode.canonical@0",
+    "witness_id_algorithm": "sha256(canonical_cbor(identity_payload))"
+  }
+}
+```
+
+**Why this matters:**
+- Makes witness identity computation **auditable** across surfaces
+- Provides clean handle for "these witness IDs were computed under *this* canonical encoder"
+- Strengthens interface invariance without inventing new witness schemas
+- Future-proofs migration paths (if @1 is needed, old proof packs explicitly reference @0)
+
+**Not required for v0**, but strongly recommended for systems with long-lived proofs or cross-organizational audit requirements.
+
 ## Future Work (Out of Scope for v0)
 
 1. **Streaming encoding:** For values >100 MB (incremental CBOR generation)
@@ -257,6 +296,7 @@ The canonical encoding rules are **frozen** for version 0:
 4. **Hardware acceleration:** SIMD or platform-specific optimizations (while preserving determinism)
 5. **CBOR tags support:** Semantic tags (date/time, bignum, etc.) in v1
 6. **Compressed canonical encoding:** Deterministic compression (zstd dictionary)
+7. **Constant-time variant:** For applications requiring timing side-channel resistance (separate scope version)
 
 ## Acceptance Criteria
 

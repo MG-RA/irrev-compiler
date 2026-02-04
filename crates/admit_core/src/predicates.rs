@@ -81,6 +81,29 @@ pub fn eval_pred_with_provider(
             // v0 coercion: Findings in boolean position is `exists(findings)`.
             Ok(triggered)
         }
+        Predicate::CalcWitness {
+            witness_hash,
+            expected_schema_id,
+            expected_plan_hash,
+            expected_output,
+        } => {
+            // CalcWitness predicate requires artifact loading support
+            // This is a placeholder that will be extended with artifact resolution
+            // For now, record the check and return false (will be implemented in provider)
+            let _ = (witness_hash, expected_schema_id, expected_plan_hash, expected_output);
+
+            // TODO: Implement full verification:
+            // 1. Load witness from artifacts by witness_hash
+            // 2. Verify witness.core.schema_id == expected_schema_id
+            // 3. If expected_plan_hash is Some, verify witness.core.plan_hash matches
+            // 4. If expected_output is Some, verify witness.core.output.value matches
+            // 5. Compute core_hash and verify it matches witness_hash
+
+            Err(EvalError(format!(
+                "calc_witness predicate not yet supported (requires artifact resolution for witness {})",
+                witness_hash
+            )))
+        }
     }
 }
 
@@ -159,6 +182,24 @@ pub fn predicate_to_string(pred: &Predicate) -> String {
             quantity_repr(value)
         ),
         Predicate::VaultRule { rule_id } => format!("vault_rule \"{}\"", rule_id),
+        Predicate::CalcWitness {
+            witness_hash,
+            expected_schema_id,
+            expected_plan_hash,
+            expected_output,
+        } => {
+            let mut parts = vec![
+                format!("calc_witness \"{}\"", witness_hash),
+                format!("schema \"{}\"", expected_schema_id),
+            ];
+            if let Some(plan_hash) = expected_plan_hash {
+                parts.push(format!("plan \"{}\"", plan_hash));
+            }
+            if let Some(output) = expected_output {
+                parts.push(format!("output {:?}", output));
+            }
+            parts.join(" ")
+        }
     }
 }
 

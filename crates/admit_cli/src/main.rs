@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use sha2::Digest;
 
 use admit_cli::{
     append_checked_event, append_event, append_executed_event, append_plan_created_event,
@@ -34,6 +35,7 @@ enum Commands {
     ShowArtifact(ShowArtifactArgs),
     Registry(RegistryArgs),
     Plan(PlanArgs),
+    Calc(CalcArgs),
 }
 
 #[derive(Parser)]
@@ -485,6 +487,68 @@ struct PlanExportArgs {
     artifacts_dir: Option<PathBuf>,
 }
 
+#[derive(Parser)]
+struct CalcArgs {
+    #[command(subcommand)]
+    command: CalcCommands,
+}
+
+#[derive(Subcommand)]
+enum CalcCommands {
+    Plan(CalcPlanArgs),
+    Execute(CalcExecuteArgs),
+    Describe(CalcDescribeArgs),
+}
+
+#[derive(Parser)]
+struct CalcPlanArgs {
+    /// Path to expression JSON file
+    #[arg(long, value_name = "PATH", required = true)]
+    expression: PathBuf,
+
+    /// Input contracts (repeatable: name:type or name:type:unit)
+    #[arg(long = "input-contract", value_name = "SPEC")]
+    input_contracts: Vec<String>,
+
+    /// Expected output unit
+    #[arg(long)]
+    output_unit: Option<String>,
+
+    /// Output path for plan artifact
+    #[arg(long, value_name = "PATH", required = true)]
+    out: PathBuf,
+}
+
+#[derive(Parser)]
+struct CalcExecuteArgs {
+    /// Path to plan artifact
+    #[arg(long, value_name = "PATH", required = true)]
+    plan: PathBuf,
+
+    /// Input values (repeatable: name=value)
+    #[arg(long = "input", value_name = "SPEC")]
+    inputs: Vec<String>,
+
+    /// Enable trace (step-by-step computation log)
+    #[arg(long)]
+    trace: bool,
+
+    /// Output path for witness
+    #[arg(long, value_name = "PATH", required = true)]
+    out: PathBuf,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct CalcDescribeArgs {
+    /// Output JSON
+    #[arg(long, default_value_t = true)]
+    json: bool,
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -503,6 +567,11 @@ fn main() {
             PlanCommands::New(new_args) => run_plan_new(new_args),
             PlanCommands::Show(show_args) => run_plan_show(show_args),
             PlanCommands::Export(export_args) => run_plan_export(export_args),
+        },
+        Commands::Calc(args) => match args.command {
+            CalcCommands::Plan(plan_args) => run_calc_plan(plan_args),
+            CalcCommands::Execute(exec_args) => run_calc_execute(exec_args),
+            CalcCommands::Describe(desc_args) => run_calc_describe(desc_args),
         },
     };
 
@@ -1233,6 +1302,78 @@ fn run_scope_show(args: ScopeShowArgs) -> Result<(), String> {
             println!("contract_ref={}", contract);
         }
     }
+
+    Ok(())
+}
+
+fn run_calc_plan(args: CalcPlanArgs) -> Result<(), String> {
+    use admit_cli::calc_commands::calc_plan;
+
+    let plan = calc_plan(
+        &args.expression,
+        args.input_contracts,
+        args.output_unit,
+        &args.out,
+    )
+    .map_err(|err| err.to_string())?;
+
+    // Compute plan hash for output
+    let plan_value = serde_json::to_value(&plan)
+        .map_err(|e| format!("failed to convert plan to value: {}", e))?;
+    let plan_cbor = admit_core::encode_canonical_value(&plan_value)
+        .map_err(|e| format!("failed to encode plan: {}", e))?;
+    let plan_hash = hex::encode(sha2::Sha256::digest(&plan_cbor));
+
+    println!("plan_hash={}", plan_hash);
+    println!("mechanism_id={}", plan.mechanism_id);
+    println!("touched_scope={}", plan.touched_scope);
+    println!("inputs={}", plan.inputs.len());
+    println!("out={}", args.out.display());
+
+    Ok(())
+}
+
+fn run_calc_execute(args: CalcExecuteArgs) -> Result<(), String> {
+    use admit_cli::calc_commands::calc_execute;
+
+    let witness = calc_execute(
+        &args.plan,
+        args.inputs,
+        args.trace,
+        &args.out,
+        args.artifacts_dir.as_deref(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    // Compute witness identity hash (core payload only)
+    let core_value = serde_json::to_value(&witness.core)
+        .map_err(|e| format!("failed to convert core to value: {}", e))?;
+    let core_cbor = admit_core::encode_canonical_value(&core_value)
+        .map_err(|e| format!("failed to encode core: {}", e))?;
+    let witness_hash = hex::encode(sha2::Sha256::digest(&core_cbor));
+
+    println!("witness_hash={}", witness_hash);
+    println!("plan_hash={}", witness.core.plan_hash);
+    println!("output_value={:?}", witness.core.output.value);
+    if let Some(unit) = &witness.core.output.unit {
+        println!("output_unit={}", unit);
+    }
+    if let Some(trace) = &witness.envelope.trace {
+        println!("trace_steps={}", trace.len());
+    }
+    println!("out={}", args.out.display());
+
+    Ok(())
+}
+
+fn run_calc_describe(_args: CalcDescribeArgs) -> Result<(), String> {
+    use admit_cli::calc_commands::calc_describe;
+
+    let desc = calc_describe();
+    let json = serde_json::to_string_pretty(&desc)
+        .map_err(|e| format!("failed to serialize description: {}", e))?;
+
+    println!("{}", json);
 
     Ok(())
 }

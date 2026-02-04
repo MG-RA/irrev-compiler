@@ -1,11 +1,15 @@
 mod bool_expr;
 mod boundary;
+pub mod calc_ast;
+pub mod calc_eval;
+pub mod calc_witness;
 pub mod cbor;
 mod constraints;
 mod displacement;
 mod env;
 mod error;
 mod eval;
+pub mod exact_types;
 pub mod hash_operations;
 pub mod hash_witness;
 mod ir;

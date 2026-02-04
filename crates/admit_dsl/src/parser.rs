@@ -603,18 +603,6 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
     })
 }
 
-fn parse_prefixed(prefix: &str, raw: &str) -> Result<String, String> {
-    let expected = format!("{}:", prefix);
-    if let Some(rest) = raw.strip_prefix(&expected) {
-        if rest.is_empty() {
-            return Err(format!("empty {} name", prefix));
-        }
-        Ok(rest.to_string())
-    } else {
-        Err(format!("expected {}:<name>", prefix))
-    }
-}
-
 fn parse_module_decl(raw: &str) -> Result<(String, u32), String> {
     let rest = raw.strip_prefix("module:").unwrap_or(raw);
     let (name, major) = rest
@@ -644,8 +632,15 @@ fn parse_module_ref(raw: &str) -> Result<String, String> {
 }
 
 fn resolve_prefixed(prefix: &str, raw: &str) -> Result<String, String> {
-    if raw.contains(':') {
-        parse_prefixed(prefix, raw)
+    if let Some((ns, rest)) = raw.split_once(':') {
+        if ns == prefix {
+            if rest.is_empty() {
+                return Err(format!("empty {} name", prefix));
+            }
+            Ok(rest.to_string())
+        } else {
+            Ok(raw.to_string())
+        }
     } else {
         Ok(raw.to_string())
     }

@@ -179,6 +179,15 @@ pub enum Predicate {
     },
     #[serde(rename = "VaultRule")]
     VaultRule { rule_id: String },
+    #[serde(rename = "CalcWitness")]
+    CalcWitness {
+        witness_hash: String,
+        expected_schema_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_plan_hash: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_output: Option<crate::exact_types::ExactValue>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -212,7 +212,9 @@ impl Default for BatchSizes {
             headings: 200,
             links: 100,
             stats: 200,
-            embeddings: 16,
+            // Let `max_sql_bytes` control flushing for embedding-heavy batches; count-based flushing
+            // at 16 causes excessive `surreal sql` subprocess spawns for large vectors.
+            embeddings: 128,
             max_sql_bytes: 1_000_000,
         }
     }

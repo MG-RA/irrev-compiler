@@ -2222,11 +2222,8 @@ fn run_ingest_dir(
                 .iter()
                 .cloned()
                 .collect::<std::collections::BTreeSet<String>>();
-            if set.is_empty() {
-                None
-            } else {
-                Some(set)
-            }
+            // Important: an empty set means "skip link work" (fast path), not "resolve everything".
+            Some(set)
         });
         let mut projection_run_id: Option<String> = None;
         let mut bench_first_ms: Option<u64> = None;

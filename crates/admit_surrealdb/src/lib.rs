@@ -1497,7 +1497,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                 .insert(path.clone());
         }
 
-        // Upsert doc_file records for all vault docs we saw.
+        // Upsert doc_file records for vault docs we saw.
+        // In incremental mode, `doc_filter` narrows this to changed documents.
         let mut doc_file_batches = BatchAccumulator::new(
             self,
             phase,
@@ -1505,12 +1506,18 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             self.projection_config.batch_sizes.doc_files,
         );
         for doc in vault_docs.values() {
+            if let Some(filter) = doc_filter {
+                if !filter.contains(&doc.doc_path) {
+                    continue;
+                }
+            }
             let sql = doc_file_upsert_sql_with_run(doc, run_id);
             doc_file_batches.push_item(doc.doc_path.clone(), &sql);
         }
         let doc_file_result = doc_file_batches.finish();
 
         // Project headings for vault docs (for observability + hygiene).
+        // In incremental mode, `doc_filter` narrows this to changed documents.
         let mut heading_batches = BatchAccumulator::new(
             self,
             phase,
@@ -1529,6 +1536,11 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             };
             if !vault_prefixes.iter().any(|p| doc_path.starts_with(p)) {
                 continue;
+            }
+            if let Some(filter) = doc_filter {
+                if !filter.contains(doc_path) {
+                    continue;
+                }
             }
             let Some(last) = heading_path.last() else {
                 continue;

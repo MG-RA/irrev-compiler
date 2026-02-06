@@ -3,8 +3,35 @@ use std::process::{Command, Stdio};
 use std::path::Path;
 use std::collections::{BTreeMap, BTreeSet};
 
+use admit_core::ArtifactRef;
 use admit_dag::{DagEdge, DagNode, EdgeType, GovernedDag, NodeKind, ProjectionStore};
 use sha2::Digest;
+
+// Projection configuration layer
+pub mod projection_config;
+
+// Projection run tracking primitive
+pub mod projection_run;
+
+// Projection observability events (queryable view)
+pub mod projection_events;
+
+// Ingestion run + events (queryable view)
+pub mod ingest_run;
+pub mod ingest_events;
+
+// Projection store trait and implementations
+pub mod projection_store;
+
+// Pure link resolution logic (no database dependencies)
+pub mod link_resolver;
+
+// Re-export key types for convenience
+pub use projection_store::{NullStore, ProjectionError, ProjectionResult, ProjectionStoreOps};
+pub use link_resolver::{VaultLinkResolver, ObsidianLink, ResolutionResult, AssetResolution};
+pub use projection_events::ProjectionEventRow;
+pub use ingest_events::IngestEventRow;
+pub use ingest_run::IngestRunRow;
 
 #[derive(Debug, Clone)]
 pub struct SurrealCliConfig {
@@ -36,6 +63,7 @@ impl Default for SurrealCliConfig {
 #[derive(Debug, Clone)]
 pub struct SurrealCliProjectionStore {
     config: SurrealCliConfig,
+    projection_config: projection_config::ProjectionConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -117,13 +145,52 @@ pub struct UnresolvedLinkSuggestionRow {
     pub candidates: Vec<(String, f64)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct QueryArtifactRow {
+    pub artifact_sha256: String,
+    pub schema_id: String,
+    pub name: String,
+    pub lang: String,
+    pub source: String,
+    pub tags: Vec<String>,
+    pub created_at_utc: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionArtifactRow {
+    pub artifact_sha256: String,
+    pub schema_id: String,
+    pub name: String,
+    pub lang: String,
+    pub source: String,
+    pub tags: Vec<String>,
+    pub created_at_utc: String,
+}
+
 impl SurrealCliProjectionStore {
     pub fn new(config: SurrealCliConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            projection_config: projection_config::ProjectionConfig::default(),
+        }
+    }
+
+    pub fn with_projection_config(
+        config: SurrealCliConfig,
+        projection_config: projection_config::ProjectionConfig,
+    ) -> Self {
+        Self {
+            config,
+            projection_config,
+        }
     }
 
     pub fn config(&self) -> &SurrealCliConfig {
         &self.config
+    }
+
+    pub fn projection_config(&self) -> &projection_config::ProjectionConfig {
+        &self.projection_config
     }
 
     pub fn is_ready(&self) -> Result<bool, String> {
@@ -251,6 +318,7 @@ DEFINE INDEX facet_name ON TABLE facet COLUMNS name UNIQUE;
 DEFINE TABLE has_facet SCHEMALESS;
 DEFINE INDEX has_facet_doc_path ON TABLE has_facet COLUMNS doc_path;
 DEFINE INDEX has_facet_name ON TABLE has_facet COLUMNS facet_name;
+DEFINE INDEX has_facet_run ON TABLE has_facet COLUMNS projection_run_id;
 
 DEFINE TABLE embed_run SCHEMALESS;
 DEFINE INDEX embed_run_kind ON TABLE embed_run COLUMNS kind;
@@ -279,6 +347,560 @@ DEFINE INDEX doc_title_embedding_dim_target ON TABLE doc_title_embedding COLUMNS
         self.run_sql_allow_already_exists(sql)
     }
 
+    pub fn ensure_projection_run_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE projection_run SCHEMALESS;
+DEFINE INDEX projection_run_trace ON TABLE projection_run COLUMNS trace_sha256;
+DEFINE INDEX projection_run_ingest ON TABLE projection_run COLUMNS ingest_run_id;
+DEFINE INDEX projection_run_status ON TABLE projection_run COLUMNS status;
+DEFINE INDEX projection_run_started ON TABLE projection_run COLUMNS started_at;
+DEFINE INDEX projection_run_config ON TABLE projection_run COLUMNS config_hash;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
+    pub fn ensure_projection_event_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE projection_event SCHEMALESS;
+DEFINE INDEX projection_event_run_id ON TABLE projection_event COLUMNS run_id;
+DEFINE INDEX projection_event_run ON TABLE projection_event COLUMNS projection_run_id;
+DEFINE INDEX projection_event_phase ON TABLE projection_event COLUMNS phase;
+DEFINE INDEX projection_event_type ON TABLE projection_event COLUMNS event_type;
+DEFINE INDEX projection_event_timestamp ON TABLE projection_event COLUMNS timestamp;
+DEFINE INDEX projection_event_trace ON TABLE projection_event COLUMNS trace_sha256;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
+    pub fn ensure_ingest_run_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE ingest_run SCHEMALESS;
+DEFINE INDEX ingest_run_started ON TABLE ingest_run COLUMNS started_at;
+DEFINE INDEX ingest_run_status ON TABLE ingest_run COLUMNS status;
+DEFINE INDEX ingest_run_root ON TABLE ingest_run COLUMNS root;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
+    pub fn ensure_ingest_event_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE ingest_event SCHEMALESS;
+DEFINE INDEX ingest_event_run ON TABLE ingest_event COLUMNS ingest_run_id;
+DEFINE INDEX ingest_event_type ON TABLE ingest_event COLUMNS event_type;
+DEFINE INDEX ingest_event_timestamp ON TABLE ingest_event COLUMNS timestamp;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
+    pub fn ensure_query_artifact_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE query_artifact SCHEMALESS;
+DEFINE INDEX query_artifact_sha ON TABLE query_artifact COLUMNS artifact_sha256;
+DEFINE INDEX query_artifact_name ON TABLE query_artifact COLUMNS name;
+DEFINE INDEX query_artifact_lang ON TABLE query_artifact COLUMNS lang;
+DEFINE INDEX query_artifact_created ON TABLE query_artifact COLUMNS created_at_utc;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
+    pub fn ensure_function_artifact_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE fn_artifact SCHEMALESS;
+DEFINE INDEX fn_artifact_sha ON TABLE fn_artifact COLUMNS artifact_sha256;
+DEFINE INDEX fn_artifact_name ON TABLE fn_artifact COLUMNS name;
+DEFINE INDEX fn_artifact_lang ON TABLE fn_artifact COLUMNS lang;
+DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
+    /// Begin a new projection run, returns the run_id
+    pub fn begin_projection_run(&self, run: &crate::projection_run::ProjectionRun) -> Result<String, String> {
+        use crate::projection_run::RunStatus;
+
+        let status_str = match run.status {
+            RunStatus::Running => "running",
+            RunStatus::Partial => "partial",
+            RunStatus::Complete => "complete",
+            RunStatus::Failed => "failed",
+            RunStatus::Superseded => "superseded",
+        };
+
+        let phases_json = serde_json::to_string(&run.phases_enabled)
+            .map_err(|e| format!("Failed to serialize phases: {}", e))?;
+
+        let sql = format!(
+            "INSERT INTO projection_run {{ \
+                run_id: {}, \
+                ingest_run_id: {}, \
+                trace_sha256: {}, \
+                started_at: {}, \
+                projector_version: {}, \
+                config_hash: {}, \
+                phases_enabled: {}, \
+                status: {}, \
+                phase_results: {{}} \
+            }};",
+            json_string(&run.run_id),
+            json_opt_string(run.ingest_run_id.as_deref()),
+            json_string(&run.trace_sha256),
+            json_string(&run.started_at),
+            json_string(&run.projector_version),
+            json_string(&run.config_hash),
+            phases_json,
+            json_string(status_str),
+        );
+
+        self.run_sql(&sql)?;
+        Ok(run.run_id.clone())
+    }
+
+    /// End a projection run with final status
+    pub fn end_projection_run(
+        &self,
+        run_id: &str,
+        status: crate::projection_run::RunStatus,
+        finished_at: &str,
+        phase_results: &std::collections::BTreeMap<String, crate::projection_run::PhaseResult>,
+    ) -> Result<(), String> {
+        let status_str = match status {
+            crate::projection_run::RunStatus::Running => "running",
+            crate::projection_run::RunStatus::Partial => "partial",
+            crate::projection_run::RunStatus::Complete => "complete",
+            crate::projection_run::RunStatus::Failed => "failed",
+            crate::projection_run::RunStatus::Superseded => "superseded",
+        };
+
+        let phase_results_json = serde_json::to_string(phase_results)
+            .map_err(|e| format!("Failed to serialize phase results: {}", e))?;
+
+        let sql = format!(
+            "UPDATE projection_run SET \
+                status = {}, \
+                finished_at = {}, \
+                phase_results = {} \
+            WHERE run_id = {};",
+            json_string(status_str),
+            json_string(finished_at),
+            phase_results_json,
+            json_string(run_id),
+        );
+
+        self.run_sql(&sql)
+    }
+
+    /// Get the latest projection run for a given trace
+    pub fn get_latest_projection_run(&self, trace_sha256: &str) -> Result<Option<serde_json::Value>, String> {
+        let sql = format!(
+            "SELECT * FROM projection_run \
+            WHERE trace_sha256 = {} \
+            ORDER BY started_at DESC \
+            LIMIT 1;",
+            json_string(trace_sha256),
+        );
+
+        let output = self.run_sql_output(&sql)?;
+        if output.values.is_empty() {
+            return Ok(None);
+        }
+
+        // Extract first result
+        if let Some(serde_json::Value::Array(arr)) = output.values.first() {
+            if let Some(result) = arr.first() {
+                if let serde_json::Value::Object(obj) = result {
+                    if let Some(result_val) = obj.get("result") {
+                        if let serde_json::Value::Array(result_arr) = result_val {
+                            return Ok(result_arr.first().cloned());
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Find the newest complete run matching (trace_sha256, config_hash, phases_enabled).
+    ///
+    /// Used to skip projection work when an identical complete run already exists.
+    pub fn find_complete_projection_run(
+        &self,
+        trace_sha256: &str,
+        config_hash: &str,
+        phases_enabled: &[String],
+    ) -> Result<Option<serde_json::Value>, String> {
+        let phases_json =
+            serde_json::to_string(phases_enabled).unwrap_or_else(|_| "[]".to_string());
+        let sql = format!(
+            "SELECT * FROM projection_run \
+            WHERE trace_sha256 = {} AND config_hash = {} AND phases_enabled = {} AND status = 'complete' \
+            ORDER BY started_at DESC \
+            LIMIT 1;",
+            json_string(trace_sha256),
+            json_string(config_hash),
+            phases_json,
+        );
+        let output = self.run_sql_output(&sql)?;
+        check_surreal_json_stream(&output.values).map_err(|msg| {
+            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+        })?;
+        let values = extract_result_array(&output.values)?;
+        Ok(values.first().cloned())
+    }
+
+    pub fn projection_run_record(&self, run_id: &str) -> Result<Option<serde_json::Value>, String> {
+        let sql = format!(
+            "SELECT * FROM projection_run WHERE run_id = {} LIMIT 1;",
+            json_string(run_id),
+        );
+        let output = self.run_sql_output(&sql)?;
+        check_surreal_json_stream(&output.values).map_err(|msg| {
+            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+        })?;
+        let values = extract_result_array(&output.values)?;
+        Ok(values.first().cloned())
+    }
+
+    pub fn dag_trace_bytes_for_trace(&self, trace_sha256: &str) -> Result<Vec<u8>, String> {
+        let sql = format!(
+            "SELECT bytes_cbor_hex FROM dag_trace WHERE trace_sha256 = {} LIMIT 1;",
+            json_string(trace_sha256),
+        );
+        let output = self.run_sql_output(&sql)?;
+        check_surreal_json_stream(&output.values).map_err(|msg| {
+            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+        })?;
+        let values = extract_result_array(&output.values)?;
+        for value in values {
+            if let serde_json::Value::Object(obj) = value {
+                if let Some(serde_json::Value::String(hex_str)) = obj.get("bytes_cbor_hex") {
+                    let bytes = hex::decode(hex_str)
+                        .map_err(|e| format!("decode dag_trace cbor hex: {}", e))?;
+                    return Ok(bytes);
+                }
+            }
+        }
+        Err(format!(
+            "dag_trace bytes not found for trace_sha256 {}",
+            trace_sha256
+        ))
+    }
+
+    pub fn retry_dag_trace_batches(
+        &self,
+        dag: &GovernedDag,
+        run_id: &str,
+        failed_batches: &[crate::projection_run::FailedBatch],
+    ) -> Result<(usize, Vec<crate::projection_run::FailedBatch>), String> {
+        let phase = "dag_trace";
+        let mut node_lookup: BTreeMap<String, DagNode> = BTreeMap::new();
+        for (id, node) in dag.nodes() {
+            node_lookup.insert(id.to_string(), node.clone());
+        }
+        let mut edge_lookup: BTreeMap<String, DagEdge> = BTreeMap::new();
+        for edge in dag.edges() {
+            let edge_id = edge_identity_sha256(edge)?;
+            edge_lookup.insert(edge_id, edge.clone());
+        }
+
+        let mut successful = 0usize;
+        let mut failed: Vec<crate::projection_run::FailedBatch> = Vec::new();
+
+        for batch in failed_batches {
+            let mut sql = String::new();
+            let mut found = 0usize;
+            for item_id in &batch.item_ids {
+                if let Some(node) = node_lookup.get(item_id) {
+                    sql.push_str(&node_upsert_sql_with_run(item_id, node, Some(run_id)));
+                    found += 1;
+                    continue;
+                }
+                if let Some(edge) = edge_lookup.get(item_id) {
+                    sql.push_str(&edge_relate_sql_with_run(item_id, edge, Some(run_id)));
+                    found += 1;
+                    continue;
+                }
+            }
+            if found == 0 {
+                failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: "no matching items in dag trace for batch".to_string(),
+                    ..batch.clone()
+                });
+                continue;
+            }
+
+            match self.run_sql(&sql) {
+                Ok(()) => successful += 1,
+                Err(err) => failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: format!("retry {} batch failed: {}", phase, err),
+                    ..batch.clone()
+                }),
+            }
+        }
+
+        Ok((successful, failed))
+    }
+
+    pub fn retry_doc_files_batches(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        run_id: &str,
+        failed_batches: &[crate::projection_run::FailedBatch],
+    ) -> Result<(usize, Vec<crate::projection_run::FailedBatch>), String> {
+        let phase = "doc_files";
+        self.ensure_doc_file_schema()?;
+
+        let mut doc_index: BTreeMap<String, (String, ArtifactRef)> = BTreeMap::new();
+        for (id, node) in dag.nodes() {
+            let NodeKind::FileAtPath { path, .. } = &node.kind else {
+                continue;
+            };
+            if !path.to_lowercase().ends_with(".md") {
+                continue;
+            }
+            let Some(artifact_ref) = node.artifact_ref.as_ref() else {
+                continue;
+            };
+            doc_index.insert(path.clone(), (id.to_string(), artifact_ref.clone()));
+        }
+
+        let mut successful = 0usize;
+        let mut failed: Vec<crate::projection_run::FailedBatch> = Vec::new();
+
+        for batch in failed_batches {
+            let mut sql = String::new();
+            let mut found = 0usize;
+            for doc_path in &batch.item_ids {
+                let Some((file_node_id, artifact_ref)) = doc_index.get(doc_path) else {
+                    continue;
+                };
+                let Some(rel_path) = artifact_ref.path.as_ref() else {
+                    continue;
+                };
+                let doc = VaultDoc {
+                    doc_path: doc_path.clone(),
+                    doc_id: sha256_hex_str(doc_path),
+                    file_node_id: file_node_id.clone(),
+                    title: file_stem_title(doc_path),
+                    artifact_sha256: artifact_ref.sha256.clone(),
+                    artifact_abs_path: artifacts_root.join(Path::new(rel_path)),
+                };
+
+                let mut doc_sql = String::new();
+                doc_sql.push_str(&doc_file_upsert_sql_with_run(&doc, Some(run_id)));
+
+                let bytes = std::fs::read(&doc.artifact_abs_path);
+                if let Ok(bytes) = bytes {
+                    if let Ok(text) = std::str::from_utf8(&bytes) {
+                        let fm = extract_frontmatter(text);
+                        doc_sql.push_str(&doc_file_update_frontmatter_sql(&doc, fm.as_ref()));
+
+                        if let Some(fm) = fm.as_ref() {
+                            for facet in fm.facets.iter() {
+                                if facet.trim().is_empty() {
+                                    continue;
+                                }
+                                doc_sql.push_str(&facet_upsert_sql(facet));
+                                let edge_id = has_facet_edge_id(&doc.doc_path, facet)
+                                    .map_err(|e| format!("facet edge id: {}", e))?;
+                                doc_sql.push_str(&has_facet_relate_sql(&doc, facet, &edge_id, Some(run_id)));
+                            }
+                        }
+                    }
+                }
+
+                sql.push_str(&doc_sql);
+                found += 1;
+            }
+
+            if found == 0 {
+                failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: "no matching doc_files for batch".to_string(),
+                    ..batch.clone()
+                });
+                continue;
+            }
+
+            match self.run_sql(&sql) {
+                Ok(()) => successful += 1,
+                Err(err) => failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: format!("retry {} batch failed: {}", phase, err),
+                    ..batch.clone()
+                }),
+            }
+        }
+
+        Ok((successful, failed))
+    }
+
+    pub fn retry_doc_chunks_batches(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        run_id: &str,
+        failed_batches: &[crate::projection_run::FailedBatch],
+    ) -> Result<(usize, Vec<crate::projection_run::FailedBatch>), String> {
+        let phase = "doc_chunks";
+        self.ensure_doc_chunk_schema()?;
+        self.ensure_doc_file_schema()?;
+
+        let mut chunk_index: BTreeMap<String, (String, String, Vec<String>, u32, ArtifactRef)> =
+            BTreeMap::new();
+        for (id, node) in dag.nodes() {
+            let NodeKind::TextChunk {
+                chunk_sha256,
+                doc_path,
+                heading_path,
+                start_line,
+            } = &node.kind
+            else {
+                continue;
+            };
+            let Some(artifact_ref) = node.artifact_ref.as_ref() else {
+                continue;
+            };
+            chunk_index.insert(
+                id.to_string(),
+                (
+                    chunk_sha256.clone(),
+                    doc_path.clone(),
+                    heading_path.clone(),
+                    *start_line,
+                    artifact_ref.clone(),
+                ),
+            );
+        }
+
+        let mut successful = 0usize;
+        let mut failed: Vec<crate::projection_run::FailedBatch> = Vec::new();
+
+        for batch in failed_batches {
+            let mut sql = String::new();
+            let mut found = 0usize;
+            for node_id in &batch.item_ids {
+                let Some((chunk_sha256, doc_path, heading_path, start_line, artifact_ref)) = chunk_index.get(node_id)
+                else {
+                    continue;
+                };
+                let Some(rel_path) = artifact_ref.path.as_ref() else {
+                    continue;
+                };
+                let abs_path = artifacts_root.join(Path::new(rel_path));
+                let bytes = match std::fs::read(&abs_path) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                let text = String::from_utf8_lossy(&bytes);
+                let doc_ref = Some(thing("doc_file", &sha256_hex_str(doc_path)));
+                let sql_item = doc_chunk_upsert_sql_with_run(
+                    node_id,
+                    chunk_sha256,
+                    doc_path,
+                    heading_path,
+                    *start_line,
+                    &artifact_ref.sha256,
+                    &text,
+                    doc_ref.as_deref(),
+                    Some(run_id),
+                );
+                sql.push_str(&sql_item);
+                found += 1;
+            }
+
+            if found == 0 {
+                failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: "no matching doc_chunks for batch".to_string(),
+                    ..batch.clone()
+                });
+                continue;
+            }
+
+            match self.run_sql(&sql) {
+                Ok(()) => successful += 1,
+                Err(err) => failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: format!("retry {} batch failed: {}", phase, err),
+                    ..batch.clone()
+                }),
+            }
+        }
+
+        Ok((successful, failed))
+    }
+
+    pub fn projection_run_started_at(&self, run_id: &str) -> Result<Option<String>, String> {
+        let sql = format!(
+            "SELECT VALUE started_at FROM projection_run WHERE run_id = {} LIMIT 1;",
+            json_string(run_id),
+        );
+        let output = self.run_sql_output(&sql)?;
+        check_surreal_json_stream(&output.values).map_err(|msg| {
+            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+        })?;
+        let values = extract_result_array(&output.values)?;
+        for value in values {
+            if let serde_json::Value::String(s) = value {
+                return Ok(Some(s));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn projection_run_ids_before(&self, started_at: &str) -> Result<Vec<String>, String> {
+        let sql = format!(
+            "SELECT run_id, started_at FROM projection_run WHERE started_at < {} ORDER BY started_at ASC;",
+            json_string(started_at),
+        );
+        let output = self.run_sql_output(&sql)?;
+        check_surreal_json_stream(&output.values).map_err(|msg| {
+            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+        })?;
+        let values = extract_result_array(&output.values)?;
+        let mut out: Vec<String> = Vec::new();
+        for value in values {
+            match value {
+                serde_json::Value::Object(obj) => {
+                    if let Some(serde_json::Value::String(id)) = obj.get("run_id") {
+                        out.push(id.clone());
+                    }
+                }
+                serde_json::Value::String(s) => out.push(s),
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn vacuum_projection_runs(&self, run_ids: &[String]) -> Result<(), String> {
+        if run_ids.is_empty() {
+            return Ok(());
+        }
+        let runs_json = serde_json::to_string(run_ids)
+            .map_err(|e| format!("serialize run_ids: {}", e))?;
+        let sql = format!(
+            "LET $runs = {runs};\
+DELETE node WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE edge WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE dag_trace WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE doc_file WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE doc_chunk WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE obsidian_link WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE obsidian_file_link WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE doc_link_unresolved WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE has_facet WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE projection_event WHERE projection_run_id IN $runs RETURN NONE;\
+DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
+            runs = runs_json
+        );
+        self.run_sql(&sql)
+    }
+
     pub fn project_doc_embeddings(
         &self,
         chunk_rows: &[DocChunkEmbeddingRow],
@@ -286,7 +908,8 @@ DEFINE INDEX doc_title_embedding_dim_target ON TABLE doc_title_embedding COLUMNS
     ) -> Result<(), String> {
         self.ensure_doc_file_schema()?;
 
-        const BATCH_LIMIT: usize = 50;
+        let batch_limit = self.projection_config.batch_sizes.embeddings;
+        let max_sql_bytes = self.projection_config.batch_sizes.max_sql_bytes.max(1);
         let mut batch_count: usize = 0;
         let mut sql = String::new();
 
@@ -315,7 +938,7 @@ DEFINE INDEX doc_title_embedding_dim_target ON TABLE doc_title_embedding COLUMNS
                 chunk_ref = thing("doc_chunk", &row.node_id),
             ));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit || sql.len() >= max_sql_bytes {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -341,7 +964,7 @@ DEFINE INDEX doc_title_embedding_dim_target ON TABLE doc_title_embedding COLUMNS
                 doc_ref = thing("doc_file", &doc_id),
             ));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit || sql.len() >= max_sql_bytes {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -362,14 +985,17 @@ DEFINE INDEX doc_title_embedding_dim_target ON TABLE doc_title_embedding COLUMNS
 DEFINE TABLE obsidian_link SCHEMALESS;
 DEFINE INDEX obsidian_link_from ON TABLE obsidian_link COLUMNS from_doc_path;
 DEFINE INDEX obsidian_link_to ON TABLE obsidian_link COLUMNS to_doc_path;
+DEFINE INDEX obsidian_link_run ON TABLE obsidian_link COLUMNS projection_run_id;
 
 DEFINE TABLE obsidian_file_link SCHEMALESS;
 DEFINE INDEX obsidian_file_link_from ON TABLE obsidian_file_link COLUMNS from_doc_path;
 DEFINE INDEX obsidian_file_link_to_path ON TABLE obsidian_file_link COLUMNS to_file_path;
+DEFINE INDEX obsidian_file_link_run ON TABLE obsidian_file_link COLUMNS projection_run_id;
 
 DEFINE TABLE doc_link_unresolved SCHEMALESS;
 DEFINE INDEX doc_link_unresolved_from ON TABLE doc_link_unresolved COLUMNS from_doc_path;
 DEFINE INDEX doc_link_unresolved_kind ON TABLE doc_link_unresolved COLUMNS resolution_kind;
+DEFINE INDEX doc_link_unresolved_run ON TABLE doc_link_unresolved COLUMNS projection_run_id;
 
 DEFINE TABLE unresolved_link_suggestion SCHEMALESS;
 DEFINE INDEX unresolved_link_suggestion_link ON TABLE unresolved_link_suggestion COLUMNS link_id;
@@ -419,7 +1045,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
     ) -> Result<(), String> {
         self.ensure_doc_file_schema()?;
 
-        const BATCH_LIMIT: usize = 50;
+        let batch_limit = self.projection_config.batch_sizes.doc_files;
         let mut batch_count: usize = 0;
         let mut sql = String::new();
 
@@ -448,7 +1074,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
 
             sql.push_str(&doc_file_upsert_sql(&doc));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -466,7 +1092,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             let fm = extract_frontmatter(text);
             sql.push_str(&doc_file_update_frontmatter_sql(&doc, fm.as_ref()));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -478,7 +1104,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                 json_string(&doc.doc_path)
             ));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -490,9 +1116,9 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                     }
                     sql.push_str(&facet_upsert_sql(facet));
                     let edge_id = has_facet_edge_id(&doc.doc_path, facet)?;
-                    sql.push_str(&has_facet_relate_sql(&doc, facet, &edge_id));
+                    sql.push_str(&has_facet_relate_sql(&doc, facet, &edge_id, None));
                     batch_count += 2;
-                    if batch_count >= BATCH_LIMIT {
+                    if batch_count >= batch_limit {
                         self.run_sql(&sql)?;
                         sql.clear();
                         batch_count = 0;
@@ -535,7 +1161,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
 
     pub fn project_doc_title_embeddings(&self, rows: &[DocTitleEmbeddingRow]) -> Result<(), String> {
         self.ensure_doc_file_schema()?;
-        const BATCH_LIMIT: usize = 50;
+        let batch_limit = self.projection_config.batch_sizes.embeddings;
+        let max_sql_bytes = self.projection_config.batch_sizes.max_sql_bytes.max(1);
         let mut batch_count: usize = 0;
         let mut sql = String::new();
 
@@ -559,7 +1186,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                 doc_ref = thing("doc_file", &doc_id),
             ));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit || sql.len() >= max_sql_bytes {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -576,6 +1203,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         prefixes: &[&str],
         kinds: &[&str],
         limit: usize,
+        projection_run_id: Option<&str>,
     ) -> Result<Vec<UnresolvedLinkRow>, String> {
         self.ensure_vault_link_schema()?;
         if prefixes.is_empty() || kinds.is_empty() {
@@ -588,9 +1216,12 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         let where_prefix = conds.join(" OR ");
         let kinds_json = serde_json::to_string(kinds).unwrap_or_else(|_| "[]".to_string());
         let lim = limit.max(1).min(100000);
+        let run_filter = projection_run_id
+            .map(|rid| format!(" AND projection_run_id = {}", json_string(rid)))
+            .unwrap_or_default();
         let sql = format!(
-            "SELECT link_id, from_doc_path, raw_target, raw_heading, resolution_kind, candidates, resolved_doc_path, line, embed FROM doc_link_unresolved WHERE ({}) AND resolution_kind IN {} LIMIT {};",
-            where_prefix, kinds_json, lim
+            "SELECT link_id, from_doc_path, raw_target, raw_heading, resolution_kind, candidates, resolved_doc_path, line, embed FROM doc_link_unresolved WHERE ({}) AND resolution_kind IN {}{} LIMIT {};",
+            where_prefix, kinds_json, run_filter, lim
         );
         let rows = self.select_rows_from_single_select(&sql)?;
         let mut out = Vec::new();
@@ -676,7 +1307,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             json_string(run_id)
         ));
 
-        const BATCH_LIMIT: usize = 50;
+        let batch_limit = self.projection_config.batch_sizes.links;
+        let max_sql_bytes = self.projection_config.batch_sizes.max_sql_bytes.max(1);
         let mut batch_count: usize = 0;
 
         for row in rows {
@@ -708,7 +1340,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                 candidates = candidates_json,
             ));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit || sql.len() >= max_sql_bytes {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -747,7 +1379,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         self.ensure_doc_chunk_schema()?;
         self.ensure_doc_file_schema()?;
 
-        const BATCH_LIMIT: usize = 50;
+        let batch_limit = self.projection_config.batch_sizes.doc_chunks;
         let mut batch_count: usize = 0;
         let mut sql = String::new();
 
@@ -794,7 +1426,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             ));
             batch_count += 1;
 
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -813,7 +1445,11 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         dag: &GovernedDag,
         artifacts_root: &Path,
         vault_prefixes: &[&str],
-    ) -> Result<(), String> {
+        doc_filter: Option<&BTreeSet<String>>,
+        run_id: Option<&str>,
+    ) -> Result<crate::projection_run::PhaseResult, String> {
+        let phase = "vault_links";
+        let phase_start = std::time::Instant::now();
         self.ensure_doc_file_schema()?;
         self.ensure_vault_link_schema()?;
 
@@ -862,98 +1498,99 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         }
 
         // Upsert doc_file records for all vault docs we saw.
-        {
-            const BATCH_LIMIT: usize = 200;
-            let mut batch_count: usize = 0;
-            let mut sql = String::new();
-            for doc in vault_docs.values() {
-                sql.push_str(&doc_file_upsert_sql(doc));
-                batch_count += 1;
-                if batch_count >= BATCH_LIMIT {
-                    self.run_sql(&sql)?;
-                    sql.clear();
-                    batch_count = 0;
-                }
-            }
-            if !sql.is_empty() {
-                self.run_sql(&sql)?;
-            }
+        let mut doc_file_batches = BatchAccumulator::new(
+            self,
+            phase,
+            run_id,
+            self.projection_config.batch_sizes.doc_files,
+        );
+        for doc in vault_docs.values() {
+            let sql = doc_file_upsert_sql_with_run(doc, run_id);
+            doc_file_batches.push_item(doc.doc_path.clone(), &sql);
         }
+        let doc_file_result = doc_file_batches.finish();
 
         // Project headings for vault docs (for observability + hygiene).
-        {
-            const BATCH_LIMIT: usize = 200;
-            let mut batch_count: usize = 0;
-            let mut sql = String::new();
-            for (_id, node) in dag.nodes() {
-                let NodeKind::TextChunk {
-                    doc_path,
-                    heading_path,
-                    start_line,
-                    ..
-                } = &node.kind
-                else {
-                    continue;
-                };
-                if !vault_prefixes.iter().any(|p| doc_path.starts_with(p)) {
-                    continue;
-                }
-                let Some(last) = heading_path.last() else {
-                    continue;
-                };
-                let heading_slug = obsidian_heading_slug(last);
-                if heading_slug.is_empty() {
-                    continue;
-                }
-                let heading_id = sha256_hex_str(&format!("{}|{}|{}", doc_path, start_line, heading_slug));
-                sql.push_str(&doc_heading_upsert_sql(
-                    &heading_id,
-                    doc_path,
-                    heading_path,
-                    *start_line,
-                    last,
-                    &heading_slug,
-                ));
-                batch_count += 1;
-                if batch_count >= BATCH_LIMIT {
-                    self.run_sql(&sql)?;
-                    sql.clear();
-                    batch_count = 0;
-                }
+        let mut heading_batches = BatchAccumulator::new(
+            self,
+            phase,
+            run_id,
+            self.projection_config.batch_sizes.headings,
+        );
+        for (_id, node) in dag.nodes() {
+            let NodeKind::TextChunk {
+                doc_path,
+                heading_path,
+                start_line,
+                ..
+            } = &node.kind
+            else {
+                continue;
+            };
+            if !vault_prefixes.iter().any(|p| doc_path.starts_with(p)) {
+                continue;
             }
-            if !sql.is_empty() {
-                self.run_sql(&sql)?;
+            let Some(last) = heading_path.last() else {
+                continue;
+            };
+            let heading_slug = obsidian_heading_slug(last);
+            if heading_slug.is_empty() {
+                continue;
             }
+            let heading_id = sha256_hex_str(&format!("{}|{}|{}", doc_path, start_line, heading_slug));
+            let sql = doc_heading_upsert_sql(
+                &heading_id,
+                doc_path,
+                heading_path,
+                *start_line,
+                last,
+                &heading_slug,
+            );
+            heading_batches.push_item(heading_id, &sql);
         }
+        let heading_result = heading_batches.finish();
 
         // Build relation edges between doc_file records based on Obsidian wiki links.
         let mut stats_by_doc: BTreeMap<String, DocStatsAgg> = BTreeMap::new();
         let mut inbound_links: BTreeMap<String, u32> = BTreeMap::new();
 
-        const BATCH_LIMIT: usize = 100;
-        let mut batch_count: usize = 0;
-        let mut sql = String::new();
+        let mut doc_update_batches = BatchAccumulator::new(
+            self,
+            phase,
+            run_id,
+            self.projection_config.batch_sizes.doc_files,
+        );
+        let mut link_batches = BatchAccumulator::new(
+            self,
+            phase,
+            run_id,
+            self.projection_config.batch_sizes.links,
+        );
 
+        let mut files_read: u64 = 0;
         for doc in vault_docs.values() {
-            // Projection is derived; make it self-cleaning per source document so we don't accumulate ghosts
-            // when notes change between ingestions.
-            sql.push_str(&format!(
-                "DELETE obsidian_link WHERE from_doc_path = {} RETURN NONE;",
-                json_string(&doc.doc_path)
-            ));
-            sql.push_str(&format!(
-                "DELETE obsidian_file_link WHERE from_doc_path = {} RETURN NONE;",
-                json_string(&doc.doc_path)
-            ));
-            sql.push_str(&format!(
-                "DELETE doc_link_unresolved WHERE from_doc_path = {} RETURN NONE;",
-                json_string(&doc.doc_path)
-            ));
-            batch_count = batch_count.saturating_add(3);
-            if batch_count >= BATCH_LIMIT {
-                self.run_sql(&sql)?;
-                sql.clear();
-                batch_count = 0;
+            if let Some(filter) = doc_filter {
+                if !filter.contains(&doc.doc_path) {
+                    continue;
+                }
+            }
+            if run_id.is_none() {
+                // Projection is derived; make it self-cleaning per source document so we don't accumulate ghosts
+                // when notes change between ingestions.
+                let mut delete_sql = String::new();
+                delete_sql.push_str(&format!(
+                    "DELETE obsidian_link WHERE from_doc_path = {} RETURN NONE;",
+                    json_string(&doc.doc_path)
+                ));
+                delete_sql.push_str(&format!(
+                    "DELETE obsidian_file_link WHERE from_doc_path = {} RETURN NONE;",
+                    json_string(&doc.doc_path)
+                ));
+                delete_sql.push_str(&format!(
+                    "DELETE doc_link_unresolved WHERE from_doc_path = {} RETURN NONE;",
+                    json_string(&doc.doc_path)
+                ));
+                link_batches.push_item(format!("delete_links:{}", doc.doc_path), &delete_sql);
             }
 
             let mut stats = DocStatsAgg::default();
@@ -962,19 +1599,15 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                 Ok(b) => b,
                 Err(_) => continue,
             };
+            files_read = files_read.saturating_add(1);
             let text = match std::str::from_utf8(&bytes) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
 
             let fm = extract_frontmatter(text);
-            sql.push_str(&doc_file_update_frontmatter_sql(doc, fm.as_ref()));
-            batch_count = batch_count.saturating_add(1);
-            if batch_count >= BATCH_LIMIT {
-                self.run_sql(&sql)?;
-                sql.clear();
-                batch_count = 0;
-            }
+            let doc_update_sql = doc_file_update_frontmatter_sql(doc, fm.as_ref());
+            doc_update_batches.push_item(doc.doc_path.clone(), &doc_update_sql);
 
             for link in extract_obsidian_links(text) {
                 if looks_like_asset_target(&link.target) {
@@ -992,7 +1625,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                             &link,
                             &asset_res.kind,
                         )?;
-                        sql.push_str(&obsidian_file_link_relate_sql(
+                        let link_sql = obsidian_file_link_relate_sql(
                             &doc.doc_path,
                             &doc.doc_id,
                             &asset_res.to_file_path,
@@ -1000,13 +1633,9 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                             &edge_id,
                             &link,
                             &asset_res.kind,
-                        ));
-                        batch_count += 1;
-                        if batch_count >= BATCH_LIMIT {
-                            self.run_sql(&sql)?;
-                            sql.clear();
-                            batch_count = 0;
-                        }
+                            run_id,
+                        );
+                        link_batches.push_item(format!("obsidian_file_link:{}", edge_id), &link_sql);
                         continue;
                     }
                     // If the asset can't be resolved, treat it as a missing link (unresolved).
@@ -1024,19 +1653,15 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                             .filter(|s| !s.is_empty()),
                     };
                     let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
-                    sql.push_str(&doc_link_unresolved_upsert_sql(
+                    let link_sql = doc_link_unresolved_upsert_sql(
                         &link_id,
                         &doc.doc_path,
                         &link,
                         &resolution,
                         None,
-                    ));
-                    batch_count += 1;
-                    if batch_count >= BATCH_LIMIT {
-                        self.run_sql(&sql)?;
-                        sql.clear();
-                        batch_count = 0;
-                    }
+                        run_id,
+                    );
+                    link_batches.push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
                     continue;
                 }
 
@@ -1085,19 +1710,16 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                     let mut heading_miss = resolution.clone();
                                     heading_miss.kind = "heading_missing".to_string();
                                     let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
-                                    sql.push_str(&doc_link_unresolved_upsert_sql(
+                                    let link_sql = doc_link_unresolved_upsert_sql(
                                         &link_id,
                                         &doc.doc_path,
                                         &link,
                                         &heading_miss,
                                         Some(to_doc_path),
-                                    ));
-                                    batch_count += 1;
-                                    if batch_count >= BATCH_LIMIT {
-                                        self.run_sql(&sql)?;
-                                        sql.clear();
-                                        batch_count = 0;
-                                    }
+                                        run_id,
+                                    );
+                                    link_batches
+                                        .push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
                                     continue;
                                 }
                             }
@@ -1110,44 +1732,43 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                 &link,
                                 &resolution.kind,
                             )?;
-                            sql.push_str(&obsidian_link_relate_sql(
+                            let link_sql = obsidian_link_relate_sql(
                                 &doc.doc_path,
                                 to_doc_path,
                                 &edge_id,
                                 &link,
                                 &resolution.kind,
-                            ));
-                            batch_count += 1;
-                            if batch_count >= BATCH_LIMIT {
-                                self.run_sql(&sql)?;
-                                sql.clear();
-                                batch_count = 0;
-                            }
+                                run_id,
+                            );
+                            link_batches.push_item(format!("obsidian_link:{}", edge_id), &link_sql);
                             continue;
                         }
 
                         let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
-                        sql.push_str(&doc_link_unresolved_upsert_sql(
+                        let link_sql = doc_link_unresolved_upsert_sql(
                             &link_id,
                             &doc.doc_path,
                             &link,
                             &resolution,
                             None,
-                        ));
-                        batch_count += 1;
+                            run_id,
+                        );
+                        link_batches.push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
                     }
                     _ => {
                         let Some(to_doc_path) = resolution.resolved.as_ref() else {
                             stats.missing_out = stats.missing_out.saturating_add(1);
                             let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
-                            sql.push_str(&doc_link_unresolved_upsert_sql(
+                            let link_sql = doc_link_unresolved_upsert_sql(
                                 &link_id,
                                 &doc.doc_path,
                                 &link,
                                 &resolution,
                                 None,
-                            ));
-                            batch_count += 1;
+                                run_id,
+                            );
+                            link_batches
+                                .push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
                             continue;
                         };
 
@@ -1163,14 +1784,16 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                 let mut heading_miss = resolution.clone();
                                 heading_miss.kind = "heading_missing".to_string();
                                 let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
-                                sql.push_str(&doc_link_unresolved_upsert_sql(
+                                let link_sql = doc_link_unresolved_upsert_sql(
                                     &link_id,
                                     &doc.doc_path,
                                     &link,
                                     &heading_miss,
                                     Some(to_doc_path),
-                                ));
-                                batch_count += 1;
+                                    run_id,
+                                );
+                                link_batches
+                                    .push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
                                 continue;
                             }
                         }
@@ -1178,52 +1801,91 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                         stats.out_links = stats.out_links.saturating_add(1);
                         *inbound_links.entry(to_doc_path.clone()).or_insert(0) += 1;
                         let edge_id = obsidian_link_edge_id(&doc.doc_path, to_doc_path, &link, &resolution.kind)?;
-                        sql.push_str(&obsidian_link_relate_sql(
+                        let link_sql = obsidian_link_relate_sql(
                             &doc.doc_path,
                             to_doc_path,
                             &edge_id,
                             &link,
                             &resolution.kind,
-                        ));
-                        batch_count += 1;
+                            run_id,
+                        );
+                        link_batches.push_item(format!("obsidian_link:{}", edge_id), &link_sql);
                     }
-                }
-                if batch_count >= BATCH_LIMIT {
-                    self.run_sql(&sql)?;
-                    sql.clear();
-                    batch_count = 0;
                 }
             }
 
             stats_by_doc.insert(doc.doc_path.clone(), stats);
         }
 
-        if !sql.is_empty() {
-            self.run_sql(&sql)?;
-        }
+        let doc_update_result = doc_update_batches.finish();
+        let link_result = link_batches.finish();
 
         // Materialize doc-level stats so the UI can browse without heavy GROUP BY queries.
-        {
-            const STATS_BATCH_LIMIT: usize = 200;
-            let mut stats_sql = String::new();
-            let mut stats_batch: usize = 0;
-            for doc in vault_docs.values() {
-                let stats = stats_by_doc.get(&doc.doc_path).cloned().unwrap_or_default();
-                let in_links = inbound_links.get(&doc.doc_path).copied().unwrap_or(0);
-                stats_sql.push_str(&doc_stats_upsert_sql(doc, &stats, in_links));
-                stats_batch += 1;
-                if stats_batch >= STATS_BATCH_LIMIT {
-                    self.run_sql(&stats_sql)?;
-                    stats_sql.clear();
-                    stats_batch = 0;
+        let mut stats_batches = BatchAccumulator::new(
+            self,
+            phase,
+            run_id,
+            self.projection_config.batch_sizes.stats,
+        );
+        for doc in vault_docs.values() {
+            if let Some(filter) = doc_filter {
+                if !filter.contains(&doc.doc_path) {
+                    continue;
                 }
             }
-            if !stats_sql.is_empty() {
-                self.run_sql(&stats_sql)?;
-            }
+            let stats = stats_by_doc.get(&doc.doc_path).cloned().unwrap_or_default();
+            let in_links = inbound_links.get(&doc.doc_path).copied().unwrap_or(0);
+            let sql = doc_stats_upsert_sql(doc, &stats, in_links);
+            stats_batches.push_item(doc.doc_path.clone(), &sql);
         }
+        let stats_result = stats_batches.finish();
 
-        Ok(())
+        let total_batches = doc_file_result.total_batches
+            + heading_result.total_batches
+            + doc_update_result.total_batches
+            + link_result.total_batches
+            + stats_result.total_batches;
+        let successful_batches = doc_file_result.successful_batches
+            + heading_result.successful_batches
+            + doc_update_result.successful_batches
+            + link_result.successful_batches
+            + stats_result.successful_batches;
+        let mut failed_batches = doc_file_result.failed_batches;
+        failed_batches.extend(heading_result.failed_batches);
+        failed_batches.extend(doc_update_result.failed_batches);
+        failed_batches.extend(link_result.failed_batches);
+        failed_batches.extend(stats_result.failed_batches);
+
+        let records_processed = doc_file_result.records_processed
+            + heading_result.records_processed
+            + doc_update_result.records_processed
+            + link_result.records_processed
+            + stats_result.records_processed;
+        let bytes_written = doc_file_result.bytes_written
+            + heading_result.bytes_written
+            + doc_update_result.bytes_written
+            + link_result.bytes_written
+            + stats_result.bytes_written;
+        let db_write_ms = doc_file_result.db_write_time_ms.unwrap_or(0)
+            + heading_result.db_write_time_ms.unwrap_or(0)
+            + doc_update_result.db_write_time_ms.unwrap_or(0)
+            + link_result.db_write_time_ms.unwrap_or(0)
+            + stats_result.db_write_time_ms.unwrap_or(0);
+
+        let mut result = phase_result_from_batches(
+            phase,
+            total_batches,
+            successful_batches,
+            failed_batches,
+            records_processed,
+            bytes_written,
+            db_write_ms,
+        );
+        let total_ms = phase_start.elapsed().as_millis() as u64;
+        result.duration_ms = total_ms;
+        result.files_read = Some(files_read);
+        result.parse_time_ms = Some(total_ms.saturating_sub(db_write_ms));
+        Ok(result)
     }
 }
 
@@ -1231,6 +1893,157 @@ struct SqlRunOutput {
     values: Vec<serde_json::Value>,
     stdout: String,
     stderr: String,
+}
+
+fn phase_result_from_batches(
+    phase: &str,
+    total_batches: usize,
+    successful_batches: usize,
+    failed_batches: Vec<crate::projection_run::FailedBatch>,
+    records_processed: u64,
+    bytes_written: u64,
+    db_write_time_ms: u64,
+) -> crate::projection_run::PhaseResult {
+    use crate::projection_run::PhaseStatus;
+
+    let status = if total_batches == 0 || failed_batches.is_empty() {
+        PhaseStatus::Complete
+    } else if successful_batches == 0 {
+        PhaseStatus::Failed
+    } else {
+        PhaseStatus::Partial
+    };
+
+    let error = if failed_batches.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} of {} batches failed",
+            failed_batches.len(),
+            total_batches
+        ))
+    };
+
+    let errors: Vec<String> = failed_batches
+        .iter()
+        .map(|b| format!("batch {}: {}", b.batch_index, b.error))
+        .collect();
+
+    crate::projection_run::PhaseResult {
+        phase: phase.to_string(),
+        status,
+        total_batches,
+        successful_batches,
+        failed_batches,
+        duration_ms: 0,
+        records_processed,
+        batches_executed: total_batches as u64,
+        bytes_written,
+        files_read: None,
+        parse_time_ms: None,
+        db_write_time_ms: Some(db_write_time_ms),
+        errors,
+        error,
+    }
+}
+
+struct BatchAccumulator<'a> {
+    store: &'a SurrealCliProjectionStore,
+    phase: &'a str,
+    run_id: String,
+    batch_limit: usize,
+    max_sql_bytes: usize,
+    batch_index: usize,
+    total_batches: usize,
+    successful_batches: usize,
+    failed_batches: Vec<crate::projection_run::FailedBatch>,
+    records_processed: u64,
+    bytes_written: u64,
+    db_write_time_ms: u64,
+    sql: String,
+    item_ids: Vec<String>,
+}
+
+impl<'a> BatchAccumulator<'a> {
+    fn new(
+        store: &'a SurrealCliProjectionStore,
+        phase: &'a str,
+        run_id: Option<&str>,
+        batch_limit: usize,
+    ) -> Self {
+        Self {
+            store,
+            phase,
+            run_id: run_id.unwrap_or("unknown").to_string(),
+            batch_limit: batch_limit.max(1),
+            max_sql_bytes: store.projection_config.batch_sizes.max_sql_bytes.max(1),
+            batch_index: 0,
+            total_batches: 0,
+            successful_batches: 0,
+            failed_batches: Vec::new(),
+            records_processed: 0,
+            bytes_written: 0,
+            db_write_time_ms: 0,
+            sql: String::new(),
+            item_ids: Vec::new(),
+        }
+    }
+
+    fn push_item(&mut self, item_id: String, sql_fragment: &str) {
+        self.sql.push_str(sql_fragment);
+        self.item_ids.push(item_id);
+        self.records_processed = self.records_processed.saturating_add(1);
+        // Flush by count OR bytes. The bytes cap is the primary lever for reducing
+        // `surreal sql` subprocess spawn overhead.
+        if self.item_ids.len() >= self.batch_limit || self.sql.len() >= self.max_sql_bytes {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.item_ids.is_empty() {
+            return;
+        }
+        let sql = std::mem::take(&mut self.sql);
+        let item_ids = std::mem::take(&mut self.item_ids);
+        let batch_index = self.batch_index;
+        self.batch_index = self.batch_index.saturating_add(1);
+        self.total_batches = self.total_batches.saturating_add(1);
+        self.bytes_written = self.bytes_written.saturating_add(sql.len() as u64);
+
+        let start = std::time::Instant::now();
+        match self.store.run_sql(&sql) {
+            Ok(()) => {
+                self.successful_batches = self.successful_batches.saturating_add(1);
+            }
+            Err(err) => {
+                self.failed_batches.push(crate::projection_run::FailedBatch::new(
+                    self.phase,
+                    &self.run_id,
+                    batch_index,
+                    item_ids,
+                    err,
+                    1,
+                ));
+            }
+        }
+        self.db_write_time_ms = self
+            .db_write_time_ms
+            .saturating_add(start.elapsed().as_millis() as u64);
+    }
+
+    fn finish(mut self) -> crate::projection_run::PhaseResult {
+        self.flush();
+        phase_result_from_batches(
+            self.phase,
+            self.total_batches,
+            self.successful_batches,
+            self.failed_batches,
+            self.records_processed,
+            self.bytes_written,
+            self.db_write_time_ms,
+        )
+    }
 }
 
 impl ProjectionStore for SurrealCliProjectionStore {
@@ -1254,7 +2067,7 @@ impl ProjectionStore for SurrealCliProjectionStore {
         self.run_sql(&trace_sql)?;
 
         // Batch nodes / edges to avoid very large single SQL payloads.
-        const BATCH_LIMIT: usize = 200;
+        let batch_limit = self.projection_config.batch_sizes.nodes;
         let mut batch_count: usize = 0;
         let mut sql = String::new();
 
@@ -1262,7 +2075,7 @@ impl ProjectionStore for SurrealCliProjectionStore {
             let record_id = id.to_string();
             sql.push_str(&node_upsert_sql(&record_id, node));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -1278,7 +2091,7 @@ impl ProjectionStore for SurrealCliProjectionStore {
             let edge_id = edge_identity_sha256(edge)?;
             sql.push_str(&edge_relate_sql(&edge_id, edge));
             batch_count += 1;
-            if batch_count >= BATCH_LIMIT {
+            if batch_count >= batch_limit {
                 self.run_sql(&sql)?;
                 sql.clear();
                 batch_count = 0;
@@ -1292,42 +2105,606 @@ impl ProjectionStore for SurrealCliProjectionStore {
     }
 }
 
-#[derive(Debug, Clone)]
-struct VaultDoc {
-    doc_path: String,
-    doc_id: String,
-    file_node_id: String,
-    title: String,
-    artifact_sha256: String,
-    artifact_abs_path: std::path::PathBuf,
+// Implementation of the new ProjectionStoreOps trait for SurrealCliProjectionStore
+impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
+    fn is_ready(&self) -> crate::projection_store::ProjectionResult<bool> {
+        self.is_ready().map_err(|e| e.into())
+    }
+
+    fn store_name(&self) -> &str {
+        "surreal-cli"
+    }
+
+    fn begin_run(
+        &self,
+        run: &crate::projection_run::ProjectionRun,
+    ) -> crate::projection_store::ProjectionResult<String> {
+        self.begin_projection_run(run).map_err(|e| e.into())
+    }
+
+    fn end_run(
+        &self,
+        run_id: &str,
+        status: crate::projection_run::RunStatus,
+        finished_at: &str,
+        phase_results: &std::collections::BTreeMap<String, crate::projection_run::PhaseResult>,
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.end_projection_run(run_id, status, finished_at, phase_results)
+            .map_err(|e| e.into())
+    }
+
+    fn get_latest_run(
+        &self,
+        trace_sha256: &str,
+    ) -> crate::projection_store::ProjectionResult<Option<serde_json::Value>> {
+        self.get_latest_projection_run(trace_sha256)
+            .map_err(|e| e.into())
+    }
+
+    fn ensure_schemas(&self) -> crate::projection_store::ProjectionResult<()> {
+        self.ensure_doc_chunk_schema()?;
+        self.ensure_doc_file_schema()?;
+        self.ensure_vault_link_schema()?;
+        self.ensure_projection_run_schema()?;
+        self.ensure_projection_event_schema()?;
+        self.ensure_ingest_run_schema()?;
+        self.ensure_ingest_event_schema()?;
+        self.ensure_query_artifact_schema()?;
+        self.ensure_function_artifact_schema()?;
+        Ok(())
+    }
+
+    fn project_projection_events(
+        &self,
+        rows: &[crate::projection_events::ProjectionEventRow],
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.ensure_projection_event_schema()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        // Batch to avoid huge SQL payloads (and to reduce `surreal sql` spawn overhead).
+        let batch_limit = 200usize;
+        let max_sql_bytes = self.projection_config.batch_sizes.max_sql_bytes.max(1);
+        let mut sql = String::new();
+        let mut count = 0usize;
+
+        for row in rows {
+            let thing_id = thing("projection_event", &row.event_id);
+            let meta_json = if let Some(meta) = row.meta.as_ref() {
+                serde_json::to_string(meta).unwrap_or_else(|_| "null".to_string())
+            } else {
+                "null".to_string()
+            };
+            sql.push_str(&format!(
+                "UPSERT {} CONTENT {{ event_id: {}, event_type: {}, timestamp: {}, run_id: {}, projection_run_id: {}, phase: {}, status: {}, duration_ms: {}, error: {}, trace_sha256: {}, config_hash: {}, projector_version: {}, meta: {} }} RETURN NONE;\n",
+                thing_id,
+                json_string(&row.event_id),
+                json_string(&row.event_type),
+                json_string(&row.timestamp),
+                json_string(&row.projection_run_id),
+                json_string(&row.projection_run_id),
+                json_opt_string(row.phase.as_deref()),
+                json_opt_string(row.status.as_deref()),
+                row.duration_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+                json_opt_string(row.error.as_deref()),
+                json_opt_string(row.trace_sha256.as_deref()),
+                json_opt_string(row.config_hash.as_deref()),
+                json_opt_string(row.projector_version.as_deref()),
+                meta_json,
+            ));
+            count += 1;
+            if count >= batch_limit || sql.len() >= max_sql_bytes {
+                self.run_sql(&sql)?;
+                sql.clear();
+                count = 0;
+            }
+        }
+
+        if !sql.is_empty() {
+            self.run_sql(&sql)?;
+        }
+
+        Ok(())
+    }
+
+    fn project_ingest_run(
+        &self,
+        run: &crate::ingest_run::IngestRunRow,
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.ensure_ingest_run_schema()?;
+        let sql = format!(
+            "UPSERT {thing_id} CONTENT {{ ingest_run_id: {ingest_run_id}, started_at: {started_at}, finished_at: {finished_at}, status: {status}, root: {root}, config_sha256: {config_sha256}, coverage_sha256: {coverage_sha256}, ingest_run_sha256: {ingest_run_sha256}, snapshot_sha256: {snapshot_sha256}, parse_sha256: {parse_sha256}, files: {files}, chunks: {chunks}, total_bytes: {total_bytes} }} RETURN NONE;",
+            thing_id = thing("ingest_run", &run.ingest_run_id),
+            ingest_run_id = json_string(&run.ingest_run_id),
+            started_at = json_string(&run.started_at),
+            finished_at = json_opt_string(run.finished_at.as_deref()),
+            status = json_string(&run.status),
+            root = json_string(&run.root),
+            config_sha256 = json_string(&run.config_sha256),
+            coverage_sha256 = json_opt_string(run.coverage_sha256.as_deref()),
+            ingest_run_sha256 = json_opt_string(run.ingest_run_sha256.as_deref()),
+            snapshot_sha256 = json_opt_string(run.snapshot_sha256.as_deref()),
+            parse_sha256 = json_opt_string(run.parse_sha256.as_deref()),
+            files = run.files.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+            chunks = run.chunks.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+            total_bytes = run.total_bytes.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+        );
+        self.run_sql(&sql).map_err(|e| e.into())
+    }
+
+    fn project_ingest_events(
+        &self,
+        rows: &[crate::ingest_events::IngestEventRow],
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.ensure_ingest_event_schema()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let batch_limit = 200usize;
+        let mut sql = String::new();
+        let mut count = 0usize;
+
+        for row in rows {
+            let thing_id = thing("ingest_event", &row.event_id);
+            sql.push_str(&format!(
+                "UPSERT {} CONTENT {{ event_id: {}, event_type: {}, timestamp: {}, ingest_run_id: {}, status: {}, duration_ms: {}, error: {}, root: {}, config_sha256: {}, coverage_sha256: {}, ingest_run_sha256: {}, snapshot_sha256: {}, parse_sha256: {}, files: {}, chunks: {}, total_bytes: {} }} RETURN NONE;\n",
+                thing_id,
+                json_string(&row.event_id),
+                json_string(&row.event_type),
+                json_string(&row.timestamp),
+                json_string(&row.ingest_run_id),
+                json_opt_string(row.status.as_deref()),
+                row.duration_ms.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+                json_opt_string(row.error.as_deref()),
+                json_opt_string(row.root.as_deref()),
+                json_opt_string(row.config_sha256.as_deref()),
+                json_opt_string(row.coverage_sha256.as_deref()),
+                json_opt_string(row.ingest_run_sha256.as_deref()),
+                json_opt_string(row.snapshot_sha256.as_deref()),
+                json_opt_string(row.parse_sha256.as_deref()),
+                row.files.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+                row.chunks.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+                row.total_bytes.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
+            ));
+            count += 1;
+            if count >= batch_limit {
+                self.run_sql(&sql)?;
+                sql.clear();
+                count = 0;
+            }
+        }
+
+        if !sql.is_empty() {
+            self.run_sql(&sql)?;
+        }
+
+        Ok(())
+    }
+
+    fn project_dag_trace(
+        &self,
+        trace_sha256: &str,
+        trace_cbor: &[u8],
+        dag: &GovernedDag,
+        run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
+        let phase = "dag_trace";
+        let phase_start = std::time::Instant::now();
+        let trace_cbor_hex = hex_lower(trace_cbor);
+
+        // Store the trace envelope first, with optional run_id stamping
+        let run_id_field = if let Some(rid) = run_id {
+            format!(", projection_run_id: {}", json_string(rid))
+        } else {
+            String::new()
+        };
+
+        let trace_sql = format!(
+            "UPSERT {} CONTENT {{ trace_sha256: {}, bytes_cbor_hex: {}, node_count: {}, edge_count: {}{} }} RETURN NONE;",
+            thing("dag_trace", trace_sha256),
+            json_string(trace_sha256),
+            json_string(&trace_cbor_hex),
+            dag.node_count(),
+            dag.edge_count(),
+            run_id_field
+        );
+        let trace_sql_len = trace_sql.len() as u64;
+        let trace_db_start = std::time::Instant::now();
+        self.run_sql(&trace_sql)
+            .map_err(|e| crate::projection_store::ProjectionError::new(e).with_phase(phase))?;
+        let trace_db_ms = trace_db_start.elapsed().as_millis() as u64;
+
+        // Batch nodes / edges to avoid very large single SQL payloads.
+        let batch_limit = self.projection_config.batch_sizes.nodes;
+        let mut node_batches = BatchAccumulator::new(self, phase, run_id, batch_limit);
+        for (id, node) in dag.nodes() {
+            let record_id = id.to_string();
+            let sql = node_upsert_sql_with_run(&record_id, node, run_id);
+            node_batches.push_item(record_id, &sql);
+        }
+        let node_result = node_batches.finish();
+
+        let mut edge_batches = BatchAccumulator::new(self, phase, run_id, batch_limit);
+        for edge in dag.edges() {
+            let edge_id = edge_identity_sha256(edge).map_err(|e| {
+                crate::projection_store::ProjectionError::new(e).with_phase(phase)
+            })?;
+            let sql = edge_relate_sql_with_run(&edge_id, edge, run_id);
+            edge_batches.push_item(edge_id, &sql);
+        }
+        let edge_result = edge_batches.finish();
+
+        let total_batches = node_result.total_batches + edge_result.total_batches;
+        let successful_batches = node_result.successful_batches + edge_result.successful_batches;
+        let mut failed_batches = node_result.failed_batches;
+        failed_batches.extend(edge_result.failed_batches);
+        let records_processed = node_result.records_processed + edge_result.records_processed;
+        let bytes_written = trace_sql_len
+            .saturating_add(node_result.bytes_written)
+            .saturating_add(edge_result.bytes_written);
+        let db_write_ms = trace_db_ms
+            .saturating_add(node_result.db_write_time_ms.unwrap_or(0))
+            .saturating_add(edge_result.db_write_time_ms.unwrap_or(0));
+        let mut result = phase_result_from_batches(
+            phase,
+            total_batches,
+            successful_batches,
+            failed_batches,
+            records_processed,
+            bytes_written,
+            db_write_ms,
+        );
+        let total_ms = phase_start.elapsed().as_millis() as u64;
+        result.duration_ms = total_ms;
+        result.parse_time_ms = Some(total_ms.saturating_sub(db_write_ms));
+        Ok(result)
+    }
+
+    fn project_doc_files(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
+        let phase = "doc_files";
+        let phase_start = std::time::Instant::now();
+        self.ensure_doc_file_schema()
+            .map_err(|e| crate::projection_store::ProjectionError::new(e).with_phase(phase))?;
+
+        let batch_limit = self.projection_config.batch_sizes.doc_files;
+        let mut batcher = BatchAccumulator::new(self, phase, run_id, batch_limit);
+        let mut files_read: u64 = 0;
+
+        for (id, node) in dag.nodes() {
+            let NodeKind::FileAtPath { path, .. } = &node.kind else {
+                continue;
+            };
+            if !path.to_lowercase().ends_with(".md") {
+                continue;
+            }
+            let Some(artifact_ref) = node.artifact_ref.as_ref() else {
+                continue;
+            };
+            let Some(rel_path) = artifact_ref.path.as_ref() else {
+                continue;
+            };
+
+            let doc = VaultDoc {
+                doc_path: path.clone(),
+                doc_id: sha256_hex_str(path),
+                file_node_id: id.to_string(),
+                title: file_stem_title(path),
+                artifact_sha256: artifact_ref.sha256.clone(),
+                artifact_abs_path: artifacts_root.join(Path::new(rel_path)),
+            };
+
+            let mut doc_sql = String::new();
+            doc_sql.push_str(&doc_file_upsert_sql_with_run(&doc, run_id));
+
+            // Parse + project frontmatter when available.
+            let bytes = match std::fs::read(&doc.artifact_abs_path) {
+                Ok(b) => b,
+                Err(_) => {
+                    batcher.push_item(doc.doc_path.clone(), &doc_sql);
+                    continue;
+                }
+            };
+            files_read = files_read.saturating_add(1);
+            let text = match std::str::from_utf8(&bytes) {
+                Ok(t) => t,
+                Err(_) => {
+                    batcher.push_item(doc.doc_path.clone(), &doc_sql);
+                    continue;
+                }
+            };
+            let fm = extract_frontmatter(text);
+            doc_sql.push_str(&doc_file_update_frontmatter_sql(&doc, fm.as_ref()));
+
+            // Refresh facet relations (derived view).
+            if run_id.is_none() {
+                doc_sql.push_str(&format!(
+                    "DELETE has_facet WHERE doc_path = {} RETURN NONE;",
+                    json_string(&doc.doc_path)
+                ));
+            }
+            if let Some(fm) = fm.as_ref() {
+                for facet in fm.facets.iter() {
+                    if facet.trim().is_empty() {
+                        continue;
+                    }
+                    doc_sql.push_str(&facet_upsert_sql(facet));
+                    let edge_id = has_facet_edge_id(&doc.doc_path, facet).map_err(|e| {
+                        crate::projection_store::ProjectionError::new(e).with_phase(phase)
+                    })?;
+                    doc_sql.push_str(&has_facet_relate_sql(&doc, facet, &edge_id, run_id));
+                }
+            }
+
+            batcher.push_item(doc.doc_path.clone(), &doc_sql);
+        }
+
+        let mut result = batcher.finish();
+        let total_ms = phase_start.elapsed().as_millis() as u64;
+        let db_write_ms = result.db_write_time_ms.unwrap_or(0);
+        result.duration_ms = total_ms;
+        result.files_read = Some(files_read);
+        result.parse_time_ms = Some(total_ms.saturating_sub(db_write_ms));
+        Ok(result)
+    }
+
+    fn project_doc_chunks(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        doc_file_prefixes: &[&str],
+        run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
+        let phase = "doc_chunks";
+        let phase_start = std::time::Instant::now();
+        self.ensure_doc_chunk_schema()
+            .map_err(|e| crate::projection_store::ProjectionError::new(e).with_phase(phase))?;
+        self.ensure_doc_file_schema()
+            .map_err(|e| crate::projection_store::ProjectionError::new(e).with_phase(phase))?;
+
+        let batch_limit = self.projection_config.batch_sizes.doc_chunks;
+        let mut batcher = BatchAccumulator::new(self, phase, run_id, batch_limit);
+        let mut files_read: u64 = 0;
+
+        for (id, node) in dag.nodes() {
+            let NodeKind::TextChunk {
+                chunk_sha256,
+                doc_path,
+                heading_path,
+                start_line,
+            } = &node.kind
+            else {
+                continue;
+            };
+
+            let Some(artifact_ref) = node.artifact_ref.as_ref() else {
+                continue;
+            };
+            let Some(rel_path) = artifact_ref.path.as_ref() else {
+                continue;
+            };
+
+            let abs_path = artifacts_root.join(Path::new(rel_path));
+            let bytes = match std::fs::read(&abs_path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            files_read = files_read.saturating_add(1);
+            let text = String::from_utf8_lossy(&bytes);
+
+            let record_id = id.to_string();
+            let doc_ref = if doc_file_prefixes.is_empty()
+                || doc_file_prefixes.iter().any(|p| doc_path.starts_with(p))
+            {
+                Some(thing("doc_file", &sha256_hex_str(doc_path)))
+            } else {
+                None
+            };
+            let sql = doc_chunk_upsert_sql_with_run(
+                &record_id,
+                chunk_sha256,
+                doc_path,
+                heading_path,
+                *start_line,
+                &artifact_ref.sha256,
+                &text,
+                doc_ref.as_deref(),
+                run_id,
+            );
+            batcher.push_item(record_id, &sql);
+        }
+
+        let mut result = batcher.finish();
+        let total_ms = phase_start.elapsed().as_millis() as u64;
+        let db_write_ms = result.db_write_time_ms.unwrap_or(0);
+        result.duration_ms = total_ms;
+        result.files_read = Some(files_read);
+        result.parse_time_ms = Some(total_ms.saturating_sub(db_write_ms));
+        Ok(result)
+    }
+
+    fn project_vault_links(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        vault_prefixes: &[&str],
+        doc_filter: Option<&BTreeSet<String>>,
+        run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
+        // Delegate to existing implementation
+        self.project_vault_obsidian_links_from_artifacts(
+            dag,
+            artifacts_root,
+            vault_prefixes,
+            doc_filter,
+            run_id,
+        )
+            .map_err(|e| e.into())
+    }
+
+    fn project_embeddings(
+        &self,
+        chunk_rows: &[DocChunkEmbeddingRow],
+        doc_rows: &[DocEmbeddingRow],
+        _run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<()> {
+        // Delegate to existing implementation
+        // TODO: Add run_id stamping to embedding projection
+        self.project_doc_embeddings(chunk_rows, doc_rows)
+            .map_err(|e| e.into())
+    }
+
+    fn project_embed_run(&self, run: &EmbedRunRow) -> crate::projection_store::ProjectionResult<()> {
+        SurrealCliProjectionStore::project_embed_run(self, run).map_err(|e| e.into())
+    }
+
+    fn project_title_embeddings(
+        &self,
+        rows: &[DocTitleEmbeddingRow],
+        _run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<()> {
+        // Delegate to existing implementation (already has run_id in rows)
+        self.project_doc_title_embeddings(rows).map_err(|e| e.into())
+    }
+
+    fn project_unresolved_suggestions(
+        &self,
+        run_id: &str,
+        rows: &[UnresolvedLinkSuggestionRow],
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.project_unresolved_link_suggestions(run_id, rows)
+            .map_err(|e| e.into())
+    }
+
+    fn project_query_artifacts(
+        &self,
+        rows: &[QueryArtifactRow],
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.ensure_query_artifact_schema()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let batch_limit = 25usize;
+        let mut sql = String::new();
+        let mut count = 0usize;
+
+        for row in rows {
+            let thing_id = thing("query_artifact", &row.artifact_sha256);
+            let tags_json = serde_json::to_string(&row.tags)
+                .unwrap_or_else(|_| "[]".to_string());
+
+            sql.push_str(&format!(
+                "UPSERT {thing_id} CONTENT {{ artifact_sha256: {artifact_sha256}, schema_id: {schema_id}, name: {name}, lang: {lang}, source: {source}, tags: {tags}, created_at_utc: {created_at_utc} }} RETURN NONE;\n",
+                thing_id = thing_id,
+                artifact_sha256 = json_string(&row.artifact_sha256),
+                schema_id = json_string(&row.schema_id),
+                name = json_string(&row.name),
+                lang = json_string(&row.lang),
+                source = json_string(&row.source),
+                tags = tags_json,
+                created_at_utc = json_string(&row.created_at_utc),
+            ));
+
+            count += 1;
+            if count >= batch_limit {
+                self.run_sql(&sql)?;
+                sql.clear();
+                count = 0;
+            }
+        }
+
+        if !sql.is_empty() {
+            self.run_sql(&sql)?;
+        }
+
+        Ok(())
+    }
+
+    fn project_function_artifacts(
+        &self,
+        rows: &[FunctionArtifactRow],
+    ) -> crate::projection_store::ProjectionResult<()> {
+        self.ensure_function_artifact_schema()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let batch_limit = 25usize;
+        let mut sql = String::new();
+        let mut count = 0usize;
+
+        for row in rows {
+            let thing_id = thing("fn_artifact", &row.artifact_sha256);
+            let tags_json = serde_json::to_string(&row.tags)
+                .unwrap_or_else(|_| "[]".to_string());
+
+            sql.push_str(&format!(
+                "UPSERT {thing_id} CONTENT {{ artifact_sha256: {artifact_sha256}, schema_id: {schema_id}, name: {name}, lang: {lang}, source: {source}, tags: {tags}, created_at_utc: {created_at_utc} }} RETURN NONE;\n",
+                thing_id = thing_id,
+                artifact_sha256 = json_string(&row.artifact_sha256),
+                schema_id = json_string(&row.schema_id),
+                name = json_string(&row.name),
+                lang = json_string(&row.lang),
+                source = json_string(&row.source),
+                tags = tags_json,
+                created_at_utc = json_string(&row.created_at_utc),
+            ));
+
+            count += 1;
+            if count >= batch_limit {
+                self.run_sql(&sql)?;
+                sql.clear();
+                count = 0;
+            }
+        }
+
+        if !sql.is_empty() {
+            self.run_sql(&sql)?;
+        }
+
+        Ok(())
+    }
+
+    fn select_doc_files(
+        &self,
+        prefixes: &[&str],
+    ) -> crate::projection_store::ProjectionResult<Vec<(String, String)>> {
+        SurrealCliProjectionStore::select_doc_files(self, prefixes).map_err(|e| e.into())
+    }
+
+    fn select_unresolved_links(
+        &self,
+        prefixes: &[&str],
+        kinds: &[&str],
+        limit: usize,
+        projection_run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<Vec<UnresolvedLinkRow>> {
+        SurrealCliProjectionStore::select_unresolved_links(self, prefixes, kinds, limit, projection_run_id)
+            .map_err(|e| e.into())
+    }
+
+    fn search_title_embeddings(
+        &self,
+        vault_prefix: &str,
+        model: &str,
+        dim_target: u32,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> crate::projection_store::ProjectionResult<Vec<(String, f64)>> {
+        self.search_doc_title_embeddings(vault_prefix, model, dim_target, query_embedding, limit)
+            .map_err(|e| e.into())
+    }
 }
 
-#[derive(Debug, Clone)]
-struct ObsidianLink {
-    raw: String,
-    target: String,
-    alias: Option<String>,
-    heading: Option<String>,
-    embed: bool,
-    line: u32,
-}
-
-#[derive(Debug, Clone)]
-struct ResolutionResult {
-    resolved: Option<String>,
-    kind: String,
-    candidates: Vec<String>,
-    norm_target: String,
-    norm_alias: Option<String>,
-    norm_heading: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct AssetResolution {
-    to_file_path: String,
-    to_file_node_id: String,
-    kind: String,
-}
+// VaultDoc, ObsidianLink, ResolutionResult, AssetResolution moved to link_resolver module
+use crate::link_resolver::VaultDoc;
 
 #[derive(Debug, Clone, Default)]
 struct DocStatsAgg {
@@ -1350,6 +2727,10 @@ struct DocFrontmatter {
 }
 
 fn node_upsert_sql(node_id: &str, node: &DagNode) -> String {
+    node_upsert_sql_with_run(node_id, node, None)
+}
+
+fn node_upsert_sql_with_run(node_id: &str, node: &DagNode, run_id: Option<&str>) -> String {
     let (kind_tag, kind_fields_json) = split_kind(&node.kind);
     let (artifact_sha256, artifact_kind, artifact_schema_id) = match &node.artifact_ref {
         Some(r) => (
@@ -1360,8 +2741,14 @@ fn node_upsert_sql(node_id: &str, node: &DagNode) -> String {
         None => (None, None, None),
     };
 
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
+
     format!(
-        "UPSERT {thing_id} CONTENT {{ node_id: {node_id}, category: {category}, scope_id: {scope}, kind_tag: {kind_tag}, kind_fields: {kind_fields}, artifact_sha256: {artifact_sha256}, artifact_kind: {artifact_kind}, artifact_schema_id: {artifact_schema_id} }} RETURN NONE;",
+        "UPSERT {thing_id} CONTENT {{ node_id: {node_id}, category: {category}, scope_id: {scope}, kind_tag: {kind_tag}, kind_fields: {kind_fields}, artifact_sha256: {artifact_sha256}, artifact_kind: {artifact_kind}, artifact_schema_id: {artifact_schema_id}{run_id_field} }} RETURN NONE;",
         thing_id = thing("node", node_id),
         node_id = json_string(node_id),
         category = json_string(&format!("{:?}", node.category).to_lowercase()),
@@ -1371,6 +2758,7 @@ fn node_upsert_sql(node_id: &str, node: &DagNode) -> String {
         artifact_sha256 = json_opt_string(artifact_sha256),
         artifact_kind = json_opt_string(artifact_kind),
         artifact_schema_id = json_opt_string(artifact_schema_id),
+        run_id_field = run_id_field,
     )
 }
 
@@ -1384,12 +2772,41 @@ fn doc_chunk_upsert_sql(
     text: &str,
     doc_ref: Option<&str>,
 ) -> String {
+    doc_chunk_upsert_sql_with_run(
+        node_id,
+        chunk_sha256,
+        doc_path,
+        heading_path,
+        start_line,
+        artifact_sha256,
+        text,
+        doc_ref,
+        None,
+    )
+}
+
+fn doc_chunk_upsert_sql_with_run(
+    node_id: &str,
+    chunk_sha256: &str,
+    doc_path: &str,
+    heading_path: &[String],
+    start_line: u32,
+    artifact_sha256: &str,
+    text: &str,
+    doc_ref: Option<&str>,
+    run_id: Option<&str>,
+) -> String {
     let headings_json =
         serde_json::to_string(heading_path).unwrap_or_else(|_| "[]".to_string());
     let node_ref = thing("node", node_id);
     let doc_field = surreal_record_or_null(doc_ref);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
     format!(
-        "UPSERT {thing_id} CONTENT {{ node_id: {node_id}, node: {node_ref}, doc: {doc_ref}, chunk_sha256: {chunk_sha256}, doc_path: {doc_path}, heading_path: {heading_path}, start_line: {start_line}, artifact_sha256: {artifact_sha256}, text: {text} }} RETURN NONE;",
+        "UPSERT {thing_id} CONTENT {{ node_id: {node_id}, node: {node_ref}, doc: {doc_ref}, chunk_sha256: {chunk_sha256}, doc_path: {doc_path}, heading_path: {heading_path}, start_line: {start_line}, artifact_sha256: {artifact_sha256}, text: {text}{run_id_field} }} RETURN NONE;",
         thing_id = thing("doc_chunk", node_id),
         node_id = json_string(node_id),
         node_ref = node_ref,
@@ -1400,13 +2817,23 @@ fn doc_chunk_upsert_sql(
         start_line = start_line,
         artifact_sha256 = json_string(artifact_sha256),
         text = json_string(text),
+        run_id_field = run_id_field,
     )
 }
 
 fn doc_file_upsert_sql(doc: &VaultDoc) -> String {
+    doc_file_upsert_sql_with_run(doc, None)
+}
+
+fn doc_file_upsert_sql_with_run(doc: &VaultDoc, run_id: Option<&str>) -> String {
     let file_node_ref = thing("node", &doc.file_node_id);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id = {}", json_string(rid))
+    } else {
+        String::new()
+    };
     format!(
-        "UPSERT {thing_id} SET doc_id = {doc_id}, doc_path = {doc_path}, title = {title}, artifact_sha256 = {artifact_sha256}, file_node_id = {file_node_id}, file_node = {file_node} RETURN NONE;",
+        "UPSERT {thing_id} SET doc_id = {doc_id}, doc_path = {doc_path}, title = {title}, artifact_sha256 = {artifact_sha256}, file_node_id = {file_node_id}, file_node = {file_node}{run_id_field} RETURN NONE;",
         thing_id = thing("doc_file", &doc.doc_id),
         doc_id = json_string(&doc.doc_id),
         doc_path = json_string(&doc.doc_path),
@@ -1414,6 +2841,7 @@ fn doc_file_upsert_sql(doc: &VaultDoc) -> String {
         artifact_sha256 = json_string(&doc.artifact_sha256),
         file_node_id = json_string(&doc.file_node_id),
         file_node = file_node_ref,
+        run_id_field = run_id_field,
     )
 }
 
@@ -1488,12 +2916,19 @@ fn obsidian_link_relate_sql(
     edge_id: &str,
     link: &ObsidianLink,
     resolution_kind: &str,
+    run_id: Option<&str>,
 ) -> String {
     let from_id = sha256_hex_str(from_doc_path);
     let to_id = sha256_hex_str(to_doc_path);
+    let record_id = run_scoped_id(edge_id, run_id);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
     format!(
-        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id}, from_doc_path: {from_doc_path}, to_doc_path: {to_doc_path}, raw: {raw}, target: {target}, alias: {alias}, heading: {heading}, embed: {embed}, line: {line}, resolution_kind: {resolution_kind} }} RETURN NONE;",
-        thing("obsidian_link", edge_id),
+        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id}, from_doc_path: {from_doc_path}, to_doc_path: {to_doc_path}, raw: {raw}, target: {target}, alias: {alias}, heading: {heading}, embed: {embed}, line: {line}, resolution_kind: {resolution_kind}{run_id_field} }} RETURN NONE;",
+        thing("obsidian_link", &record_id),
         from = thing("doc_file", &from_id),
         to = thing("doc_file", &to_id),
         edge_id = json_string(edge_id),
@@ -1506,6 +2941,7 @@ fn obsidian_link_relate_sql(
         embed = if link.embed { "true" } else { "false" },
         line = link.line,
         resolution_kind = json_string(resolution_kind),
+        run_id_field = run_id_field,
     )
 }
 
@@ -1515,12 +2951,19 @@ fn doc_link_unresolved_upsert_sql(
     link: &ObsidianLink,
     resolution: &ResolutionResult,
     resolved_doc_path: Option<&str>,
+    run_id: Option<&str>,
 ) -> String {
     let candidates_json =
         serde_json::to_string(&resolution.candidates).unwrap_or_else(|_| "[]".to_string());
+    let record_id = run_scoped_id(link_id, run_id);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
     format!(
-        "UPSERT {thing_id} CONTENT {{ link_id: {link_id}, from_doc_path: {from_doc_path}, raw: {raw}, raw_target: {raw_target}, raw_alias: {raw_alias}, raw_heading: {raw_heading}, norm_target: {norm_target}, norm_alias: {norm_alias}, norm_heading: {norm_heading}, resolution_kind: {resolution_kind}, candidates: {candidates}, resolved_doc_path: {resolved_doc_path}, embed: {embed}, line: {line} }} RETURN NONE;",
-        thing_id = thing("doc_link_unresolved", link_id),
+        "UPSERT {thing_id} CONTENT {{ link_id: {link_id}, from_doc_path: {from_doc_path}, raw: {raw}, raw_target: {raw_target}, raw_alias: {raw_alias}, raw_heading: {raw_heading}, norm_target: {norm_target}, norm_alias: {norm_alias}, norm_heading: {norm_heading}, resolution_kind: {resolution_kind}, candidates: {candidates}, resolved_doc_path: {resolved_doc_path}, embed: {embed}, line: {line}{run_id_field} }} RETURN NONE;",
+        thing_id = thing("doc_link_unresolved", &record_id),
         link_id = json_string(link_id),
         from_doc_path = json_string(from_doc_path),
         raw = json_string(&link.raw),
@@ -1535,6 +2978,7 @@ fn doc_link_unresolved_upsert_sql(
         resolved_doc_path = json_opt_string(resolved_doc_path),
         embed = if link.embed { "true" } else { "false" },
         line = link.line,
+        run_id_field = run_id_field,
     )
 }
 
@@ -1546,12 +2990,19 @@ fn obsidian_file_link_relate_sql(
     edge_id: &str,
     link: &ObsidianLink,
     resolution_kind: &str,
+    run_id: Option<&str>,
 ) -> String {
     let from = thing("doc_file", from_doc_id);
     let to = thing("node", to_file_node_id);
+    let record_id = run_scoped_id(edge_id, run_id);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
     format!(
-        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id}, from_doc_path: {from_doc_path}, to_file_path: {to_file_path}, to_file_node_id: {to_file_node_id}, raw: {raw}, target: {target}, alias: {alias}, heading: {heading}, embed: {embed}, line: {line}, resolution_kind: {resolution_kind} }} RETURN NONE;",
-        thing("obsidian_file_link", edge_id),
+        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id}, from_doc_path: {from_doc_path}, to_file_path: {to_file_path}, to_file_node_id: {to_file_node_id}, raw: {raw}, target: {target}, alias: {alias}, heading: {heading}, embed: {embed}, line: {line}, resolution_kind: {resolution_kind}{run_id_field} }} RETURN NONE;",
+        thing("obsidian_file_link", &record_id),
         from = from,
         to = to,
         edge_id = json_string(edge_id),
@@ -1565,17 +3016,28 @@ fn obsidian_file_link_relate_sql(
         embed = if link.embed { "true" } else { "false" },
         line = link.line,
         resolution_kind = json_string(resolution_kind),
+        run_id_field = run_id_field,
     )
 }
 
 fn edge_relate_sql(edge_id: &str, edge: &DagEdge) -> String {
+    edge_relate_sql_with_run(edge_id, edge, None)
+}
+
+fn edge_relate_sql_with_run(edge_id: &str, edge: &DagEdge, run_id: Option<&str>) -> String {
     let from = edge.from.to_string();
     let to = edge.to.to_string();
     let (edge_tag, edge_fields_json) = split_edge_type(&edge.edge_type);
     let witness_ref = edge.witness_ref.map(|id| id.to_string());
 
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
+
     format!(
-        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id_s}, edge_type_tag: {edge_tag}, edge_fields: {edge_fields}, scope_id: {scope}, timeline: {timeline}, seq: {seq}, witness_ref: {witness_ref} }} RETURN NONE;",
+        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id_s}, edge_type_tag: {edge_tag}, edge_fields: {edge_fields}, scope_id: {scope}, timeline: {timeline}, seq: {seq}, witness_ref: {witness_ref}{run_id_field} }} RETURN NONE;",
         thing("edge", edge_id),
         from = thing("node", &from),
         to = thing("node", &to),
@@ -1586,6 +3048,7 @@ fn edge_relate_sql(edge_id: &str, edge: &DagEdge) -> String {
         timeline = json_string(&edge.step.timeline),
         seq = edge.step.seq,
         witness_ref = json_opt_string(witness_ref.as_deref()),
+        run_id_field = run_id_field,
     )
 }
 
@@ -1659,6 +3122,13 @@ fn thing(table: &str, id: &str) -> String {
     format!("{}:h{}", table, id)
 }
 
+fn run_scoped_id(base_id: &str, run_id: Option<&str>) -> String {
+    match run_id {
+        Some(rid) => sha256_hex_str(&format!("{}|{}", rid, base_id)),
+        None => base_id.to_string(),
+    }
+}
+
 fn sha256_hex_str(s: &str) -> String {
     hex_lower(&sha2::Sha256::digest(s.as_bytes()))
 }
@@ -1668,11 +3138,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 fn file_stem_title(path: &str) -> String {
-    let p = Path::new(path);
-    p.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(path)
-        .to_string()
+    crate::link_resolver::file_stem_title(path)
 }
 
 fn build_heading_index(dag: &GovernedDag, vault_prefixes: &[&str]) -> BTreeMap<String, BTreeSet<String>> {
@@ -1905,66 +3371,32 @@ fn facet_upsert_sql(facet: &str) -> String {
     )
 }
 
-fn has_facet_relate_sql(doc: &VaultDoc, facet: &str, edge_id: &str) -> String {
+fn has_facet_relate_sql(doc: &VaultDoc, facet: &str, edge_id: &str, run_id: Option<&str>) -> String {
     let fid = facet_id(facet);
+    let record_id = run_scoped_id(edge_id, run_id);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
     format!(
-        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id}, doc_path: {doc_path}, facet_name: {facet_name} }} RETURN NONE;",
-        thing("has_facet", edge_id),
+        "RELATE {from}->{}->{to} CONTENT {{ edge_id: {edge_id}, doc_path: {doc_path}, facet_name: {facet_name}{run_id_field} }} RETURN NONE;",
+        thing("has_facet", &record_id),
         from = thing("doc_file", &doc.doc_id),
         to = thing("facet", &fid),
         edge_id = json_string(edge_id),
         doc_path = json_string(&doc.doc_path),
         facet_name = json_string(facet),
+        run_id_field = run_id_field,
     )
 }
 
 fn normalize_heading(s: &str) -> String {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut last_was_space = false;
-    for ch in trimmed.chars() {
-        if ch.is_whitespace() {
-            if !last_was_space {
-                out.push(' ');
-                last_was_space = true;
-            }
-            continue;
-        }
-        last_was_space = false;
-        out.push(ch.to_ascii_lowercase());
-    }
-    out.trim().to_string()
+    crate::link_resolver::normalize_heading(s)
 }
 
 fn obsidian_heading_slug(s: &str) -> String {
-    // Approximate Obsidian's heading link normalization: lower-case, collapse whitespace,
-    // remove most punctuation, and join words with `-`.
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut last_dash = false;
-    for ch in trimmed.chars() {
-        let ch = ch.to_ascii_lowercase();
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            last_dash = false;
-            continue;
-        }
-        if ch.is_whitespace() || ch == '-' {
-            if !last_dash {
-                out.push('-');
-                last_dash = true;
-            }
-            continue;
-        }
-        // drop punctuation
-    }
-    out.trim_matches('-').to_string()
+    crate::link_resolver::obsidian_heading_slug(s)
 }
 
 fn looks_like_asset_target(target: &str) -> bool {
@@ -1981,65 +3413,17 @@ fn looks_like_asset_target(target: &str) -> bool {
     file.contains('.')
 }
 
-    fn resolve_obsidian_asset_target(
-        from_doc_path: &str,
-        raw_target: &str,
-        vault_prefixes: &[&str],
-        vault_files: &BTreeMap<String, String>,
-    ) -> Option<AssetResolution> {
-        let t = normalize_target(raw_target);
-        if t.is_empty() {
-            return None;
-        }
-
-        let from_root = vault_root_for_path(from_doc_path, vault_prefixes);
-
-        // Asset targets should generally resolve within the same vault root as the source note.
-        // (Unlike note links, cross-vault asset resolution is usually a silent footgun.)
-        if vault_files.contains_key(&t) {
-            return Some(AssetResolution {
-                to_file_node_id: vault_files.get(&t).cloned().unwrap(),
-                to_file_path: t,
-                kind: "exact_path".to_string(),
-            });
-        }
-
-        if let Some(root) = from_root {
-            if !t.starts_with(root) {
-                let joined = format!("{}{}", root, t);
-                if vault_files.contains_key(&joined) {
-                    return Some(AssetResolution {
-                        to_file_node_id: vault_files.get(&joined).cloned().unwrap(),
-                        to_file_path: joined,
-                        kind: "prefix_join".to_string(),
-                    });
-                }
-            }
-            return None;
-        }
-
-        // If we can't determine a vault root, fall back to checking all prefixes.
-        for prefix in vault_prefixes {
-            let joined = format!("{}{}", prefix, t);
-            if vault_files.contains_key(&joined) {
-                return Some(AssetResolution {
-                    to_file_node_id: vault_files.get(&joined).cloned().unwrap(),
-                    to_file_path: joined,
-                    kind: "prefix_join".to_string(),
-                });
-            }
-        }
-
-        None
-    }
+fn resolve_obsidian_asset_target(
+    from_doc_path: &str,
+    raw_target: &str,
+    vault_prefixes: &[&str],
+    vault_files: &BTreeMap<String, String>,
+) -> Option<AssetResolution> {
+    crate::link_resolver::resolve_obsidian_asset_target(from_doc_path, raw_target, vault_prefixes, vault_files)
+}
 
 fn normalize_target(s: &str) -> String {
-    let mut out = s.trim().replace('\\', "/");
-    while out.starts_with("./") {
-        out = out.trim_start_matches("./").to_string();
-    }
-    out = out.trim_start_matches('/').to_string();
-    out
+    crate::link_resolver::normalize_target(s)
 }
 
 fn normalize_optional(s: Option<&str>) -> Option<String> {
@@ -2047,68 +3431,11 @@ fn normalize_optional(s: Option<&str>) -> Option<String> {
 }
 
 fn extract_obsidian_links(input: &str) -> Vec<ObsidianLink> {
-    let mut out = Vec::new();
-    for (idx, line) in input.lines().enumerate() {
-        let line_no = (idx as u32) + 1;
-        let bytes = line.as_bytes();
-        let mut i = 0usize;
-        while i + 1 < bytes.len() {
-            if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-                let embed = i > 0 && bytes[i - 1] == b'!';
-                let start = i;
-                i += 2;
-                let mut end = None;
-                let mut j = i;
-                while j + 1 < bytes.len() {
-                    if bytes[j] == b']' && bytes[j + 1] == b']' {
-                        end = Some(j);
-                        break;
-                    }
-                    j += 1;
-                }
-                if let Some(end) = end {
-                    let inner = &line[i..end];
-                    let raw_start = start.saturating_sub(if embed { 1 } else { 0 });
-                    let raw = line[raw_start..end + 2].to_string();
-                    let parsed = parse_obsidian_inner(inner);
-                    if let Some((target, alias, heading)) = parsed {
-                        out.push(ObsidianLink {
-                            raw,
-                            target,
-                            alias,
-                            heading,
-                            embed,
-                            line: line_no,
-                        });
-                    }
-                    i = end + 2;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-    }
-    out
+    crate::link_resolver::extract_obsidian_links(input)
 }
 
 fn parse_obsidian_inner(inner: &str) -> Option<(String, Option<String>, Option<String>)> {
-    let trimmed = inner.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let mut parts = trimmed.splitn(2, '|');
-    let left = parts.next()?.trim();
-    let alias = parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-
-    let mut left_parts = left.splitn(2, '#');
-    let target = left_parts.next()?.trim().to_string();
-    let heading = left_parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-
-    if target.is_empty() {
-        return None;
-    }
-    Some((target, alias, heading))
+    crate::link_resolver::parse_obsidian_inner(inner)
 }
 
 fn resolve_obsidian_target(
@@ -2405,6 +3732,32 @@ fn parse_json_stream(input: &str) -> Result<Vec<serde_json::Value>, serde_json::
         out.push(item?);
     }
     Ok(out)
+}
+
+fn extract_result_array(values: &[serde_json::Value]) -> Result<Vec<serde_json::Value>, String> {
+    for value in values {
+        if let serde_json::Value::Array(arr) = value {
+            let Some(first) = arr.first() else {
+                continue;
+            };
+            match first {
+                serde_json::Value::Object(obj) => {
+                    if let Some(result_val) = obj.get("result") {
+                        if let serde_json::Value::Array(result_arr) = result_val {
+                            return Ok(result_arr.clone());
+                        }
+                    }
+                }
+                serde_json::Value::Array(inner) => {
+                    return Ok(inner.clone());
+                }
+                _ => {
+                    return Ok(arr.clone());
+                }
+            }
+        }
+    }
+    Ok(Vec::new())
 }
 
 fn check_surreal_json_stream(values: &[serde_json::Value]) -> Result<(), String> {

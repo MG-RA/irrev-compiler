@@ -9,6 +9,31 @@ pub fn default_artifacts_dir() -> PathBuf {
     PathBuf::from(DEFAULT_ARTIFACT_ROOT)
 }
 
+/// Store a JSON value as a content-addressed artifact.
+///
+/// The artifact bytes are the compiler's canonical CBOR encoding of `value`.
+/// A JSON projection is also stored alongside the CBOR for convenient inspection.
+pub fn store_value_artifact(
+    root: &Path,
+    kind: &str,
+    schema_id: &str,
+    value: &serde_json::Value,
+) -> Result<ArtifactRef, DeclareCostError> {
+    let cbor_bytes = admit_core::encode_canonical_value(value)
+        .map_err(|err| DeclareCostError::Json(err.0))?;
+    let json_projection =
+        serde_json::to_vec(value).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    store_artifact(
+        root,
+        kind,
+        schema_id,
+        &cbor_bytes,
+        "cbor",
+        Some(json_projection),
+        None,
+    )
+}
+
 fn write_bytes_if_missing(path: &Path, bytes: &[u8]) -> Result<(), DeclareCostError> {
     if path.exists() {
         return Ok(());

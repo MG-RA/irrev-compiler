@@ -16,7 +16,7 @@ impl Default for OllamaEmbedConfig {
     fn default() -> Self {
         Self {
             endpoint: "http://127.0.0.1:11434".to_string(),
-            model: "nomic-embed-text".to_string(),
+            model: "qwen3-embedding:0.6b".to_string(),
             timeout_ms: 60_000,
             batch_size: 16,
             max_chars: 8_000,
@@ -279,6 +279,12 @@ fn parse_status_code(head: &str) -> Result<u16, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_model_is_qwen_0_6b() {
+        let cfg = OllamaEmbedConfig::default();
+        assert_eq!(cfg.model, "qwen3-embedding:0.6b");
+    }
 
     #[test]
     fn clamp_input_truncates() {

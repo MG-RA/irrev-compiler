@@ -10,7 +10,8 @@ use super::registry::{load_registry_cached, registry_allows_schema, registry_all
 use super::types::{
     AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactRef, CheckedPayload,
     CostDeclaredEvent, DeclareCostError, ExecutedPayload, LedgerIssue,
-    LedgerReport, PlanCreatedEvent, PlanCreatedPayload,
+    CourtEvent, CourtEventPayload, IngestEvent, IngestEventPayload, LedgerReport, PlanCreatedEvent, PlanCreatedPayload,
+    ProjectionEvent, ProjectionEventPayload,
 };
 use super::witness::payload_for_event;
 
@@ -760,6 +761,170 @@ pub fn verify_ledger(
                             event_id: event_id.clone(),
                             event_type: event_type.clone(),
                             message: format!("plan.created decode failed: {}", err),
+                        });
+                    }
+                }
+            }
+            Some(t) if t.starts_with("ingest.") => {
+                match serde_json::from_value::<IngestEvent>(value) {
+                    Ok(event) => {
+                        let payload = IngestEventPayload {
+                            event_type: event.event_type.clone(),
+                            timestamp: event.timestamp.clone(),
+                            ingest_run_id: event.ingest_run_id.clone(),
+                            root: event.root.clone(),
+                            status: event.status.clone(),
+                            duration_ms: event.duration_ms,
+                            error: event.error.clone(),
+                            config: event.config.clone(),
+                            coverage: event.coverage.clone(),
+                            ingest_run: event.ingest_run.clone(),
+                            snapshot_sha256: event.snapshot_sha256.clone(),
+                            parse_sha256: event.parse_sha256.clone(),
+                            files: event.files,
+                            chunks: event.chunks,
+                            total_bytes: event.total_bytes,
+                        };
+                        if let Ok(hash) = payload_hash(&payload) {
+                            if hash != event.event_id {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "event_id mismatch (expected {}, computed {})",
+                                        event.event_id, hash
+                                    ),
+                                });
+                            }
+                        }
+
+                        if let Some(config) = &event.config {
+                            verify_artifact_ref(
+                                &artifacts_root,
+                                config,
+                                line_no,
+                                &event_id,
+                                &event_type,
+                                &mut issues,
+                                "ingest config",
+                            );
+                        }
+                        if let Some(coverage) = &event.coverage {
+                            verify_artifact_ref(
+                                &artifacts_root,
+                                coverage,
+                                line_no,
+                                &event_id,
+                                &event_type,
+                                &mut issues,
+                                "ingest coverage",
+                            );
+                        }
+                        if let Some(run) = &event.ingest_run {
+                            verify_artifact_ref(
+                                &artifacts_root,
+                                run,
+                                line_no,
+                                &event_id,
+                                &event_type,
+                                &mut issues,
+                                "ingest run record",
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        issues.push(LedgerIssue {
+                            line: line_no,
+                            event_id: event_id.clone(),
+                            event_type: event_type.clone(),
+                            message: format!("ingest event decode failed: {}", err),
+                        });
+                    }
+                }
+            }
+            Some(t) if t.starts_with("projection.") => {
+                match serde_json::from_value::<ProjectionEvent>(value) {
+                    Ok(event) => {
+                        let payload = ProjectionEventPayload {
+                            event_type: event.event_type.clone(),
+                            timestamp: event.timestamp.clone(),
+                            projection_run_id: event.projection_run_id.clone(),
+                            trace_sha256: event.trace_sha256.clone(),
+                            phase: event.phase.clone(),
+                            status: event.status.clone(),
+                            duration_ms: event.duration_ms,
+                            error: event.error.clone(),
+                            config_hash: event.config_hash.clone(),
+                            projector_version: event.projector_version.clone(),
+                            meta: event.meta.clone(),
+                        };
+                        if let Ok(hash) = payload_hash(&payload) {
+                            if hash != event.event_id {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "event_id mismatch (expected {}, computed {})",
+                                        event.event_id, hash
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        issues.push(LedgerIssue {
+                            line: line_no,
+                            event_id: event_id.clone(),
+                            event_type: event_type.clone(),
+                            message: format!("projection event decode failed: {}", err),
+                        });
+                    }
+                }
+            }
+            Some(t) if t.starts_with("court.") => {
+                match serde_json::from_value::<CourtEvent>(value) {
+                    Ok(event) => {
+                        let payload = CourtEventPayload {
+                            event_type: event.event_type.clone(),
+                            timestamp: event.timestamp.clone(),
+                            artifact_kind: event.artifact_kind.clone(),
+                            artifact: event.artifact.clone(),
+                            name: event.name.clone(),
+                            lang: event.lang.clone(),
+                            tags: event.tags.clone(),
+                        };
+                        if let Ok(hash) = payload_hash(&payload) {
+                            if hash != event.event_id {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "event_id mismatch (expected {}, computed {})",
+                                        event.event_id, hash
+                                    ),
+                                });
+                            }
+                        }
+
+                        verify_artifact_ref(
+                            &artifacts_root,
+                            &event.artifact,
+                            line_no,
+                            &event_id,
+                            &event_type,
+                            &mut issues,
+                            "court artifact",
+                        );
+                    }
+                    Err(err) => {
+                        issues.push(LedgerIssue {
+                            line: line_no,
+                            event_id: event_id.clone(),
+                            event_type: event_type.clone(),
+                            message: format!("court event decode failed: {}", err),
                         });
                     }
                 }

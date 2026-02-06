@@ -303,6 +303,78 @@ pub struct PlanCreatedEvent {
     pub registry_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectionEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub projection_run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projector_version: Option<String>,
+    /// Optional structured metadata for projection-* admin/diagnostic events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IngestEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub ingest_run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<ArtifactRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<ArtifactRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_run: Option<ArtifactRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CourtEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub artifact_kind: String,
+    pub artifact: ArtifactRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
 // ---------------------------------------------------------------------------
 // Public reference / entry structs
 // ---------------------------------------------------------------------------
@@ -601,6 +673,71 @@ pub(crate) struct PlanCreatedPayload {
     pub repro: PlanReproRef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ProjectionEventPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub projection_run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projector_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct IngestEventPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub ingest_run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<ArtifactRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<ArtifactRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ingest_run: Option<ArtifactRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parse_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chunks: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CourtEventPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub artifact_kind: String,
+    pub artifact: ArtifactRef,
+    pub name: Option<String>,
+    pub lang: Option<String>,
+    pub tags: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------

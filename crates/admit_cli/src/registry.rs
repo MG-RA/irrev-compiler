@@ -186,6 +186,18 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
                 kind: "plan_witness".to_string(),
                 canonical_encoding: "canonical-cbor".to_string(),
             },
+            MetaRegistrySchema {
+                id: "court-query/0".to_string(),
+                schema_version: 0,
+                kind: "query_artifact".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "court-function/0".to_string(),
+                schema_version: 0,
+                kind: "fn_artifact".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
         ],
         scopes: vec![
             MetaRegistryScope {
@@ -221,6 +233,15 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
         serde_json::to_string_pretty(&registry).map_err(|err| DeclareCostError::Json(err.to_string()))?;
     fs::write(out_path, json).map_err(|err| DeclareCostError::Io(err.to_string()))?;
     Ok(())
+}
+
+/// Load and normalize a meta registry from `--meta-registry` or `ADMIT_META_REGISTRY`.
+///
+/// Returns `(registry, registry_hash)` when present.
+pub fn load_meta_registry(
+    path: Option<&Path>,
+) -> Result<Option<(MetaRegistryV0, String)>, DeclareCostError> {
+    Ok(resolve_meta_registry(path)?.map(|resolved| (resolved.registry, resolved.hash)))
 }
 
 pub fn registry_build(

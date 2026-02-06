@@ -94,3 +94,40 @@ LIMIT 20;
 -- WHERE dim_target = 256
 -- ORDER BY sim DESC
 -- LIMIT 30;
+
+-- 15) Projection runs (latest first)
+SELECT run_id, ingest_run_id, trace_sha256, started_at, finished_at, status, config_hash, projector_version
+FROM projection_run
+ORDER BY started_at DESC
+LIMIT 20;
+
+-- 16) Projection events for latest run (requires ingest dir projections with Phase 4 enabled)
+-- Note: when ordering in a subquery, include the order-by field in the selection.
+-- LET $r = (SELECT run_id, started_at FROM projection_run ORDER BY started_at DESC LIMIT 1)[0];
+-- SELECT event_type, phase, status, duration_ms, error, timestamp
+-- FROM projection_event
+-- WHERE projection_run_id = $r.run_id
+-- ORDER BY timestamp ASC
+-- LIMIT 500;
+
+-- 16b) Ingest -> projection lineage (latest ingest run)
+-- LET $i = (SELECT ingest_run_id, started_at FROM ingest_run ORDER BY started_at DESC LIMIT 1)[0];
+-- SELECT run_id, status, started_at, finished_at, trace_sha256
+-- FROM projection_run
+-- WHERE ingest_run_id = $i.ingest_run_id
+-- ORDER BY started_at DESC;
+
+-- 17) Ingest runs (latest first)
+SELECT ingest_run_id, started_at, finished_at, status, root, config_sha256, coverage_sha256, snapshot_sha256, parse_sha256
+FROM ingest_run
+ORDER BY started_at DESC
+LIMIT 20;
+
+-- 18) Ingest events for latest run
+-- Note: when ordering in a subquery, include the order-by field in the selection.
+-- LET $r = (SELECT ingest_run_id, started_at FROM ingest_run ORDER BY started_at DESC LIMIT 1)[0];
+-- SELECT event_type, status, duration_ms, error, timestamp
+-- FROM ingest_event
+-- WHERE ingest_run_id = $r.ingest_run_id
+-- ORDER BY timestamp ASC
+-- LIMIT 500;

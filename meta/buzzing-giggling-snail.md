@@ -6,16 +6,208 @@ This plan addresses six critical structural issues in the compiler-SurrealDB int
 
 **Critical Architectural Insight**: SurrealDB is **memory/microscope**, NOT **authority/court**. The Rust compiler (court) is authoritative; SurrealDB projections are regenerable accounting artifacts.
 
-## Status Update (2026-02-06)
+## Implementation Progress (2026-02-06)
+
+### [x] Phase 1: Projection Configuration Layer - COMPLETE
+**Status**: Implemented and tested
+**Location**: `crates/admit_surrealdb/src/projection_config.rs`
+
+- [x] Created `ProjectionConfig` with hash computation for lineage tracking
+- [x] Implemented `ProjectionPhases`, `BatchSizes`, `RetryPolicy`, `FailureHandling`
+- [x] Added CLI flags: `--projection-enabled`, `--projection-batch-size`, `--projection-failure-mode`, `--vault-prefix`
+- [x] Configuration as CBOR witness artifact
+- [x] 7 comprehensive unit tests (all passing)
+- [x] Documentation: [projection-configuration-guide.md](./projection-configuration-guide.md)
+- [x] Demo example: `examples/projection_config_demo.rs`
+
+**Benefits Achieved**:
+- All tunable parameters now explicit and externalized
+- CLI control over projection behavior
+- Configuration becomes inspectable witness artifact
+- Foundation for run-scoped configuration tracking
+
+### [x] Phase 0: ProjectionRun Primitive - COMPLETE
+**Status**: Implemented and tested
+**Location**: `crates/admit_surrealdb/src/projection_run.rs`
+
+- [x] Created `ProjectionRun` with full lifecycle tracking
+- [x] Implemented `RunStatus`, `PhaseResult`, `PhaseStatus`, `FailedBatch`
+- [x] Stable batch hash computation (survives batch size changes)
+- [x] SurrealDB schema with indexes: [projection_run_schema.surql](../meta/surreal/projection_run_schema.surql)
+- [x] Store methods: `begin_projection_run()`, `end_projection_run()`, `get_latest_projection_run()`
+- [x] Demonstration of `projection_run_id` stamping in SQL generation
+- [x] 7 comprehensive unit tests (all passing)
+- [x] Total test count: 24 (increased from 10)
+
+**Benefits Achieved**:
+- Every DB state now traceable to projection run that created it
+- Full lineage: trace -> run -> projector version -> config
+- Deterministic retry by stable batch hash
+- Foundation for run-to-run diffs and garbage collection
+- **Transforms "best-effort vibes" into "auditable accounting"**
+
+**What Changed**:
+The "run accounting" primitive (previously only for embeddings via `embed_run`) is now universal:
+- `projection_run` tracks ALL projection executions
+- Each run has full lineage (trace, config, projector version)
+- Failed batches tracked with stable hashes
+- Phase-level results tracked independently
+
+### [x] Phase 2A: ProjectionStore Trait - COMPLETE
+
+**Status**: Implemented and tested
+**Location**: `crates/admit_surrealdb/src/projection_store.rs`
+
+- [x] Created `ProjectionStoreOps` trait with comprehensive projection operations
+- [x] Implemented `NullStore` for graceful degradation (no-op when SurrealDB disabled)
+- [x] Implemented trait for `SurrealCliProjectionStore` with run_id stamping
+- [x] Added `ProjectionError` and `ProjectionResult` types
+- [x] Added `_with_run` variants for SQL generation (nodes, edges, chunks, docs)
+- [x] Re-exported key types: `NullStore`, `ProjectionStoreOps`, `ProjectionError`, `ProjectionResult`
+- [x] 7 unit tests for NullStore and error types (all passing)
+- [x] Total test count: 31 (increased from 24)
+
+**Benefits Achieved**:
+
+- "Optional" is now trait-based, not if/else jungle
+- NullStore enables commands to succeed without SurrealDB
+- All projections can be stamped with `projection_run_id`
+- Foundation for multiple backends (SurrealDB, null, future sqlite/jsonl)
+- Testable with mock stores
+
+**What the trait covers**:
+
+- Run lifecycle: `begin_run()`, `end_run()`, `get_latest_run()`
+- Schema management: `ensure_schemas()`
+- DAG trace projection with run_id stamping
+- Document projections: `project_doc_files()`, `project_doc_chunks()`, `project_vault_links()`
+- Embedding projections: `project_embeddings()`, `project_title_embeddings()`
+- Query operations: `select_doc_files()`, `select_unresolved_links()`, `search_title_embeddings()`
+
+### [x] Phase 2B: Extract Link Resolver - COMPLETE
+
+**Status**: Implemented and tested
+**Location**: `crates/admit_surrealdb/src/link_resolver.rs`
+
+- [x] Created pure link resolution module with no database dependencies
+- [x] Extracted business logic from `lib.rs`: `VaultLinkResolver` struct
+- [x] Data structures: `ObsidianLink`, `ResolutionResult`, `AssetResolution`, `VaultDoc`
+- [x] Public helpers: normalization, parsing, indexing functions
+- [x] Refactored `lib.rs` to delegate to link_resolver module
+- [x] 8 comprehensive unit tests (all passing)
+- [x] Total test count: 38 (increased from 31)
+- [x] Vault prefixes now parameterized (no hardcoded paths)
+
+**Benefits Achieved**:
+- Pure business logic testable without database
+- Reusable in LSP/CLI tools
+- Clear separation: resolver (pure) vs projector (IO)
+- Satisfies decomposition invariant
+- **Sprint 1 is now COMPLETE**
+
+### [x] Configuration Wiring - COMPLETE
+
+**Status**: Implemented and tested
+**Date**: 2026-02-06
+
+**What Was Wired Up**:
+
+1. **SurrealCliProjectionStore Integration**:
+   - [x] Added `projection_config` field to `SurrealCliProjectionStore` struct
+   - [x] Created `with_projection_config()` constructor method
+   - [x] Added `projection_config()` accessor method
+
+2. **Batch Size Configuration**:
+   - [x] Replaced all 12 hardcoded `const BATCH_LIMIT` constants with `self.projection_config.batch_sizes` references
+   - [x] Updated projection methods to use configurable batch sizes:
+     - `project_doc_embeddings()` -> `doc_chunks`
+     - `project_doc_files_from_artifacts()` -> `doc_files`
+     - `project_doc_title_embeddings()` -> `doc_chunks`
+     - `project_unresolved_link_suggestions()` -> `links`
+     - `project_vault_docs()` -> `doc_files`, `headings`, `links`, `stats`
+     - `project_dag_trace()` -> `nodes`
+     - `project_doc_chunks()` -> `doc_chunks`
+
+3. **CLI Integration**:
+   - [x] Updated `build_surreal_projection_store()` to build and pass `ProjectionConfig`
+   - [x] Existing CLI flags already functional:
+     - `--projection-enabled=<phases>`
+     - `--projection-batch-size=<phase:size>`
+     - `--projection-failure-mode=<mode>`
+     - `--vault-prefix=<prefix>`
+
+4. **Testing**:
+   - [x] All 38 tests passing in `admit_surrealdb`
+   - [x] Full cargo build succeeds with no errors
+   - [x] CLI package builds successfully
+
+**Benefits Achieved**:
+- All batch sizes now configurable via CLI flags
+- No more hardcoded magic numbers in projection code
+- Configuration is externalized and can be tuned without code changes
+- Foundation for TOML config file support (Phase 8)
+- Configuration as witness artifact (already implemented in Phase 1)
+
+**What This Enables**:
+- Users can now override batch sizes: `--projection-batch-size=doc_chunks:100`
+- Vault prefixes are parameterized: `--vault-prefix=my-vault/`
+- Failure handling modes are configurable: `--projection-failure-mode=fail-fast`
+- Phases can be selectively enabled: `--projection-enabled=dag_trace,doc_files`
+
+### [x] Phase 4: Queryable Observability (Projection Events) - COMPLETE
+
+**Status**: Implemented and exercised against a real ingest.
+
+**What was added**:
+- Ledger events for projection boundaries (file-backed, survives DB downtime):
+  - `projection.run.started`
+  - `projection.phase.completed`
+  - `projection.run.completed`
+- SurrealDB projection table for queryable observability:
+  - `projection_event` (indexed by `projection_run_id`, `event_type`, `timestamp`, `trace_sha256`)
+- `ingest dir` now creates a `projection_run` and emits these events while running enabled projection phases.
+- `verify_ledger` accepts `projection.*` events and checks their `event_id` hashes.
+
+**Practical outcome**:
+- Long "silent" runs are now explainable and queryable (phase durations, failures).
+- Example run shows exact phase times (e.g. `doc_chunks` took ~66s, `dag_trace` ~49s).
+
+### Next Steps
+
+According to the implementation plan:
+
+**Sprint 1: Store Abstraction + Business Logic** (2 weeks)
+
+- ~~Phase 2A: ProjectionStore trait (abstraction layer)~~ [x] COMPLETE
+- ~~Phase 2B: Extract link resolver (pure business logic)~~ [x] COMPLETE
+
+**Sprint 2: Resilience + Observability** (2 weeks)
+
+- ~~Phase 4: Queryable observability via SurrealDB~~ [x] COMPLETE
+- ~~Wire up configuration to existing projection code~~ [x] COMPLETE
+
+**Sprint 3: Run-Scoped Operations** (2 weeks)
+- Phase 5: Run-scoped replacement (replaces hard deletes)
+- Phase 6: Deterministic batch retry
+
+**Sprint 4: Graceful Degradation** (2 weeks)
+- Phase 7: Circuit breaker and optional SurrealDB
+- Phase 3: Projection coordinator (orchestration)
+
+## Status Update (2026-02-06) [Historical]
 
 This plan predates several improvements which are now implemented. The plan still identifies real structural issues, but it needs to reflect the current integration surface.
 
 **Already implemented**
 - SurrealDB projection substrate via `surreal sql` (`SurrealCliProjectionStore`), including doc projections and vault graph projections.
-- `.gitignore`-aware directory ingestion (prefers `git ls-files -co --exclude-standard`; falls back to a minimal `.gitignore` matcher).
+- `.gitignore`-aware directory ingestion (prefers `git ls-files -co --exclude-standard`; falls back to an `ignore`-crate filesystem walk which honors nested `.gitignore` and negation patterns).
+- Ingestion protocol v0 (ledger-backed, survives DB downtime):
+  - `ingest.run.started` and `ingest.run.completed` events in `out/ledger.jsonl`
+  - content-addressed artifacts: `ingest_config`, `ingest_coverage`, `ingest_run`
+  - SurrealDB query projections: `ingest_run` and `ingest_event`
 - Vault graph fidelity primitives (no silent drop):
-  - `obsidian_link` (doc→doc RELATE edges)
-  - `obsidian_file_link` (doc→file-node edges for asset-style links)
+  - `obsidian_link` (doc->doc links with explicit resolution outcomes)
+  - `obsidian_file_link` (doc->file-path links for asset-style links)
   - `doc_link_unresolved` with explicit `missing`, `heading_missing`, `ambiguous`
 - Frontmatter + facets projection on `doc_file`, plus `facet` and `has_facet`.
 - Local embeddings (Ollama):
@@ -28,34 +220,35 @@ This plan predates several improvements which are now implemented. The plan stil
 - Surrealist query templates updated in `meta/surreal/views.surql` (including SurrealQL subquery ordering quirks).
 
 **Still true / still needs work**
-- Projection failures still tend to fail the CLI command (no circuit breaker / graceful degradation path yet).
-- Some business logic (Obsidian resolution heuristics) still lives inside the SurrealDB projector, rather than a pure, testable resolver module.
-- The "run accounting" primitive is only implemented for embeddings (`embed_run`), not yet universal across all projection phases.
+- Graceful degradation is partial: `ProjectionStoreOps` + `NullStore` exist, but we still need an explicit circuit breaker + clearer mode semantics (auto/off/on) so "DB down" is consistently non-fatal unless explicitly required.
+- Projection orchestration is still mostly in the CLI command path (no dedicated coordinator yet), so phase independence and retry policy are not centralized.
+- Observability is v0: we have run/phase boundary events, but not batch-level events, per-item counts, or consistent progress output to console.
 
 ## The One Thing That Changes Everything
 
-**If you implement only ONE addition before everything else: add `ProjectionRun` + `projection_run_id` stamping across ALL projections.**
+This has now been implemented: `ProjectionRun` + `projection_run_id` stamping across projections turns "best-effort vibes" into "auditable accounting".
 
 This single primitive transforms the entire integration from "best-effort vibes" into "auditable accounting" by:
 
 - Making every DB state traceable to which ingest produced it
 - Enabling deterministic retry by stable batch identity
 - Supporting run-to-run diffs and garbage collection
-- Providing full lineage: trace → run → projector version → config
+- Providing full lineage: trace -> run -> projector version -> config
 
 Without this, you're debugging mysteries. With it, you're querying facts.
 
 **What changed since this section was written**
-- A partial version exists for embeddings: `embed_run` plus run-scoped suggestion rows (`unresolved_link_suggestion`).
-- The missing piece is making this universal (trace/doc/doc-chunk/vault-link projections), not embedding-only.
+- The run accounting primitive is now universal (`projection_run`), not embedding-only.
+- Link resolution business logic has been extracted into a pure, testable module (`link_resolver`).
+- The next missing piece is the event spine (Phase 4) so run/phase/batch outcomes become queryable over time, even when SurrealDB is down.
 
 ## Problem Analysis
 
 ### Current Architecture
 
 The system implements a **two-loop pattern**:
-1. **Compiler loop (pure)**: `.adm` modules → IR + compile witness (no world state mutations)
-2. **Runtime loop (governed effects)**: compiled program + snapshots → findings, plans, cost declarations, results, witnesses
+1. **Compiler loop (pure)**: `.adm` modules -> IR + compile witness (no world state mutations)
+2. **Runtime loop (governed effects)**: compiled program + snapshots -> findings, plans, cost declarations, results, witnesses
 
 **SurrealDB's Role**: Regenerable projection/index (NOT authoritative). Authoritative sources: file-backed artifacts + append-only ledger.
 
@@ -94,7 +287,7 @@ The system implements a **two-loop pattern**:
 #### Issue 6: Ledger-SurrealDB Write Asymmetry
 - **Locations**: Throughout projection code
 - **Problem**: Ledger is append-only, SurrealDB does upsert/delete; no transactional guarantee
-- **Impact**: Partial failures leave database in inconsistent state (batch 10 of 50 fails → first 9 already committed)
+- **Impact**: Partial failures leave database in inconsistent state (batch 10 of 50 fails -> first 9 already committed)
 - **Root Cause**: No batch-level error handling or retry mechanism
 
 ### Current Loop Structures
@@ -266,7 +459,7 @@ pub enum FailureHandling {
 ```
 
 **Configuration as Witness**:
-- Parse CLI/env → build ProjectionConfig
+- Parse CLI/env -> build ProjectionConfig
 - Emit `projection.config_resolved@1` artifact (CBOR)
 - Coordinator uses that artifact
 - **Benefits**: Self-describing system, reduces "hidden config drift"
@@ -424,107 +617,69 @@ if let Some(results) = coordinator.project_all(...) {
 - Centralized retry logic
 - Clear failure handling policy
 
-### Phase 4: Queryable Observability via SurrealDB
+### Phase 4: Queryable Observability (Ledger-Backed, Projected into SurrealDB)
 
-**Create**: `irrev-compiler/crates/admit_surrealdb/src/projection_events.rs`
+**Status**: Implemented (v0).
 
-**Purpose**: Make observability queryable using SurrealDB as microscope
+**Purpose**: Make observability queryable, without making SurrealDB the authority.
 
-**Key Insight**: Don't overbuild in-memory counters that die with process. Log structured events that can be queried historically.
+**Key insight**:
+- SurrealDB is the microscope (query/index/trigger substrate).
+- The court must be able to re-derive and audit observations without the DB.
+- Therefore: emit an append-only event stream as court artifacts, then project those events into SurrealDB for UI and queries.
 
-**Event Schema**:
+#### 4.1 Court event spine (authoritative)
+
+Add a minimal append-only event stream to the ledger (file-backed), so "DB down" does not lose observability.
+
+Implemented in `admit_cli`:
+- Ledger events for projection boundaries:
+  - `projection.run.started`
+  - `projection.phase.completed`
+  - `projection.run.completed`
+- Flags on `ingest dir`:
+  - `--ledger` (defaults to `out/ledger.jsonl`)
+  - `--no-ledger`
+- `verify_ledger` accepts `projection.*` events and verifies their `event_id` hashes.
+
+This event spine is also where the "ineluctability loop" records its laps: a loop lap is an event bundle that points at idea + plan + diagnostics.
+
+#### 4.2 SurrealDB projection_event (non-authoritative view)
+
+**Create**: `irrev-compiler/crates/admit_surrealdb/src/projection_events.rs` (done)
+
+Store a convenient, queryable view of events:
+- Rows contain: `event_id`, `projection_run_id`, `phase`, `event_type`, `timestamp`, plus small scalar metrics and optional fields.
+
+**Schema (memory only, derived from the ledger)** (implemented via `ensure_projection_event_schema()`):
 ```sql
 DEFINE TABLE projection_event SCHEMALESS;
-DEFINE INDEX projection_event_run ON TABLE projection_event COLUMNS run_id;
+DEFINE INDEX projection_event_run ON TABLE projection_event COLUMNS projection_run_id;
 DEFINE INDEX projection_event_phase ON TABLE projection_event COLUMNS phase;
+DEFINE INDEX projection_event_type ON TABLE projection_event COLUMNS event_type;
 DEFINE INDEX projection_event_timestamp ON TABLE projection_event COLUMNS timestamp;
+DEFINE INDEX projection_event_trace ON TABLE projection_event COLUMNS trace_sha256;
 ```
 
-**Event Types**:
-```rust
-pub enum ProjectionEvent {
-    RunStarted {
-        run_id: String,
-        trace_sha256: String,
-        projector_version: String,
-        config_hash: String,
-        timestamp: DateTime<Utc>,
-    },
-    PhaseStarted {
-        run_id: String,
-        phase: String,
-        timestamp: DateTime<Utc>,
-    },
-    BatchStarted {
-        run_id: String,
-        phase: String,
-        batch_hash: String,
-        batch_index: usize,
-        item_count: usize,
-        timestamp: DateTime<Utc>,
-    },
-    BatchCompleted {
-        run_id: String,
-        phase: String,
-        batch_hash: String,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-    },
-    BatchFailed {
-        run_id: String,
-        phase: String,
-        batch_hash: String,
-        error: String,
-        attempt_count: usize,
-        timestamp: DateTime<Utc>,
-    },
-    PhaseCompleted {
-        run_id: String,
-        phase: String,
-        total_batches: usize,
-        successful_batches: usize,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-    },
-    RunCompleted {
-        run_id: String,
-        status: RunStatus,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-    },
-}
-```
+#### Suggested event types (v0)
 
-**CLI Additions**:
-```bash
-# Query events using Surrealist or CLI
-admit-cli projection events --run <id>
-admit-cli projection events --phase <name> --since 1h
-admit-cli projection metrics          # Aggregate from events
-admit-cli projection health           # Latest run status
-```
+v0 uses run/phase boundaries (cheap). Batch-level events can be added later (e.g. `projection.batch.failed`).
 
-**Query Examples**:
+#### Queries you get immediately
 ```sql
--- Slowest batches in last day
-SELECT phase, batch_hash, duration_ms FROM projection_event
-WHERE event_type = 'BatchCompleted' AND timestamp > time::now() - 1d
-ORDER BY duration_ms DESC LIMIT 10;
-
--- Error rate by phase
-SELECT phase, count() as errors FROM projection_event
-WHERE event_type = 'BatchFailed' AND timestamp > time::now() - 7d
-GROUP BY phase;
-
 -- Latest run status
 SELECT * FROM projection_run ORDER BY started_at DESC LIMIT 1;
+
+-- Recent failures (phase boundary failures)
+SELECT projection_run_id, phase, error, timestamp FROM projection_event
+WHERE event_type = 'projection.phase.completed' AND status = 'failed'
+ORDER BY timestamp DESC LIMIT 50;
 ```
 
 **Benefits**:
 - Historical queryability (Surrealist is the observability UI)
-- No in-memory state that dies with process
-- Rich debugging: trace exact batch failure sequence
-- Compound queries: "show me all slow batches that later failed"
+- SurrealDB can go down without losing the event log
+- Replayable: rebuild projections from ledger + artifacts
 
 ### Phase 5: Run-Scoped Replacement (Replaces Hard Deletes)
 
@@ -833,10 +988,10 @@ Memory updated (or will be regenerated later)
 
 | Boundary | Guarantee | Failure Mode |
 |----------|-----------|--------------|
-| **Compiler → Ledger** | Transactional (file atomic write) | Command fails, no side effects |
-| **Ledger → SurrealDB** | Best-effort, logged | Command succeeds, projection deferred |
-| **Phase → Phase** | Independent, no coupling | One phase fails, others continue |
-| **Batch → Batch** | Independent, trackable | One batch fails, others committed, retry available |
+| **Compiler -> Ledger** | Transactional (file atomic write) | Command fails, no side effects |
+| **Ledger -> SurrealDB** | Best-effort, logged | Command succeeds, projection deferred |
+| **Phase -> Phase** | Independent, no coupling | One phase fails, others continue |
+| **Batch -> Batch** | Independent, trackable | One batch fails, others committed, retry available |
 
 ### Phase Discipline Compliance (Corrected)
 
@@ -1088,7 +1243,7 @@ admit-cli config migrate-env > admit.toml
 
 **Compiler can be governed as data, not as runtime judge**:
 
-- **Compiler-as-object**: Ingest compiler repo snapshot as identity-addressed artifact (hash → bytes → metadata)
+- **Compiler-as-object**: Ingest compiler repo snapshot as identity-addressed artifact (hash -> bytes -> metadata)
   - Makes it *speakable*: rules can point at it, diff it, attach witnesses, track authorities
 - **Compiler-as-court**: Running Rust binary evaluates admissibility and emits verdicts/witnesses
   - Don't let "the thing being judged" also be "the final judge" without bootstrapped trust root
@@ -1116,7 +1271,7 @@ Based on SurrealDB operators documentation, key operators for vault + compiler +
 **Full-text search operators** (`@@` and `@1@`):
 - Query chunks, score them, highlight them
 - Use `search::highlight` and `search::score` for referenced form
-- Supports workflow: **FTS hit → chunk → file → graph neighborhood**
+- Supports workflow: **FTS hit -> chunk -> file -> graph neighborhood**
 
 **KNN operator for vector search** (`<|K,...|>`):
 - When adding embeddings later, use HNSW index for scale
@@ -1145,7 +1300,7 @@ Based on SurrealDB operators documentation, key operators for vault + compiler +
 - Proposed queries and diagnostics
 
 **Then**:
-- Rust compiler (court) evaluates proposed change in sandbox/dry-run mode → emits witness
+- Rust compiler (court) evaluates proposed change in sandbox/dry-run mode -> emits witness
 - Human (or CI policy) applies **approval token** gate for anything destructive/authoritative
 
 **This answers earlier questions**: LLM helps *draft* structure; only court + explicit approval can *ratify* it.
@@ -1223,7 +1378,7 @@ These refinements transform the plan from "good direction" into "mechanically im
 
 **After** (with this plan):
 - Projection failure = warning, command succeeds
-- Full lineage: trace → run → projector version → config → DB state
+- Full lineage: trace -> run -> projector version -> config -> DB state
 - Run-scoped replacement with vacuum command
 - Deterministic retry by stable batch hash
 - Circuit breaker prevents retry spam

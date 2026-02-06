@@ -5,20 +5,26 @@ use sha2::Digest;
 
 use admit_dag::{DagEdge, DagNode, DagTraceCollector, NodeKind, ScopeTag, Tracer};
 use admit_surrealdb::{
-    DocChunkEmbeddingRow, DocEmbeddingRow, DocTitleEmbeddingRow, EmbedRunRow, SurrealCliConfig,
-    SurrealCliProjectionStore, UnresolvedLinkSuggestionRow,
+    DocChunkEmbeddingRow, DocEmbeddingRow, DocTitleEmbeddingRow, EmbedRunRow, IngestEventRow,
+    IngestRunRow, ProjectionEventRow, ProjectionStoreOps, SurrealCliConfig, SurrealCliProjectionStore,
+    UnresolvedLinkSuggestionRow,
+    QueryArtifactRow, FunctionArtifactRow,
+    projection_config::ProjectionConfig,
 };
 use admit_dag::ProjectionStore;
 use admit_embed::{OllamaEmbedConfig, OllamaEmbedder};
 
 use admit_cli::{
     append_checked_event, append_event, append_executed_event, append_plan_created_event,
+    append_ingest_event, append_projection_event, build_projection_event,
+    append_court_event, build_court_event,
     check_cost_declared, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
     execute_checked, export_plan_markdown, list_artifacts, read_artifact_projection,
-    ingest_dir,
+    ingest_dir_protocol_with_cache,
     read_file_bytes, registry_build, registry_init, render_plan_text, verify_ledger,
     verify_witness, ArtifactInput, DeclareCostInput, MetaRegistryV0, PlanNewInput,
     ScopeGateMode, VerifyWitnessInput,
+    register_query_artifact, register_function_artifact, load_meta_registry,
     scope_add, scope_verify, scope_list, scope_show,
     ScopeAddArgs as ScopeAddArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
     ScopeListArgs as ScopeListArgsLib, ScopeShowArgs as ScopeShowArgsLib,
@@ -29,6 +35,161 @@ enum SurrealDbMode {
     Off,
     Auto,
     On,
+}
+
+#[derive(Debug, Clone)]
+struct ProjectionSummary {
+    run_id: String,
+    status: admit_surrealdb::projection_run::RunStatus,
+    total_phases: usize,
+    successful_phases: usize,
+}
+
+#[derive(Debug)]
+struct ProjectionCoordinator {
+    mode: SurrealDbMode,
+    store: Option<SurrealCliProjectionStore>,
+    disabled_reason: Option<String>,
+    touched: bool,
+    last_summary: Option<ProjectionSummary>,
+}
+
+impl ProjectionCoordinator {
+    fn off() -> Self {
+        Self {
+            mode: SurrealDbMode::Off,
+            store: None,
+            disabled_reason: Some("off".to_string()),
+            touched: false,
+            last_summary: None,
+        }
+    }
+
+    fn active(mode: SurrealDbMode, store: SurrealCliProjectionStore) -> Self {
+        Self {
+            mode,
+            store: Some(store),
+            disabled_reason: None,
+            touched: false,
+            last_summary: None,
+        }
+    }
+
+    fn disabled(mode: SurrealDbMode, reason: String) -> Self {
+        Self {
+            mode,
+            store: None,
+            disabled_reason: Some(reason),
+            touched: false,
+            last_summary: None,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.store.is_some() && self.disabled_reason.is_none()
+    }
+
+    fn store(&self) -> Option<&SurrealCliProjectionStore> {
+        if self.is_active() {
+            self.store.as_ref()
+        } else {
+            None
+        }
+    }
+
+    fn touch(&mut self) {
+        self.touched = true;
+    }
+
+    fn disable(&mut self, reason: String) {
+        if self.disabled_reason.is_none() {
+            self.disabled_reason = Some(reason);
+        }
+    }
+
+    fn handle_error(&mut self, err: String) -> Result<(), String> {
+        match self.mode {
+            SurrealDbMode::On => Err(err),
+            SurrealDbMode::Auto | SurrealDbMode::Off => {
+                if self.disabled_reason.is_none() {
+                    eprintln!("Warning: SurrealDB projection disabled: {}", err);
+                }
+                self.disable(err);
+                Ok(())
+            }
+        }
+    }
+
+    fn with_store<T, F>(&mut self, context: &str, op: F) -> Result<Option<T>, String>
+    where
+        F: FnOnce(&SurrealCliProjectionStore) -> Result<T, String>,
+    {
+        self.touch();
+        let Some(store) = self.store() else {
+            return Ok(None);
+        };
+        match op(store) {
+            Ok(value) => Ok(Some(value)),
+            Err(err) => {
+                self.handle_error(format!("{}: {}", context, err))?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn require_store(&self, purpose: &str) -> Result<&SurrealCliProjectionStore, String> {
+        if let Some(store) = self.store.as_ref() {
+            if self.disabled_reason.is_none() {
+                return Ok(store);
+            }
+        }
+        let reason = self
+            .disabled_reason
+            .as_deref()
+            .unwrap_or("surrealdb projection not configured");
+        Err(format!(
+            "{} requires surrealdb projection (use --surrealdb-mode=on and set namespace/database): {}",
+            purpose, reason
+        ))
+    }
+
+    fn record_summary(&mut self, summary: ProjectionSummary) {
+        self.last_summary = Some(summary);
+    }
+
+    fn print_summary(&self, json_mode: bool) {
+        if !self.touched {
+            return;
+        }
+        let line = if self.mode == SurrealDbMode::Off {
+            "Projection: off".to_string()
+        } else if let Some(reason) = self.disabled_reason.as_ref() {
+            format!("Projection: skipped ({})", reason)
+        } else if let Some(summary) = self.last_summary.as_ref() {
+            let status = match summary.status {
+                admit_surrealdb::projection_run::RunStatus::Complete => "complete",
+                admit_surrealdb::projection_run::RunStatus::Partial => "partial",
+                admit_surrealdb::projection_run::RunStatus::Failed => "failed",
+                admit_surrealdb::projection_run::RunStatus::Running => "running",
+                admit_surrealdb::projection_run::RunStatus::Superseded => "superseded",
+            };
+            if summary.total_phases == 0 {
+                format!("Projection: {} (run_id={})", status, summary.run_id)
+            } else {
+                format!(
+                    "Projection: {} ({}/{} phases; run_id={})",
+                    status, summary.successful_phases, summary.total_phases, summary.run_id
+                )
+            }
+        } else {
+            "Projection: complete".to_string()
+        };
+        if json_mode {
+            eprintln!("{}", line);
+        } else {
+            println!("{}", line);
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -47,8 +208,8 @@ struct Cli {
     #[arg(long, conflicts_with = "surrealdb_mode")]
     surrealdb_project: bool,
 
-    /// SurrealDB projection mode: off|auto|on (default: auto). In auto mode, projection activates only when namespace+database are configured and the endpoint is ready.
-    #[arg(long, value_enum, default_value_t = SurrealDbMode::Auto)]
+    /// SurrealDB projection mode: off|auto|on (default: off). In auto mode, projection activates only when namespace+database are configured and the endpoint is ready.
+    #[arg(long, value_enum, default_value_t = SurrealDbMode::Off)]
     surrealdb_mode: SurrealDbMode,
 
     /// SurrealDB endpoint (passed to `surreal sql --endpoint`)
@@ -82,6 +243,31 @@ struct Cli {
     /// SurrealDB CLI binary name/path (default: surreal)
     #[arg(long, default_value = "surreal")]
     surrealdb_bin: String,
+
+    /// Projection phases to enable (comma-separated: dag_trace,doc_files,doc_chunks,headings,vault_links,stats,embeddings)
+    #[arg(long, value_delimiter = ',')]
+    projection_enabled: Option<Vec<String>>,
+
+    /// Override batch size for a projection phase (format: phase:size, e.g., nodes:100)
+    #[arg(long, value_name = "PHASE:SIZE")]
+    projection_batch_size: Option<Vec<String>>,
+
+    /// Max SurrealQL bytes per `surreal sql` invocation (default: 1000000)
+    #[arg(long, value_name = "BYTES")]
+    projection_max_sql_bytes: Option<usize>,
+
+    /// Force projection even if an identical complete run already exists
+    #[arg(long)]
+    projection_force: bool,
+
+    /// Projection failure handling mode: fail-fast|warn-and-continue|silent-ignore (default: warn-and-continue)
+    #[arg(long, value_enum)]
+    projection_failure_mode: Option<admit_surrealdb::projection_config::FailureHandling>,
+
+    /// Vault prefix for link resolution (repeatable, e.g., irrev-vault/)
+    #[arg(long, value_name = "PREFIX")]
+    vault_prefix: Option<Vec<String>>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -101,6 +287,8 @@ enum Commands {
     Plan(PlanArgs),
     Calc(CalcArgs),
     Ingest(IngestArgs),
+    Projection(ProjectionArgs),
+    Court(CourtArgs),
 }
 
 #[derive(Parser)]
@@ -150,6 +338,7 @@ struct DeclareCostArgs {
     /// Output JSON instead of key=value lines
     #[arg(long)]
     json: bool,
+
     /// Do not append to ledger
     #[arg(long)]
     dry_run: bool,
@@ -334,9 +523,133 @@ struct IngestArgs {
     command: IngestCommands,
 }
 
+#[derive(Parser)]
+struct ProjectionArgs {
+    #[command(subcommand)]
+    command: ProjectionCommands,
+}
+
+#[derive(Parser)]
+struct CourtArgs {
+    #[command(subcommand)]
+    command: CourtCommands,
+}
+
+#[derive(Subcommand)]
+enum CourtCommands {
+    Query(CourtQueryArgs),
+    Function(CourtFunctionArgs),
+}
+
+#[derive(Parser)]
+struct CourtQueryArgs {
+    #[command(subcommand)]
+    command: CourtQueryCommands,
+}
+
+#[derive(Subcommand)]
+enum CourtQueryCommands {
+    Add(CourtQueryAddArgs),
+}
+
+#[derive(Parser)]
+struct CourtFunctionArgs {
+    #[command(subcommand)]
+    command: CourtFunctionCommands,
+}
+
+#[derive(Subcommand)]
+enum CourtFunctionCommands {
+    Add(CourtFunctionAddArgs),
+}
+
+#[derive(Parser)]
+struct CourtQueryAddArgs {
+    /// Stable query name (human readable)
+    #[arg(long)]
+    name: String,
+
+    /// Query language identifier (default: surql)
+    #[arg(long, default_value = "surql")]
+    lang: String,
+
+    /// Path to a file containing the query source (UTF-8)
+    #[arg(long, value_name = "PATH")]
+    file: PathBuf,
+
+    /// Optional tags (repeatable)
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
+
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+
+    /// Do not append to ledger
+    #[arg(long)]
+    no_ledger: bool,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct CourtFunctionAddArgs {
+    /// Stable function name (human readable)
+    #[arg(long)]
+    name: String,
+
+    /// Function language identifier (default: surql)
+    #[arg(long, default_value = "surql")]
+    lang: String,
+
+    /// Path to a file containing the function source (UTF-8)
+    #[arg(long, value_name = "PATH")]
+    file: PathBuf,
+
+    /// Optional tags (repeatable)
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
+
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+
+    /// Do not append to ledger
+    #[arg(long)]
+    no_ledger: bool,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Subcommand)]
 enum IngestCommands {
     Dir(IngestDirArgs),
+}
+
+#[derive(Subcommand)]
+enum ProjectionCommands {
+    Vacuum(ProjectionVacuumArgs),
+    Retry(ProjectionRetryArgs),
 }
 
 #[derive(Parser)]
@@ -347,9 +660,24 @@ struct IngestDirArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
+    /// Path to incremental ingest cache (enables incremental mode)
+    #[arg(long, value_name = "PATH")]
+    incremental_cache: Option<PathBuf>,
     /// Output JSON instead of key=value lines
     #[arg(long)]
     json: bool,
+
+    /// Run projection twice and report performance delta
+    #[arg(long)]
+    bench: bool,
+
+    /// Ledger path for ingest/projection events (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+
+    /// Do not append ingest/projection events to the ledger
+    #[arg(long)]
+    no_ledger: bool,
 
     /// Compute and project Ollama embeddings for doc chunks (requires SurrealDB projection enabled)
     #[arg(long)]
@@ -359,7 +687,7 @@ struct IngestDirArgs {
     #[arg(long, value_name = "URL")]
     ollama_endpoint: Option<String>,
 
-    /// Ollama embedding model name (default: env ADMIT_OLLAMA_EMBED_MODEL or nomic-embed-text)
+    /// Ollama embedding model name (default: env ADMIT_OLLAMA_EMBED_MODEL or qwen3-embedding:0.6b)
     #[arg(long, value_name = "MODEL")]
     ollama_model: Option<String>,
 
@@ -387,7 +715,7 @@ struct IngestDirArgs {
     #[arg(long)]
     ollama_query_prefix: Option<String>,
 
-    /// Truncate embeddings to N dimensions (Matryoshka). 0 = keep full length.
+    /// Truncate embeddings to N dimensions. 0 = keep full native length.
     #[arg(long, default_value_t = 0)]
     ollama_dim: usize,
 
@@ -400,6 +728,71 @@ struct IngestDirArgs {
     ollama_suggest_limit: usize,
 }
 
+#[derive(Parser)]
+struct ProjectionVacuumArgs {
+    /// Delete runs older than the given projection run id
+    #[arg(long, value_name = "RUN_ID", conflicts_with = "run")]
+    before_run: Option<String>,
+
+    /// Delete a specific projection run id
+    #[arg(long, value_name = "RUN_ID", conflicts_with = "before_run")]
+    run: Option<String>,
+
+    /// Dry run: report runs that would be deleted
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+
+    /// Do not append to ledger
+    #[arg(long)]
+    no_ledger: bool,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Output JSON summary
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct ProjectionRetryArgs {
+    /// Projection run id to retry
+    #[arg(long, value_name = "RUN_ID")]
+    run: String,
+
+    /// Limit retry to a specific phase
+    #[arg(long, value_name = "PHASE")]
+    phase: Option<String>,
+
+    /// Limit retry to a specific failed batch hash
+    #[arg(long, value_name = "BATCH_HASH")]
+    batch: Option<String>,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+
+    /// Do not append to ledger
+    #[arg(long)]
+    no_ledger: bool,
+
+    /// Dry run: report what would be retried
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Output JSON summary
+    #[arg(long)]
+    json: bool,
+}
 #[derive(Subcommand)]
 enum RegistryCommands {
     Init(RegistryInitArgs),
@@ -689,8 +1082,8 @@ struct CalcDescribeArgs {
 fn main() {
     let cli = Cli::parse();
     let dag_trace_out = cli.dag_trace.as_deref();
-    let surreal = match maybe_build_surreal_projection_store(&cli) {
-        Ok(store) => store,
+    let mut projection = match build_projection_coordinator(&cli) {
+        Ok(coord) => coord,
         Err(err) => {
             eprintln!("{}", err);
             std::process::exit(1);
@@ -698,10 +1091,10 @@ fn main() {
     };
 
     let result = match cli.command {
-        Commands::DeclareCost(args) => run_declare_cost(args, dag_trace_out, surreal.as_ref()),
+        Commands::DeclareCost(args) => run_declare_cost(args, dag_trace_out, &mut projection),
         Commands::WitnessVerify(args) => run_witness_verify(args, dag_trace_out),
-        Commands::Check(args) => run_check(args, dag_trace_out, surreal.as_ref()),
-        Commands::Execute(args) => run_execute(args, dag_trace_out, surreal.as_ref()),
+        Commands::Check(args) => run_check(args, dag_trace_out, &mut projection),
+        Commands::Execute(args) => run_execute(args, dag_trace_out, &mut projection),
         Commands::VerifyLedger(args) => run_verify_ledger(args, dag_trace_out),
         Commands::BundleVerify(args) => run_bundle_verify(args, dag_trace_out),
         Commands::Observe(args) => run_observe(args, dag_trace_out),
@@ -709,17 +1102,31 @@ fn main() {
         Commands::ShowArtifact(args) => run_show_artifact(args, dag_trace_out),
         Commands::Registry(args) => run_registry(args, dag_trace_out),
         Commands::Plan(args) => match args.command {
-            PlanCommands::New(new_args) => run_plan_new(new_args, dag_trace_out, surreal.as_ref()),
+            PlanCommands::New(new_args) => run_plan_new(new_args, dag_trace_out, &mut projection),
             PlanCommands::Show(show_args) => run_plan_show(show_args, dag_trace_out),
             PlanCommands::Export(export_args) => run_plan_export(export_args, dag_trace_out),
         },
         Commands::Calc(args) => match args.command {
-            CalcCommands::Plan(plan_args) => run_calc_plan(plan_args, dag_trace_out, surreal.as_ref()),
-            CalcCommands::Execute(exec_args) => run_calc_execute(exec_args, dag_trace_out, surreal.as_ref()),
+            CalcCommands::Plan(plan_args) => run_calc_plan(plan_args, dag_trace_out, &mut projection),
+            CalcCommands::Execute(exec_args) => run_calc_execute(exec_args, dag_trace_out, &mut projection),
             CalcCommands::Describe(desc_args) => run_calc_describe(desc_args, dag_trace_out),
         },
         Commands::Ingest(args) => match args.command {
-            IngestCommands::Dir(dir_args) => run_ingest_dir(dir_args, dag_trace_out, surreal.as_ref()),
+            IngestCommands::Dir(dir_args) => {
+                run_ingest_dir(dir_args, dag_trace_out, &mut projection, cli.projection_force)
+            }
+        },
+        Commands::Projection(args) => match args.command {
+            ProjectionCommands::Vacuum(vacuum_args) => run_projection_vacuum(vacuum_args, &projection),
+            ProjectionCommands::Retry(retry_args) => run_projection_retry(retry_args, &projection),
+        },
+        Commands::Court(args) => match args.command {
+            CourtCommands::Query(q) => match q.command {
+                CourtQueryCommands::Add(a) => run_court_query_add(a, &mut projection),
+            },
+            CourtCommands::Function(f) => match f.command {
+                CourtFunctionCommands::Add(a) => run_court_function_add(a, &mut projection),
+            },
         },
     };
 
@@ -732,7 +1139,7 @@ fn main() {
 fn run_declare_cost(
     args: DeclareCostArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let witness_json = match args.witness_json {
         Some(path) => Some(
@@ -822,7 +1229,7 @@ fn run_declare_cost(
         }
     }
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_cost_declared(&event, &snapshot_hash_for_trace)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -830,7 +1237,7 @@ fn run_declare_cost(
             write_dag_trace(out, &trace_cbor)?;
             print_dag_trace_hint(args.json, out, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
+        maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
 
     Ok(())
@@ -873,7 +1280,7 @@ fn run_witness_verify(args: WitnessVerifyArgs, _dag_trace_out: Option<&Path>) ->
 fn run_check(
     args: CheckArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
@@ -944,7 +1351,7 @@ fn run_check(
         }
     }
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_checked(&event)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -952,7 +1359,7 @@ fn run_check(
             write_dag_trace(out, &trace_cbor)?;
             print_dag_trace_hint(args.json, out, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
+        maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
     Ok(())
 }
@@ -960,7 +1367,7 @@ fn run_check(
 fn run_execute(
     args: ExecuteArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
@@ -1001,7 +1408,7 @@ fn run_execute(
         }
     }
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_executed(&event)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -1009,7 +1416,7 @@ fn run_execute(
             write_dag_trace(out, &trace_cbor)?;
             print_dag_trace_hint(args.json, out, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
+        maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
     Ok(())
 }
@@ -1314,7 +1721,7 @@ fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(),
 fn run_plan_new(
     args: PlanNewArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let created_at = args
         .created_at
@@ -1352,7 +1759,7 @@ fn run_plan_new(
         }
     }
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_plan_created(&event)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -1360,7 +1767,7 @@ fn run_plan_new(
             write_dag_trace(out, &trace_cbor)?;
             print_dag_trace_hint(args.json, out, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
+        maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
 
     Ok(())
@@ -1553,7 +1960,7 @@ fn run_scope_show(args: ScopeShowArgs) -> Result<(), String> {
 fn run_calc_plan(
     args: CalcPlanArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     use admit_cli::calc_commands::calc_plan;
 
@@ -1578,7 +1985,7 @@ fn run_calc_plan(
     println!("inputs={}", plan.inputs.len());
     println!("out={}", args.out.display());
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_calc_plan(&plan_hash)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -1586,7 +1993,7 @@ fn run_calc_plan(
             write_dag_trace(out, &trace_cbor)?;
             print_dag_trace_hint(false, out, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
+        maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
 
     Ok(())
@@ -1595,7 +2002,7 @@ fn run_calc_plan(
 fn run_calc_execute(
     args: CalcExecuteArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     use admit_cli::calc_commands::calc_execute;
 
@@ -1626,7 +2033,7 @@ fn run_calc_execute(
     }
     println!("out={}", args.out.display());
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_calc_result(&witness.core.plan_hash, &witness_hash)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -1634,7 +2041,7 @@ fn run_calc_execute(
             write_dag_trace(out, &trace_cbor)?;
             print_dag_trace_hint(false, out, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
+        maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
 
     Ok(())
@@ -1655,39 +2062,150 @@ fn run_calc_describe(_args: CalcDescribeArgs, _dag_trace_out: Option<&Path>) -> 
 fn run_ingest_dir(
     args: IngestDirArgs,
     dag_trace_out: Option<&Path>,
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
+    projection_force: bool,
 ) -> Result<(), String> {
     let artifacts_dir = args
         .artifacts_dir
         .clone()
         .unwrap_or_else(default_artifacts_dir);
-    let out = ingest_dir(&args.path, Some(&artifacts_dir)).map_err(|err| err.to_string())?;
+    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
+    let incremental_cache = args
+        .incremental_cache
+        .clone()
+        .or_else(|| std::env::var("ADMIT_INCREMENTAL_CACHE").ok().map(PathBuf::from));
+    let proto = ingest_dir_protocol_with_cache(
+        &args.path,
+        Some(&artifacts_dir),
+        incremental_cache.as_deref(),
+    )
+    .map_err(|err| err.to_string())?;
+    let admit_cli::IngestDirProtocolOutput {
+        ingest_run_id,
+        config,
+        events,
+        error,
+        out,
+        coverage,
+        ingest_run: ingest_run_record,
+        ..
+    } = proto;
+
+    if !args.no_ledger {
+        for ev in events.iter() {
+            append_ingest_event(&ledger_path, ev).map_err(|e| e.to_string())?;
+        }
+    }
+
+    projection.with_store("surrealdb ingest projection", |surreal| {
+        let store_ops: &dyn ProjectionStoreOps = surreal;
+        store_ops
+            .ensure_schemas()
+            .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
+
+        let rows: Vec<IngestEventRow> = events.iter().map(to_ingest_event_row).collect();
+        store_ops
+            .project_ingest_events(&rows)
+            .map_err(|err| format!("surrealdb project ingest events failed: {}", err))?;
+
+        let started_at = events
+            .iter()
+            .find(|e| e.event_type == "ingest.run.started")
+            .map(|e| e.timestamp.clone())
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        let completed = events
+            .iter()
+            .rev()
+            .find(|e| e.event_type == "ingest.run.completed");
+        let finished_at = completed.map(|e| e.timestamp.clone());
+        let status = completed
+            .and_then(|e| e.status.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let root = events
+            .iter()
+            .find_map(|e| e.root.clone())
+            .unwrap_or_else(|| args.path.to_string_lossy().to_string());
+
+        store_ops
+            .project_ingest_run(&IngestRunRow {
+                ingest_run_id: ingest_run_id.clone(),
+                started_at,
+                finished_at,
+                status,
+                root,
+                config_sha256: config.sha256.clone(),
+                coverage_sha256: coverage.as_ref().map(|a| a.sha256.clone()),
+                ingest_run_sha256: ingest_run_record.as_ref().map(|a| a.sha256.clone()),
+                snapshot_sha256: completed.and_then(|e| e.snapshot_sha256.clone()),
+                parse_sha256: completed.and_then(|e| e.parse_sha256.clone()),
+                files: completed.and_then(|e| e.files),
+                chunks: completed.and_then(|e| e.chunks),
+                total_bytes: completed.and_then(|e| e.total_bytes),
+            })
+            .map_err(|err| format!("surrealdb project ingest run failed: {}", err))?;
+        Ok(())
+    })?;
+
+    let out = match out {
+        Some(out) => out,
+        None => return Err(error.unwrap_or_else(|| "ingest failed".to_string())),
+    };
 
     if args.json {
         let value = serde_json::json!({
+            "ingest_run_id": ingest_run_id,
             "root": out.root,
             "snapshot_sha256": out.snapshot_sha256,
             "parse_sha256": out.parse_sha256,
+            "coverage_sha256": coverage.as_ref().map(|a| a.sha256.clone()),
+            "config_sha256": config.sha256,
             "files": out.files.len(),
             "chunks": out.chunks.len(),
             "total_bytes": out.total_bytes,
             "artifacts_dir": artifacts_dir,
+            "incremental": out.incremental.as_ref().map(|inc| serde_json::json!({
+                "enabled": inc.enabled,
+                "cache_path": inc.cache_path.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "cache_reset": inc.cache_reset,
+                "cache_reset_reason": inc.cache_reset_reason,
+                "files_cached": inc.files_cached,
+                "files_parsed": inc.files_parsed,
+                "chunks_cached": inc.chunks_cached,
+                "chunks_parsed": inc.chunks_parsed,
+                "docs_to_resolve_links": inc.docs_to_resolve_links.len(),
+            })),
         });
         println!(
             "{}",
             serde_json::to_string(&value).map_err(|err| format!("json encode: {}", err))?
         );
     } else {
+        println!("ingest_run_id={}", ingest_run_id);
         println!("root={}", out.root.display());
         println!("snapshot_sha256={}", out.snapshot_sha256);
         println!("parse_sha256={}", out.parse_sha256);
+        println!("config_sha256={}", config.sha256);
+        if let Some(cov) = coverage.as_ref() {
+            println!("coverage_sha256={}", cov.sha256);
+        }
         println!("files={}", out.files.len());
         println!("chunks={}", out.chunks.len());
         println!("total_bytes={}", out.total_bytes);
         println!("artifacts_dir={}", artifacts_dir.display());
+        if let Some(inc) = out.incremental.as_ref() {
+            println!("incremental_enabled={}", inc.enabled);
+            if let Some(path) = inc.cache_path.as_ref() {
+                println!("incremental_cache={}", path.display());
+            }
+            println!("incremental_files_cached={}", inc.files_cached);
+            println!("incremental_files_parsed={}", inc.files_parsed);
+            println!("incremental_chunks_cached={}", inc.chunks_cached);
+            println!("incremental_chunks_parsed={}", inc.chunks_parsed);
+            println!("incremental_docs_to_resolve_links={}", inc.docs_to_resolve_links.len());
+        }
     }
 
-    let want_trace = dag_trace_out.is_some() || surreal.is_some();
+    let want_trace = dag_trace_out.is_some() || projection.is_active();
     if want_trace {
         let trace = build_trace_for_ingest_dir(&out)?;
         let (trace_sha256, trace_cbor) = encode_dag_trace(&trace)?;
@@ -1695,20 +2213,1329 @@ fn run_ingest_dir(
             write_dag_trace(out_path, &trace_cbor)?;
             print_dag_trace_hint(args.json, out_path, &trace_sha256);
         }
-        maybe_project_trace(surreal, &trace_sha256, &trace_cbor, trace.dag())?;
-        maybe_project_doc_files(surreal, trace.dag(), &artifacts_dir)?;
-        maybe_project_doc_chunks(surreal, trace.dag(), &artifacts_dir)?;
-        maybe_project_vault_links(surreal, trace.dag(), &artifacts_dir)?;
+        let docs_to_resolve = out.incremental.as_ref().and_then(|inc| {
+            if !inc.enabled {
+                return None;
+            }
+            let set = inc
+                .docs_to_resolve_links
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<String>>();
+            if set.is_empty() {
+                None
+            } else {
+                Some(set)
+            }
+        });
+        let mut projection_run_id: Option<String> = None;
+        let mut bench_first_ms: Option<u64> = None;
+        let mut bench_second_ms: Option<u64> = None;
+        let start = std::time::Instant::now();
+        let summary = projection.with_store("surrealdb projection", |surreal| {
+            project_ingest_dir_projections(
+                &args,
+                surreal,
+                &ledger_path,
+                &trace_sha256,
+                &trace_cbor,
+                trace.dag(),
+                &artifacts_dir,
+                &ingest_run_id,
+                docs_to_resolve.as_ref(),
+                args.bench,
+                projection_force,
+            )
+        })?;
+        let elapsed = start.elapsed().as_millis() as u64;
+        if args.bench {
+            if args.json {
+                eprintln!("projection_bench_first_ms={}", elapsed);
+            } else {
+                println!("projection_bench_first_ms={}", elapsed);
+            }
+        }
+        if let Some(summary) = summary {
+            projection_run_id = Some(summary.run_id.clone());
+            bench_first_ms = Some(elapsed);
+            projection.record_summary(summary);
+        }
+
+        if args.bench {
+            let start = std::time::Instant::now();
+            let summary = projection.with_store("surrealdb projection", |surreal| {
+                project_ingest_dir_projections(
+                    &args,
+                    surreal,
+                    &ledger_path,
+                    &trace_sha256,
+                    &trace_cbor,
+                    trace.dag(),
+                    &artifacts_dir,
+                    &ingest_run_id,
+                    docs_to_resolve.as_ref(),
+                    args.bench,
+                    projection_force,
+                )
+            })?;
+            let elapsed = start.elapsed().as_millis() as u64;
+            if args.json {
+                eprintln!("projection_bench_second_ms={}", elapsed);
+            } else {
+                println!("projection_bench_second_ms={}", elapsed);
+            }
+            if let Some(summary) = summary {
+                projection_run_id = Some(summary.run_id.clone());
+                bench_second_ms = Some(elapsed);
+                projection.record_summary(summary);
+            }
+
+            if let (Some(first), Some(second)) = (bench_first_ms, bench_second_ms) {
+                let delta = first as i64 - second as i64;
+                let sign = if delta >= 0 { "-" } else { "+" };
+                let delta_abs = delta.unsigned_abs();
+                if args.json {
+                    eprintln!(
+                        "projection_bench_total_ms={{\"first\":{},\"second\":{},\"delta_ms\":\"{}{}\"}}",
+                        first, second, sign, delta_abs
+                    );
+                } else {
+                    println!("projection_bench_first_ms={}", first);
+                    println!("projection_bench_second_ms={}", second);
+                    println!("projection_bench_delta_ms={}{}", sign, delta_abs);
+                }
+            } else if bench_first_ms.is_none() {
+                if args.json {
+                    eprintln!("projection_bench_skipped=true");
+                } else {
+                    println!("projection_bench_skipped=true");
+                }
+            }
+        }
 
         if args.ollama_embed {
-            let Some(surreal) = surreal else {
-                return Err("ollama embedding requires surrealdb projection enabled".to_string());
-            };
-            project_ollama_embeddings_for_trace(&args, surreal, trace.dag(), &artifacts_dir)?;
+            let surreal = projection.require_store("ollama embedding")?;
+            project_ollama_embeddings_for_trace(
+                &args,
+                surreal,
+                trace.dag(),
+                &artifacts_dir,
+                projection_run_id.as_deref(),
+            )?;
+        }
+    }
+
+    projection.print_summary(args.json);
+
+    Ok(())
+}
+
+fn run_projection_vacuum(
+    args: ProjectionVacuumArgs,
+    projection: &ProjectionCoordinator,
+) -> Result<(), String> {
+    use admit_surrealdb::projection_store::ProjectionStoreOps;
+
+    let store = projection.require_store("projection vacuum")?;
+    let store_ops: &dyn ProjectionStoreOps = store;
+    if !store.is_ready().map_err(|e| format!("surrealdb is-ready failed: {}", e))? {
+        return Err("surrealdb endpoint not ready".to_string());
+    }
+    store_ops
+        .ensure_schemas()
+        .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
+
+    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
+    let artifacts_dir = args
+        .artifacts_dir
+        .clone()
+        .unwrap_or_else(default_artifacts_dir);
+
+    let run_ids = if let Some(run_id) = args.run.clone() {
+        vec![run_id]
+    } else if let Some(before_run) = args.before_run.as_ref() {
+        let Some(started_at) = store
+            .projection_run_started_at(before_run)
+            .map_err(|e| format!("lookup projection run {}: {}", before_run, e))?
+        else {
+            return Err(format!("projection run not found: {}", before_run));
+        };
+        store
+            .projection_run_ids_before(&started_at)
+            .map_err(|e| format!("list projection runs before {}: {}", before_run, e))?
+    } else {
+        return Err("projection vacuum requires --before-run or --run".to_string());
+    };
+
+    if run_ids.is_empty() {
+        if args.json {
+            let value = serde_json::json!({
+                "before_run": args.before_run,
+                "run": args.run,
+                "dry_run": args.dry_run,
+                "runs": run_ids,
+            });
+            println!(
+                "{}",
+                serde_json::to_string(&value).map_err(|err| format!("json encode: {}", err))?
+            );
+        } else {
+            println!("projection_vacuum_runs=0");
+        }
+        return Ok(());
+    }
+
+    let before_run = args.before_run.clone();
+    let run = args.run.clone();
+
+    let op_started_at = chrono::Utc::now().to_rfc3339();
+    let op_id = sha256_hex(&format!(
+        "projection.vacuum.v1|{}|{}|{}|{}|{}|{}|{}",
+        op_started_at,
+        before_run.clone().unwrap_or_default(),
+        run.clone().unwrap_or_default(),
+        args.dry_run,
+        store.config().endpoint,
+        store.config().namespace.clone().unwrap_or_default(),
+        store.config().database.clone().unwrap_or_default(),
+    ));
+
+    let meta_base = serde_json::json!({
+        "before_run": before_run.clone(),
+        "run": run.clone(),
+        "dry_run": args.dry_run,
+        "runs": run_ids.clone(),
+        "runs_deleted": run_ids.len(),
+        "surrealdb": {
+            "endpoint": store.config().endpoint,
+            "namespace": store.config().namespace,
+            "database": store.config().database,
+        },
+    });
+
+    let ev_started = build_projection_event(
+        "projection.vacuum.started",
+        &op_id,
+        op_started_at.clone(),
+        None,
+        None,
+        Some("running".to_string()),
+        None,
+        None,
+        None,
+        None,
+        Some(meta_base.clone()),
+    )
+    .map_err(|e| e.to_string())?;
+    if !args.no_ledger {
+        append_projection_event(&ledger_path, &ev_started).map_err(|e| e.to_string())?;
+    }
+    store_ops
+        .project_projection_events(&[to_projection_event_row(&ev_started)])
+        .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+
+    let start = std::time::Instant::now();
+    if !args.dry_run {
+        store
+            .vacuum_projection_runs(&run_ids)
+            .map_err(|e| format!("projection vacuum failed: {}", e))?;
+    }
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    let vacuum_value = serde_json::json!({
+        "schema_id": "projection-vacuum/1",
+        "created_at_utc": chrono::Utc::now().to_rfc3339(),
+        "op_id": op_id,
+        "before_run": before_run.clone(),
+        "run": run.clone(),
+        "dry_run": args.dry_run,
+        "runs_deleted": run_ids.len(),
+        "runs": run_ids.clone(),
+        "surrealdb": {
+            "endpoint": store.config().endpoint,
+            "namespace": store.config().namespace,
+            "database": store.config().database,
+        },
+    });
+    let vacuum_artifact = admit_cli::store_value_artifact(
+        &artifacts_dir,
+        "projection_vacuum",
+        "projection-vacuum/1",
+        &vacuum_value,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let completed_at = chrono::Utc::now().to_rfc3339();
+    let ev_completed = build_projection_event(
+        "projection.vacuum.completed",
+        &op_id,
+        completed_at.clone(),
+        None,
+        None,
+        Some(if args.dry_run {
+            "dry_run".to_string()
+        } else {
+            "complete".to_string()
+        }),
+        Some(duration_ms),
+        None,
+        None,
+        None,
+        Some(serde_json::json!({
+            "artifact": vacuum_artifact,
+            "details": meta_base,
+        })),
+    )
+    .map_err(|e| e.to_string())?;
+    if !args.no_ledger {
+        append_projection_event(&ledger_path, &ev_completed).map_err(|e| e.to_string())?;
+    }
+    store_ops
+        .project_projection_events(&[to_projection_event_row(&ev_completed)])
+        .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+
+    if args.json {
+        let value = serde_json::json!({
+            "before_run": before_run,
+            "run": run,
+            "dry_run": args.dry_run,
+            "runs": ev_started.meta.as_ref().and_then(|m| m.get("runs")).cloned().unwrap_or_else(|| serde_json::json!([])),
+            "runs_deleted": run_ids.len(),
+            "ledger": ledger_path,
+            "artifacts_dir": artifacts_dir,
+            "artifact": vacuum_artifact,
+            "events": [ev_started, ev_completed],
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).map_err(|err| format!("json encode: {}", err))?
+        );
+    } else {
+        println!("projection_vacuum_runs={}", run_ids.len());
+        for run_id in &run_ids {
+            println!("run_id={}", run_id);
         }
     }
 
     Ok(())
+}
+
+fn run_projection_retry(
+    args: ProjectionRetryArgs,
+    projection: &ProjectionCoordinator,
+) -> Result<(), String> {
+    use admit_surrealdb::projection_run::{PhaseResult, PhaseStatus};
+    use admit_surrealdb::projection_store::ProjectionStoreOps;
+
+    let store = projection.require_store("projection retry")?;
+    let store_ops: &dyn ProjectionStoreOps = store;
+    if !store.is_ready().map_err(|e| format!("surrealdb is-ready failed: {}", e))? {
+        return Err("surrealdb endpoint not ready".to_string());
+    }
+    store_ops
+        .ensure_schemas()
+        .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
+
+    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
+
+    let run_value = store
+        .projection_run_record(&args.run)
+        .map_err(|e| format!("load projection run {}: {}", args.run, e))?
+        .ok_or_else(|| format!("projection run not found: {}", args.run))?;
+
+    let trace_sha256 = run_value
+        .get("trace_sha256")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "projection run missing trace_sha256".to_string())?
+        .to_string();
+
+    let phases_enabled: Vec<String> = run_value
+        .get("phases_enabled")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let phase_results_value = run_value
+        .get("phase_results")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let phase_results_value = if let serde_json::Value::String(s) = &phase_results_value {
+        serde_json::from_str::<serde_json::Value>(s)
+            .map_err(|e| format!("parse phase_results: {}", e))?
+    } else {
+        phase_results_value
+    };
+
+    let mut phase_results: std::collections::BTreeMap<String, PhaseResult> =
+        serde_json::from_value(phase_results_value)
+            .map_err(|e| format!("decode phase_results: {}", e))?;
+
+    let mut target_phases: Vec<String> = if let Some(phase) = args.phase.clone() {
+        vec![phase]
+    } else {
+        phase_results
+            .iter()
+            .filter(|(_, r)| {
+                r.status == PhaseStatus::Failed || !r.failed_batches.is_empty()
+            })
+            .map(|(k, _)| k.clone())
+            .collect()
+    };
+    target_phases.sort();
+    target_phases.dedup();
+
+    if let Some(batch_hash) = args.batch.as_ref() {
+        let mut found_phase = None;
+        for (phase, result) in phase_results.iter() {
+            if result
+                .failed_batches
+                .iter()
+                .any(|b| &b.batch_hash == batch_hash)
+            {
+                found_phase = Some(phase.clone());
+                break;
+            }
+        }
+        if let Some(phase) = found_phase {
+            target_phases = vec![phase];
+        } else {
+            return Err(format!("batch hash not found in run {}", args.run));
+        }
+    }
+
+    if target_phases.is_empty() {
+        if args.json {
+            let value = serde_json::json!({
+                "run": args.run,
+                "dry_run": args.dry_run,
+                "phases": [],
+            });
+            println!(
+                "{}",
+                serde_json::to_string(&value).map_err(|err| format!("json encode: {}", err))?
+            );
+        } else {
+            println!("projection_retry_phases=0");
+        }
+        return Ok(());
+    }
+
+    let artifacts_dir = args.artifacts_dir.clone().unwrap_or_else(default_artifacts_dir);
+
+    let mut retry_plan: Vec<(String, usize)> = Vec::new();
+    for phase in &target_phases {
+        if let Some(result) = phase_results.get(phase) {
+            let mut count = result.failed_batches.len();
+            if let Some(batch_hash) = args.batch.as_ref() {
+                count = result
+                    .failed_batches
+                    .iter()
+                    .filter(|b| &b.batch_hash == batch_hash)
+                    .count();
+            }
+            retry_plan.push((phase.clone(), count));
+        }
+    }
+
+    if args.dry_run {
+        if args.json {
+            let value = serde_json::json!({
+                "run": args.run,
+                "dry_run": true,
+                "phases": retry_plan.iter().map(|(p, c)| serde_json::json!({"phase": p, "failed_batches": c})).collect::<Vec<_>>(),
+            });
+            println!(
+                "{}",
+                serde_json::to_string(&value).map_err(|err| format!("json encode: {}", err))?
+            );
+        } else {
+            println!("projection_retry_phases={}", retry_plan.len());
+            for (phase, count) in retry_plan {
+                println!("phase={} failed_batches={}", phase, count);
+            }
+        }
+        return Ok(());
+    }
+
+    let requested_phase = args.phase.clone();
+    let requested_batch = args.batch.clone();
+
+    let ev_started = build_projection_event(
+        "projection.retry.started",
+        &args.run,
+        chrono::Utc::now().to_rfc3339(),
+        Some(trace_sha256.clone()),
+        requested_phase.clone(),
+        Some("running".to_string()),
+        None,
+        None,
+        None,
+        None,
+        Some(serde_json::json!({
+            "requested_phase": requested_phase,
+            "requested_batch": requested_batch,
+            "retry_plan": retry_plan.iter().map(|(p, c)| serde_json::json!({"phase": p, "failed_batches": c})).collect::<Vec<_>>(),
+        })),
+    )
+    .map_err(|e| e.to_string())?;
+    if !args.no_ledger {
+        append_projection_event(&ledger_path, &ev_started).map_err(|e| e.to_string())?;
+    }
+    store_ops
+        .project_projection_events(&[to_projection_event_row(&ev_started)])
+        .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+
+    let trace_bytes = store
+        .dag_trace_bytes_for_trace(&trace_sha256)
+        .map_err(|e| format!("load dag_trace {}: {}", trace_sha256, e))?;
+    let trace_value: serde_json::Value = serde_cbor::from_slice(&trace_bytes)
+        .map_err(|e| format!("decode dag_trace cbor: {}", e))?;
+    let dag: admit_dag::GovernedDag = serde_json::from_value(trace_value)
+        .map_err(|e| format!("decode dag from trace: {}", e))?;
+
+    for phase in target_phases.iter() {
+        let Some(original) = phase_results.get(phase).cloned() else {
+            continue;
+        };
+
+        let mut selected_batches: Vec<admit_surrealdb::projection_run::FailedBatch> =
+            original.failed_batches.clone();
+        if let Some(batch_hash) = args.batch.as_ref() {
+            selected_batches = selected_batches
+                .into_iter()
+                .filter(|b| &b.batch_hash == batch_hash)
+                .collect();
+        }
+
+        let start = std::time::Instant::now();
+        let new_result = match phase.as_str() {
+            "dag_trace" => {
+                if selected_batches.is_empty() || original.status == PhaseStatus::Failed {
+                    store_ops
+                        .project_dag_trace(&trace_sha256, &trace_bytes, &dag, Some(&args.run))
+                        .map_err(|e| e.to_string())?
+                } else {
+                    let (succeeded, still_failed) = store
+                        .retry_dag_trace_batches(&dag, &args.run, &selected_batches)
+                        .map_err(|e| format!("retry dag_trace: {}", e))?;
+                    merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
+                }
+            }
+            "doc_files" => {
+                if selected_batches.is_empty() || original.status == PhaseStatus::Failed {
+                    store_ops
+                        .project_doc_files(&dag, &artifacts_dir, Some(&args.run))
+                        .map_err(|e| e.to_string())?
+                } else {
+                    let (succeeded, still_failed) = store
+                        .retry_doc_files_batches(&dag, &artifacts_dir, &args.run, &selected_batches)
+                        .map_err(|e| format!("retry doc_files: {}", e))?;
+                    merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
+                }
+            }
+            "doc_chunks" => {
+                if selected_batches.is_empty() || original.status == PhaseStatus::Failed {
+                    store_ops
+                        .project_doc_chunks(&dag, &artifacts_dir, &[], Some(&args.run))
+                        .map_err(|e| e.to_string())?
+                } else {
+                    let (succeeded, still_failed) = store
+                        .retry_doc_chunks_batches(&dag, &artifacts_dir, &args.run, &selected_batches)
+                        .map_err(|e| format!("retry doc_chunks: {}", e))?;
+                    merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
+                }
+            }
+            "vault_links" => {
+                let dag_doc_paths: Vec<String> = dag
+                    .nodes()
+                    .iter()
+                    .filter_map(|(_id, node)| match &node.kind {
+                        admit_dag::NodeKind::FileAtPath { path, .. } => Some(path.clone()),
+                        _ => None,
+                    })
+                    .filter(|p| p.to_lowercase().ends_with(".md"))
+                    .collect();
+                let (effective_vault_prefixes, _did_fallback) =
+                    admit_cli::effective_vault_prefixes_for_doc_paths(
+                        &dag_doc_paths,
+                        &store.projection_config().vault_prefixes,
+                    );
+                let vault_prefix_refs: Vec<&str> =
+                    effective_vault_prefixes.iter().map(|s| s.as_str()).collect();
+                store_ops
+                    .project_vault_links(&dag, &artifacts_dir, &vault_prefix_refs, None, Some(&args.run))
+                    .map_err(|e| e.to_string())?
+            }
+            _ => {
+                eprintln!("projection retry: unsupported phase '{}'", phase);
+                original.clone()
+            }
+        };
+
+        phase_results.insert(phase.clone(), new_result);
+    }
+
+    let new_status = compute_run_status(&phases_enabled, &phase_results);
+    let finished_at = chrono::Utc::now().to_rfc3339();
+    store
+        .end_projection_run(&args.run, new_status, &finished_at, &phase_results)
+        .map_err(|e| format!("update projection run after retry: {}", e))?;
+
+    let phase_statuses: Vec<serde_json::Value> = phase_results
+        .iter()
+        .map(|(phase, result)| {
+            let status = match result.status {
+                PhaseStatus::Complete => "complete",
+                PhaseStatus::Partial => "partial",
+                PhaseStatus::Failed => "failed",
+                PhaseStatus::Running => "running",
+            };
+            serde_json::json!({
+                "phase": phase,
+                "status": status,
+                "failed_batches": result.failed_batches.len(),
+                "successful_batches": result.successful_batches,
+                "total_batches": result.total_batches,
+            })
+        })
+        .collect();
+    let ev_completed = build_projection_event(
+        "projection.retry.completed",
+        &args.run,
+        chrono::Utc::now().to_rfc3339(),
+        Some(trace_sha256.clone()),
+        args.phase.clone(),
+        Some(new_status.to_string()),
+        None,
+        None,
+        None,
+        None,
+        Some(serde_json::json!({
+            "phases": phase_statuses,
+        })),
+    )
+    .map_err(|e| e.to_string())?;
+    if !args.no_ledger {
+        append_projection_event(&ledger_path, &ev_completed).map_err(|e| e.to_string())?;
+    }
+    store_ops
+        .project_projection_events(&[to_projection_event_row(&ev_completed)])
+        .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+
+    if args.json {
+        let value = serde_json::json!({
+            "run": args.run,
+            "status": new_status.to_string(),
+            "phases": phase_results,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).map_err(|err| format!("json encode: {}", err))?
+        );
+    } else {
+        println!("projection_retry_run={}", args.run);
+        println!("projection_retry_status={}", new_status);
+        for (phase, result) in phase_results {
+            println!(
+                "phase={} status={} failed_batches={}",
+                phase,
+                match result.status {
+                    PhaseStatus::Complete => "complete",
+                    PhaseStatus::Partial => "partial",
+                    PhaseStatus::Failed => "failed",
+                    PhaseStatus::Running => "running",
+                },
+                result.failed_batches.len()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_retry_results(
+    mut original: admit_surrealdb::projection_run::PhaseResult,
+    retried_successes: usize,
+    retried_failures: Vec<admit_surrealdb::projection_run::FailedBatch>,
+    duration: std::time::Duration,
+) -> admit_surrealdb::projection_run::PhaseResult {
+    let mut failed_map: std::collections::BTreeMap<String, admit_surrealdb::projection_run::FailedBatch> =
+        retried_failures
+            .into_iter()
+            .map(|b| (b.batch_hash.clone(), b))
+            .collect();
+
+    let mut new_failed: Vec<admit_surrealdb::projection_run::FailedBatch> = Vec::new();
+    let mut recovered = 0usize;
+    for batch in original.failed_batches.iter() {
+        if let Some(updated) = failed_map.remove(&batch.batch_hash) {
+            new_failed.push(updated);
+        } else {
+            recovered += 1;
+        }
+    }
+
+    original.successful_batches = original.successful_batches.saturating_add(retried_successes + recovered);
+    original.failed_batches = new_failed;
+    original.duration_ms = duration.as_millis() as u64;
+    if original.failed_batches.is_empty() {
+        original.status = admit_surrealdb::projection_run::PhaseStatus::Complete;
+        original.error = None;
+    } else if original.successful_batches == 0 {
+        original.status = admit_surrealdb::projection_run::PhaseStatus::Failed;
+        original.error = Some(format!(
+            "{} of {} batches failed",
+            original.failed_batches.len(),
+            original.total_batches
+        ));
+    } else {
+        original.status = admit_surrealdb::projection_run::PhaseStatus::Partial;
+        original.error = Some(format!(
+            "{} of {} batches failed",
+            original.failed_batches.len(),
+            original.total_batches
+        ));
+    }
+    original
+}
+
+fn compute_run_status(
+    phases_enabled: &[String],
+    phase_results: &std::collections::BTreeMap<String, admit_surrealdb::projection_run::PhaseResult>,
+) -> admit_surrealdb::projection_run::RunStatus {
+    use admit_surrealdb::projection_run::PhaseStatus;
+    use admit_surrealdb::projection_run::RunStatus;
+
+    if phase_results.is_empty() {
+        return RunStatus::Running;
+    }
+
+    let total_phases = if phases_enabled.is_empty() {
+        phase_results.len()
+    } else {
+        phases_enabled.len()
+    };
+
+    let completed = phase_results
+        .values()
+        .filter(|r| r.status == PhaseStatus::Complete)
+        .count();
+    let failed = phase_results
+        .values()
+        .filter(|r| r.status == PhaseStatus::Failed)
+        .count();
+    let partial = phase_results
+        .values()
+        .filter(|r| r.status == PhaseStatus::Partial)
+        .count();
+
+    if failed == total_phases {
+        RunStatus::Failed
+    } else if completed == total_phases {
+        RunStatus::Complete
+    } else if completed > 0 || failed > 0 || partial > 0 {
+        RunStatus::Partial
+    } else {
+        RunStatus::Running
+    }
+}
+
+fn run_court_query_add(
+    args: CourtQueryAddArgs,
+    projection: &mut ProjectionCoordinator,
+) -> Result<(), String> {
+    let artifacts_dir = args
+        .artifacts_dir
+        .clone()
+        .unwrap_or_else(default_artifacts_dir);
+    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
+
+    let source_bytes = read_file_bytes(&args.file).map_err(|e| format!("read query file: {}", e))?;
+    let source = String::from_utf8(source_bytes)
+        .map_err(|e| format!("query file must be UTF-8: {}", e))?;
+
+    let mut tags = args.tags.clone();
+    tags.sort();
+    tags.dedup();
+
+    let (registry, _registry_hash): (Option<MetaRegistryV0>, Option<String>) =
+        match load_meta_registry(args.meta_registry.as_deref()).map_err(|e| e.to_string())? {
+            Some((r, h)) => (Some(r), Some(h)),
+            None => (None, None),
+        };
+
+    let artifact = register_query_artifact(
+        &artifacts_dir,
+        &args.name,
+        &args.lang,
+        &source,
+        tags.clone(),
+        registry.as_ref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let event = build_court_event(
+        "court.query.registered",
+        timestamp.clone(),
+        "query",
+        artifact.clone(),
+        Some(args.name.clone()),
+        Some(args.lang.clone()),
+        Some(tags.clone()),
+    )
+    .map_err(|e| e.to_string())?;
+
+    if !args.no_ledger {
+        append_court_event(&ledger_path, &event).map_err(|e| e.to_string())?;
+    }
+
+    projection.with_store("surrealdb project query artifact", |surreal| {
+        let store_ops: &dyn ProjectionStoreOps = surreal;
+        store_ops
+            .ensure_schemas()
+            .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
+        store_ops
+            .project_query_artifacts(&[QueryArtifactRow {
+                artifact_sha256: artifact.sha256.clone(),
+                schema_id: artifact.schema_id.clone(),
+                name: args.name.clone(),
+                lang: args.lang.clone(),
+                source,
+                tags: tags.clone(),
+                created_at_utc: timestamp.clone(),
+            }])
+            .map_err(|err| format!("surrealdb project query artifact failed: {}", err))?;
+        Ok(())
+    })?;
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "event": event,
+                "artifact": artifact,
+                "ledger": ledger_path,
+                "artifacts_dir": artifacts_dir,
+            }))
+            .map_err(|e| format!("json encode: {}", e))?
+        );
+    } else {
+        println!("event_id={}", event.event_id);
+        println!("artifact_kind={}", artifact.kind);
+        println!("artifact_sha256={}", artifact.sha256);
+        println!("schema_id={}", artifact.schema_id);
+        println!("ledger={}", ledger_path.display());
+        println!("artifacts_dir={}", artifacts_dir.display());
+        if args.no_ledger {
+            println!("no_ledger=true");
+        }
+    }
+
+    Ok(())
+}
+
+fn run_court_function_add(
+    args: CourtFunctionAddArgs,
+    projection: &mut ProjectionCoordinator,
+) -> Result<(), String> {
+    let artifacts_dir = args
+        .artifacts_dir
+        .clone()
+        .unwrap_or_else(default_artifacts_dir);
+    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
+
+    let source_bytes =
+        read_file_bytes(&args.file).map_err(|e| format!("read function file: {}", e))?;
+    let source = String::from_utf8(source_bytes)
+        .map_err(|e| format!("function file must be UTF-8: {}", e))?;
+
+    let mut tags = args.tags.clone();
+    tags.sort();
+    tags.dedup();
+
+    let (registry, _registry_hash): (Option<MetaRegistryV0>, Option<String>) =
+        match load_meta_registry(args.meta_registry.as_deref()).map_err(|e| e.to_string())? {
+            Some((r, h)) => (Some(r), Some(h)),
+            None => (None, None),
+        };
+
+    let artifact = register_function_artifact(
+        &artifacts_dir,
+        &args.name,
+        &args.lang,
+        &source,
+        tags.clone(),
+        registry.as_ref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let event = build_court_event(
+        "court.function.registered",
+        timestamp.clone(),
+        "function",
+        artifact.clone(),
+        Some(args.name.clone()),
+        Some(args.lang.clone()),
+        Some(tags.clone()),
+    )
+    .map_err(|e| e.to_string())?;
+
+    if !args.no_ledger {
+        append_court_event(&ledger_path, &event).map_err(|e| e.to_string())?;
+    }
+
+    projection.with_store("surrealdb project function artifact", |surreal| {
+        let store_ops: &dyn ProjectionStoreOps = surreal;
+        store_ops
+            .ensure_schemas()
+            .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
+        store_ops
+            .project_function_artifacts(&[FunctionArtifactRow {
+                artifact_sha256: artifact.sha256.clone(),
+                schema_id: artifact.schema_id.clone(),
+                name: args.name.clone(),
+                lang: args.lang.clone(),
+                source,
+                tags: tags.clone(),
+                created_at_utc: timestamp.clone(),
+            }])
+            .map_err(|err| format!("surrealdb project function artifact failed: {}", err))?;
+        Ok(())
+    })?;
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "event": event,
+                "artifact": artifact,
+                "ledger": ledger_path,
+                "artifacts_dir": artifacts_dir,
+            }))
+            .map_err(|e| format!("json encode: {}", e))?
+        );
+    } else {
+        println!("event_id={}", event.event_id);
+        println!("artifact_kind={}", artifact.kind);
+        println!("artifact_sha256={}", artifact.sha256);
+        println!("schema_id={}", artifact.schema_id);
+        println!("ledger={}", ledger_path.display());
+        println!("artifacts_dir={}", artifacts_dir.display());
+        if args.no_ledger {
+            println!("no_ledger=true");
+        }
+    }
+
+    Ok(())
+}
+
+fn to_projection_event_row(event: &admit_cli::ProjectionEvent) -> ProjectionEventRow {
+    ProjectionEventRow {
+        event_id: event.event_id.clone(),
+        event_type: event.event_type.clone(),
+        timestamp: event.timestamp.clone(),
+        projection_run_id: event.projection_run_id.clone(),
+        phase: event.phase.clone(),
+        status: event.status.clone(),
+        duration_ms: event.duration_ms,
+        error: event.error.clone(),
+        trace_sha256: event.trace_sha256.clone(),
+        config_hash: event.config_hash.clone(),
+        projector_version: event.projector_version.clone(),
+        meta: event.meta.clone(),
+    }
+}
+
+fn to_ingest_event_row(event: &admit_cli::IngestEvent) -> IngestEventRow {
+    IngestEventRow {
+        event_id: event.event_id.clone(),
+        event_type: event.event_type.clone(),
+        timestamp: event.timestamp.clone(),
+        ingest_run_id: event.ingest_run_id.clone(),
+        status: event.status.clone(),
+        duration_ms: event.duration_ms,
+        error: event.error.clone(),
+        root: event.root.clone(),
+        config_sha256: event.config.as_ref().map(|a| a.sha256.clone()),
+        coverage_sha256: event.coverage.as_ref().map(|a| a.sha256.clone()),
+        ingest_run_sha256: event.ingest_run.as_ref().map(|a| a.sha256.clone()),
+        snapshot_sha256: event.snapshot_sha256.clone(),
+        parse_sha256: event.parse_sha256.clone(),
+        files: event.files,
+        chunks: event.chunks,
+        total_bytes: event.total_bytes,
+    }
+}
+
+fn project_ingest_dir_projections(
+    args: &IngestDirArgs,
+    store: &SurrealCliProjectionStore,
+    ledger_path: &Path,
+    trace_sha256: &str,
+    trace_cbor: &[u8],
+    dag: &admit_dag::GovernedDag,
+    artifacts_dir: &Path,
+    ingest_run_id: &str,
+    docs_to_resolve_links: Option<&std::collections::BTreeSet<String>>,
+    emit_metrics: bool,
+    projection_force: bool,
+) -> Result<ProjectionSummary, String> {
+    use admit_surrealdb::projection_run::{get_projector_version, PhaseResult, PhaseStatus};
+
+    let projection_config = store.projection_config().clone();
+    let projector_version = get_projector_version();
+    let config_hash = projection_config.compute_hash();
+    let phases_enabled: Vec<String> = projection_config
+        .enabled_phases
+        .enabled_phase_names()
+        .into_iter()
+        .filter(|p| matches!(p.as_str(), "dag_trace" | "doc_files" | "doc_chunks" | "vault_links"))
+        .collect();
+
+    let store_ops: &dyn ProjectionStoreOps = store;
+    store_ops
+        .ensure_schemas()
+        .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
+
+    let dag_doc_paths: Vec<String> = dag
+        .nodes()
+        .iter()
+        .filter_map(|(_id, node)| match &node.kind {
+            admit_dag::NodeKind::FileAtPath { path, .. } => Some(path.clone()),
+            _ => None,
+        })
+        .filter(|p| p.to_lowercase().ends_with(".md"))
+        .collect();
+    let (effective_vault_prefixes, did_vault_prefix_fallback) =
+        admit_cli::effective_vault_prefixes_for_doc_paths(
+            &dag_doc_paths,
+            &projection_config.vault_prefixes,
+        );
+
+    // Skip projection work if an identical complete run already exists (unless forced/benching).
+    let effective_force = projection_force || emit_metrics;
+    if !effective_force {
+        if let Some(existing) = store
+            .find_complete_projection_run(trace_sha256, &config_hash, &phases_enabled)
+            .map_err(|e| format!("surrealdb find complete projection run failed: {}", e))?
+        {
+            if let Some(existing_run_id) = existing.get("run_id").and_then(|v| v.as_str()) {
+                let mut skipped_events: Vec<admit_cli::ProjectionEvent> = Vec::new();
+                for phase in phases_enabled.iter() {
+                    let ev = build_projection_event(
+                        "projection.phase.skipped",
+                        existing_run_id,
+                        chrono::Utc::now().to_rfc3339(),
+                        Some(trace_sha256.to_string()),
+                        Some(phase.clone()),
+                        Some("skipped".to_string()),
+                        Some(0),
+                        None,
+                        Some(config_hash.clone()),
+                        Some(projector_version.clone()),
+                        Some(serde_json::json!({
+                            "reason": "already_complete",
+                            "skipped_projection_run_id": existing_run_id,
+                        })),
+                    )
+                    .map_err(|err| err.to_string())?;
+                    skipped_events.push(ev);
+                }
+
+                if !args.no_ledger {
+                    for ev in skipped_events.iter() {
+                        append_projection_event(ledger_path, ev).map_err(|e| e.to_string())?;
+                    }
+                }
+                let rows: Vec<ProjectionEventRow> =
+                    skipped_events.iter().map(to_projection_event_row).collect();
+                store_ops
+                    .project_projection_events(&rows)
+                    .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+
+                return Ok(ProjectionSummary {
+                    run_id: existing_run_id.to_string(),
+                    status: admit_surrealdb::projection_run::RunStatus::Complete,
+                    total_phases: phases_enabled.len(),
+                    successful_phases: phases_enabled.len(),
+                });
+            }
+        }
+    }
+
+    let mut run = admit_surrealdb::projection_run::ProjectionRun::new(
+        trace_sha256.to_string(),
+        projector_version.clone(),
+        config_hash.clone(),
+        phases_enabled.clone(),
+        Some(ingest_run_id.to_string()),
+    );
+    let run_id = store_ops
+        .begin_run(&run)
+        .map_err(|err| format!("surrealdb begin projection run failed: {}", err))?;
+
+    let mut events: Vec<admit_cli::ProjectionEvent> = Vec::new();
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let run_started = build_projection_event(
+        "projection.run.started",
+        &run_id,
+        timestamp,
+        Some(trace_sha256.to_string()),
+        None,
+        Some("running".to_string()),
+        None,
+        None,
+        Some(config_hash.clone()),
+        Some(projector_version.clone()),
+        None,
+    )
+    .map_err(|err| err.to_string())?;
+    events.push(run_started);
+
+    // Helper: emit to ledger and SurrealDB.
+    let flush_events = |store_ops: &dyn ProjectionStoreOps,
+                            ledger_path: &Path,
+                            events: &mut Vec<admit_cli::ProjectionEvent>|
+     -> Result<(), String> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        if !args.no_ledger {
+            for ev in events.iter() {
+                append_projection_event(ledger_path, ev).map_err(|e| e.to_string())?;
+            }
+        }
+        let rows: Vec<ProjectionEventRow> = events.iter().map(to_projection_event_row).collect();
+        store_ops
+            .project_projection_events(&rows)
+            .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+        events.clear();
+        Ok(())
+    };
+
+    flush_events(store_ops, ledger_path, &mut events)?;
+
+    if did_vault_prefix_fallback {
+        let sample: Vec<String> = dag_doc_paths.iter().take(5).cloned().collect();
+        let ev = build_projection_event(
+            "projection.warning.vault_prefix_fallback",
+            &run_id,
+            chrono::Utc::now().to_rfc3339(),
+            Some(trace_sha256.to_string()),
+            Some("vault_links".to_string()),
+            Some("warning".to_string()),
+            None,
+            None,
+            Some(config_hash.clone()),
+            Some(projector_version.clone()),
+            Some(serde_json::json!({
+                "root": args.path.to_string_lossy().to_string(),
+                "original_prefixes": projection_config.vault_prefixes.clone(),
+                "effective_prefixes": effective_vault_prefixes.clone(),
+                "doc_paths_sample": sample,
+                "doc_paths_total": dag_doc_paths.len(),
+            })),
+        )
+        .map_err(|err| err.to_string())?;
+        events.push(ev);
+        flush_events(store_ops, ledger_path, &mut events)?;
+    }
+
+    // Run enabled phases with basic per-phase timing.
+    for phase in phases_enabled {
+        let started_at = std::time::Instant::now();
+        eprintln!("projection: phase {} started", phase);
+
+        let phase_result = match phase.as_str() {
+            "dag_trace" => store_ops
+                .project_dag_trace(trace_sha256, trace_cbor, dag, Some(&run_id)),
+            "doc_files" => store_ops.project_doc_files(dag, artifacts_dir, Some(&run_id)),
+            "doc_chunks" => store_ops.project_doc_chunks(dag, artifacts_dir, &[], Some(&run_id)),
+            "vault_links" => {
+                let vault_prefix_refs: Vec<&str> =
+                    effective_vault_prefixes.iter().map(|s| s.as_str()).collect();
+                store_ops.project_vault_links(
+                    dag,
+                    artifacts_dir,
+                    &vault_prefix_refs,
+                    docs_to_resolve_links,
+                    Some(&run_id),
+                )
+            }
+            // Phases which are not yet driven by ingest_dir are treated as skipped here.
+            _ => Ok(admit_surrealdb::projection_run::PhaseResult::success(
+                phase.clone(),
+                0,
+                0,
+            )),
+        };
+
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+        match phase_result {
+            Ok(mut result) => {
+                result.duration_ms = duration_ms;
+                let status_str = match result.status {
+                    admit_surrealdb::projection_run::PhaseStatus::Complete => "complete",
+                    admit_surrealdb::projection_run::PhaseStatus::Partial => "partial",
+                    admit_surrealdb::projection_run::PhaseStatus::Failed => "failed",
+                    admit_surrealdb::projection_run::PhaseStatus::Running => "running",
+                };
+
+                run.add_phase_result(phase.clone(), result.clone());
+                eprintln!("projection: phase {} {} ({} ms)", phase, status_str, duration_ms);
+                if emit_metrics {
+                    let db_ms = result.db_write_time_ms.unwrap_or(0);
+                    let parse_ms = result
+                        .parse_time_ms
+                        .unwrap_or_else(|| duration_ms.saturating_sub(db_ms));
+                    let files_read = result
+                        .files_read
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    eprintln!(
+                        "projection: phase {} metrics records={} batches={} bytes={} files_read={} parse_ms={} db_write_ms={}",
+                        phase,
+                        result.records_processed,
+                        result.batches_executed,
+                        result.bytes_written,
+                        files_read,
+                        parse_ms,
+                        db_ms
+                    );
+                }
+
+                let ev = build_projection_event(
+                    "projection.phase.completed",
+                    &run_id,
+                    chrono::Utc::now().to_rfc3339(),
+                    None,
+                    Some(phase.clone()),
+                    Some(status_str.to_string()),
+                    Some(duration_ms),
+                    result.error.clone(),
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|err| err.to_string())?;
+                events.push(ev);
+
+                if matches!(
+                    result.status,
+                    admit_surrealdb::projection_run::PhaseStatus::Partial
+                        | admit_surrealdb::projection_run::PhaseStatus::Failed
+                ) {
+                    match projection_config.failure_handling {
+                        admit_surrealdb::projection_config::FailureHandling::FailFast => {
+                            flush_events(store_ops, ledger_path, &mut events)?;
+                            return Err(format!(
+                                "projection phase '{}' completed with status {}",
+                                phase, status_str
+                            ));
+                        }
+                        admit_surrealdb::projection_config::FailureHandling::WarnAndContinue => {
+                            eprintln!(
+                                "Warning: projection phase '{}' completed with status {}",
+                                phase, status_str
+                            );
+                        }
+                        admit_surrealdb::projection_config::FailureHandling::SilentIgnore => {}
+                    }
+                }
+            }
+            Err(err) => {
+                run.add_phase_result(
+                    phase.clone(),
+                    PhaseResult::failed(phase.clone(), err.to_string(), duration_ms),
+                );
+                eprintln!(
+                    "projection: phase {} failed ({} ms): {}",
+                    phase, duration_ms, err
+                );
+                let ev = build_projection_event(
+                    "projection.phase.completed",
+                    &run_id,
+                    chrono::Utc::now().to_rfc3339(),
+                    None,
+                    Some(phase.clone()),
+                    Some("failed".to_string()),
+                    Some(duration_ms),
+                    Some(err.to_string()),
+                    None,
+                    None,
+                    None,
+                )
+                .map_err(|err| err.to_string())?;
+                events.push(ev);
+
+                match projection_config.failure_handling {
+                    admit_surrealdb::projection_config::FailureHandling::FailFast => {
+                        flush_events(store_ops, ledger_path, &mut events)?;
+                        return Err(format!("projection phase '{}' failed: {}", phase, err));
+                    }
+                    admit_surrealdb::projection_config::FailureHandling::WarnAndContinue => {
+                        eprintln!("Warning: projection phase '{}' failed: {}", phase, err);
+                    }
+                    admit_surrealdb::projection_config::FailureHandling::SilentIgnore => {}
+                }
+            }
+        }
+
+        flush_events(store_ops, ledger_path, &mut events)?;
+    }
+
+    run.complete();
+    let finished_at = run
+        .finished_at
+        .clone()
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+    store_ops
+        .end_run(&run_id, run.status, &finished_at, &run.phase_results)
+        .map_err(|err| format!("surrealdb end projection run failed: {}", err))?;
+
+    let ev = build_projection_event(
+        "projection.run.completed",
+        &run_id,
+        chrono::Utc::now().to_rfc3339(),
+        Some(trace_sha256.to_string()),
+        None,
+        Some(run.status.to_string()),
+        run.duration_ms(),
+        None,
+        Some(config_hash),
+        Some(projector_version),
+        None,
+    )
+    .map_err(|err| err.to_string())?;
+
+    if !args.no_ledger {
+        append_projection_event(ledger_path, &ev).map_err(|e| e.to_string())?;
+    }
+    store_ops
+        .project_projection_events(&[to_projection_event_row(&ev)])
+        .map_err(|err| format!("surrealdb project events failed: {}", err))?;
+    eprintln!("projection: run {} completed", run_id);
+
+    let total_phases = run.phase_results.len();
+    let successful_phases = run
+        .phase_results
+        .values()
+        .filter(|r| r.status == PhaseStatus::Complete)
+        .count();
+
+    Ok(ProjectionSummary {
+        run_id,
+        status: run.status,
+        total_phases,
+        successful_phases,
+    })
 }
 
 fn project_ollama_embeddings_for_trace(
@@ -1716,6 +3543,7 @@ fn project_ollama_embeddings_for_trace(
     surreal: &SurrealCliProjectionStore,
     dag: &admit_dag::GovernedDag,
     artifacts_dir: &Path,
+    projection_run_id: Option<&str>,
 ) -> Result<(), String> {
     let endpoint = args
         .ollama_endpoint
@@ -1726,25 +3554,22 @@ fn project_ollama_embeddings_for_trace(
         .ollama_model
         .clone()
         .or_else(|| std::env::var("ADMIT_OLLAMA_EMBED_MODEL").ok())
-        .unwrap_or_else(|| "nomic-embed-text".to_string());
+        .unwrap_or_else(|| "qwen3-embedding:0.6b".to_string());
+
+    let (default_doc_prefix, default_query_prefix) =
+        admit_cli::default_ollama_prefixes_for_model(&model);
 
     let doc_prefix = args
         .ollama_doc_prefix
         .clone()
         .or_else(|| std::env::var("ADMIT_OLLAMA_DOC_PREFIX").ok())
-        .unwrap_or_else(|| "search_document: ".to_string());
+        .unwrap_or(default_doc_prefix);
 
     let query_prefix = args
         .ollama_query_prefix
         .clone()
         .or_else(|| std::env::var("ADMIT_OLLAMA_QUERY_PREFIX").ok())
-        .unwrap_or_else(|| "search_query: ".to_string());
-
-    let dim_target: u32 = if args.ollama_dim == 0 {
-        0
-    } else {
-        u32::try_from(args.ollama_dim).map_err(|_| "ollama_dim too large".to_string())?
-    };
+        .unwrap_or(default_query_prefix);
 
     let embedder = OllamaEmbedder::new(OllamaEmbedConfig {
         endpoint,
@@ -1754,18 +3579,49 @@ fn project_ollama_embeddings_for_trace(
         max_chars: args.ollama_max_chars.max(256),
     });
 
+    // Determine native embedding dim (Ollama returns fixed dims per model) so `--ollama-dim=0`
+    // can be stored as the actual dim in projections and `embed_run` accounting.
+    let native_dim = {
+        let probe = if doc_prefix.is_empty() {
+            "probe".to_string()
+        } else {
+            format!("{}{}", doc_prefix, "probe")
+        };
+        let mut embs = embedder.embed_texts(&[probe])?;
+        let Some(e0) = embs.pop() else {
+            return Err("ollama embed probe returned no embedding".to_string());
+        };
+        let n = e0.len();
+        if n == 0 {
+            return Err("ollama embed probe returned empty embedding".to_string());
+        }
+        n
+    };
+
+    let dim_target_usize: usize = if args.ollama_dim == 0 {
+        native_dim
+    } else {
+        args.ollama_dim
+    };
+    if dim_target_usize == 0 {
+        return Err("ollama_dim must be >= 1 (or 0 for full native dim)".to_string());
+    }
+    if dim_target_usize > native_dim {
+        return Err(format!(
+            "ollama_dim {} exceeds native embedding dim {} for model {}",
+            dim_target_usize, native_dim, model
+        ));
+    }
+    let dim_target: u32 =
+        u32::try_from(dim_target_usize).map_err(|_| "ollama_dim too large".to_string())?;
+
     let (snapshot_sha256, parse_sha256) = find_ingest_hashes(dag);
     let created_at_utc = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let effective_dim_target: u32 = if dim_target > 0 {
-        dim_target
-    } else {
-        0
-    };
     let run_id = sha256_hex(&format!(
         "admit_embed_run_v1|{}|{}|{}|{}",
         parse_sha256.clone().unwrap_or_default(),
         model,
-        effective_dim_target,
+        dim_target,
         created_at_utc
     ));
     surreal.project_embed_run(&EmbedRunRow {
@@ -1776,8 +3632,8 @@ fn project_ollama_embeddings_for_trace(
         parse_sha256: parse_sha256.clone(),
         root: Some(args.path.to_string_lossy().to_string()),
         model: model.clone(),
-        dim_target: effective_dim_target,
-        dim_actual: None,
+        dim_target,
+        dim_actual: Some(native_dim as u32),
         doc_prefix: doc_prefix.clone(),
         query_prefix: query_prefix.clone(),
         created_at_utc: created_at_utc.clone(),
@@ -1825,13 +3681,21 @@ fn project_ollama_embeddings_for_trace(
         eprintln!(
             "ollama_embed: model={} dim_target={} batch {}..{} of {}",
             model,
-            if dim_target == 0 { "full".to_string() } else { dim_target.to_string() },
+            dim_target,
             i + 1,
             end,
             chunks.len()
         );
+        let batch_started = std::time::Instant::now();
         let inputs: Vec<String> = chunks[i..end].iter().map(|t| t.4.clone()).collect();
         let embs = embedder.embed_texts(&inputs)?;
+        let batch_ms = batch_started.elapsed().as_millis() as u64;
+        eprintln!(
+            "ollama_embed: batch {}..{} done ({} ms)",
+            i + 1,
+            end,
+            batch_ms
+        );
         if embs.len() != inputs.len() {
             return Err(format!(
                 "ollama returned {} embeddings for {} inputs",
@@ -1864,7 +3728,7 @@ fn project_ollama_embeddings_for_trace(
                 start_line,
                 chunk_sha256,
                 model: model.clone(),
-                dim_target: if dim_target == 0 { dim as u32 } else { dim_target },
+                dim_target,
                 embedding: emb,
             });
         }
@@ -1883,7 +3747,7 @@ fn project_ollama_embeddings_for_trace(
         doc_rows.push(DocEmbeddingRow {
             doc_path,
             model: model.clone(),
-            dim_target: if dim_target == 0 { sum.len() as u32 } else { dim_target },
+            dim_target,
             embedding: sum,
             chunk_count: n,
         });
@@ -1896,39 +3760,21 @@ fn project_ollama_embeddings_for_trace(
         doc_rows.len()
     );
 
-    let inferred_dim: u32 = chunk_rows
-        .first()
-        .map(|r| r.embedding.len() as u32)
-        .or_else(|| doc_rows.first().map(|r| r.embedding.len() as u32))
-        .unwrap_or(0);
-    let suggest_dim_target = if dim_target > 0 { dim_target } else { inferred_dim };
-
-    // Update embed_run with observed dimension.
-    surreal.project_embed_run(&EmbedRunRow {
-        run_id: run_id.clone(),
-        kind: "ollama_embed".to_string(),
-        trace_sha256: None,
-        snapshot_sha256,
-        parse_sha256,
-        root: Some(args.path.to_string_lossy().to_string()),
-        model: model.clone(),
-        dim_target: effective_dim_target,
-        dim_actual: if inferred_dim > 0 { Some(inferred_dim) } else { None },
-        doc_prefix: doc_prefix.clone(),
-        query_prefix: query_prefix.clone(),
-        created_at_utc,
-    })?;
+    let suggest_dim_target = dim_target;
 
     if args.ollama_suggest_unresolved {
+        let vault_prefixes = surreal.projection_config().vault_prefixes.clone();
         project_unresolved_link_suggestions_via_ollama(
             surreal,
             &embedder,
+            projection_run_id,
             &run_id,
             &model,
             suggest_dim_target,
             &doc_prefix,
             &query_prefix,
             args.ollama_suggest_limit,
+            &vault_prefixes,
         )?;
     }
     Ok(())
@@ -1961,34 +3807,34 @@ fn looks_like_file_link(target: &str) -> bool {
     false
 }
 
-fn vault_prefix_for_doc_path(from_doc_path: &str) -> String {
-    // Keep in sync with maybe_project_vault_links prefixes.
-    for p in ["irrev-vault/", "chatgpt/vault/"] {
-        if from_doc_path.starts_with(p) {
-            return p.to_string();
-        }
-    }
-    // Fallback: first path segment
-    from_doc_path
-        .split('/')
-        .next()
-        .map(|s| format!("{}/", s))
-        .unwrap_or_else(|| "".to_string())
+fn vault_prefix_for_doc_path(from_doc_path: &str, vault_prefixes: &[String]) -> String {
+    // Longest configured matching prefix, else root-relative.
+    admit_cli::select_vault_prefix_for_doc_path(from_doc_path, vault_prefixes)
 }
 
 fn project_unresolved_link_suggestions_via_ollama(
     surreal: &SurrealCliProjectionStore,
     embedder: &OllamaEmbedder,
+    projection_run_id: Option<&str>,
     run_id: &str,
     model: &str,
     dim_target: u32,
     doc_prefix: &str,
     query_prefix: &str,
     per_link_limit: usize,
+    vault_prefixes: &[String],
 ) -> Result<(), String> {
     // Ensure title embeddings exist for all docs in the vault(s) we care about.
-    let doc_prefixes = ["irrev-vault/", "chatgpt/vault/"];
-    let docs = surreal.select_doc_files(&doc_prefixes)?;
+    let mut doc_prefix_refs: Vec<&str> = vault_prefixes.iter().map(|s| s.as_str()).collect();
+    if doc_prefix_refs.is_empty() {
+        doc_prefix_refs.push("");
+    }
+    let mut docs = surreal.select_doc_files(&doc_prefix_refs)?;
+    if docs.is_empty() && !doc_prefix_refs.iter().any(|p| p.is_empty()) {
+        // Fallback: root-relative vault ingest (`Foo.md` instead of `irrev-vault/Foo.md`).
+        docs = surreal.select_doc_files(&[""])?;
+        doc_prefix_refs = vec![""];
+    }
     if !docs.is_empty() {
         let mut inputs: Vec<String> = Vec::with_capacity(docs.len());
         for (_doc_path, title) in docs.iter() {
@@ -2007,7 +3853,15 @@ fn project_unresolved_link_suggestions_via_ollama(
                 end,
                 inputs.len()
             );
+            let batch_started = std::time::Instant::now();
             let embs = embedder.embed_texts(&inputs[i..end])?;
+            let batch_ms = batch_started.elapsed().as_millis() as u64;
+            eprintln!(
+                "ollama_suggest: doc title batch {}..{} done ({} ms)",
+                i + 1,
+                end,
+                batch_ms
+            );
             for ((doc_path, title), emb) in docs[i..end].iter().cloned().zip(embs.into_iter()) {
                 if emb.is_empty() {
                     continue;
@@ -2031,9 +3885,10 @@ fn project_unresolved_link_suggestions_via_ollama(
     }
 
     let unresolved = surreal.select_unresolved_links(
-        &doc_prefixes,
+        doc_prefix_refs.as_slice(),
         &["missing", "heading_missing", "ambiguous"],
         10_000,
+        projection_run_id,
     )?;
     if unresolved.is_empty() {
         eprintln!("ollama_suggest: no unresolved links found");
@@ -2045,7 +3900,7 @@ fn project_unresolved_link_suggestions_via_ollama(
         if looks_like_file_link(&link.raw_target) {
             continue;
         }
-        let vault_prefix = vault_prefix_for_doc_path(&link.from_doc_path);
+        let vault_prefix = vault_prefix_for_doc_path(&link.from_doc_path, vault_prefixes);
         let suggestion_id = sha256_hex(&format!(
             "admit_unresolved_suggestion_v1|{}|{}",
             run_id, link.link_id
@@ -2200,10 +4055,14 @@ fn build_surreal_projection_store(cli: &Cli) -> Result<SurrealCliProjectionStore
             .or_else(|| std::env::var("SURREAL_AUTH_LEVEL").ok()),
         surreal_bin: cli.surrealdb_bin.clone(),
     };
-    Ok(SurrealCliProjectionStore::new(config))
+
+    // Build projection configuration from CLI flags
+    let projection_config = build_projection_config(cli);
+
+    Ok(SurrealCliProjectionStore::with_projection_config(config, projection_config))
 }
 
-fn maybe_build_surreal_projection_store(cli: &Cli) -> Result<Option<SurrealCliProjectionStore>, String> {
+fn build_projection_coordinator(cli: &Cli) -> Result<ProjectionCoordinator, String> {
     let mode = if cli.surrealdb_project {
         SurrealDbMode::On
     } else {
@@ -2211,7 +4070,7 @@ fn maybe_build_surreal_projection_store(cli: &Cli) -> Result<Option<SurrealCliPr
     };
 
     if mode == SurrealDbMode::Off {
-        return Ok(None);
+        return Ok(ProjectionCoordinator::off());
     }
 
     let namespace = cli
@@ -2225,7 +4084,10 @@ fn maybe_build_surreal_projection_store(cli: &Cli) -> Result<Option<SurrealCliPr
 
     if namespace.is_none() || database.is_none() {
         if mode == SurrealDbMode::Auto {
-            return Ok(None);
+            return Ok(ProjectionCoordinator::disabled(
+                mode,
+                "missing surrealdb namespace/database".to_string(),
+            ));
         }
         return Err(
             "surrealdb projection requires --surrealdb-namespace and --surrealdb-database (or env SURREAL_NAMESPACE/SURREAL_DATABASE)"
@@ -2236,9 +4098,12 @@ fn maybe_build_surreal_projection_store(cli: &Cli) -> Result<Option<SurrealCliPr
     let store = build_surreal_projection_store(cli)?;
     let ready = store.is_ready()?;
     if ready {
-        Ok(Some(store))
+        Ok(ProjectionCoordinator::active(mode, store))
     } else if mode == SurrealDbMode::Auto {
-        Ok(None)
+        Ok(ProjectionCoordinator::disabled(
+            mode,
+            format!("endpoint not ready: {}", store.config().endpoint),
+        ))
     } else {
         Err(format!(
             "surrealdb projection enabled but endpoint not ready: {}",
@@ -2247,60 +4112,107 @@ fn maybe_build_surreal_projection_store(cli: &Cli) -> Result<Option<SurrealCliPr
     }
 }
 
+/// Build ProjectionConfig from CLI flags and environment
+fn build_projection_config(cli: &Cli) -> ProjectionConfig {
+    use std::collections::BTreeMap;
+
+    // Parse batch size overrides from "phase:size" format
+    let batch_size_overrides = cli.projection_batch_size.as_ref().and_then(|specs| {
+        let mut map = BTreeMap::new();
+        for spec in specs {
+            if let Some((phase, size_str)) = spec.split_once(':') {
+                if let Ok(size) = size_str.parse::<usize>() {
+                    map.insert(phase.to_string(), size);
+                } else {
+                    eprintln!("Warning: invalid batch size '{}' in '{}'", size_str, spec);
+                }
+            } else {
+                eprintln!("Warning: invalid batch size spec '{}', expected format 'phase:size'", spec);
+            }
+        }
+        if map.is_empty() {
+            None
+        } else {
+            Some(map)
+        }
+    });
+
+    ProjectionConfig::from_cli_and_env(
+        cli.projection_enabled.clone(),
+        batch_size_overrides,
+        cli.projection_max_sql_bytes,
+        cli.projection_failure_mode,
+        cli.vault_prefix.clone(),
+    )
+}
+
 fn maybe_project_trace(
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
     trace_sha256: &str,
     trace_cbor: &[u8],
     dag: &admit_dag::GovernedDag,
 ) -> Result<(), String> {
-    let Some(surreal) = surreal else {
-        return Ok(());
-    };
-    surreal
-        .project_dag_trace(trace_sha256, trace_cbor, dag)
-        .map_err(|err| format!("surrealdb projection failed: {}", err))?;
+    projection
+        .with_store("surrealdb projection", |surreal| {
+            ProjectionStore::project_dag_trace(surreal, trace_sha256, trace_cbor, dag)
+                .map_err(|err| format!("surrealdb projection failed: {}", err))?;
+            Ok(())
+        })?
+        .map(|_| ());
     Ok(())
 }
 
 fn maybe_project_doc_chunks(
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
     dag: &admit_dag::GovernedDag,
     artifacts_dir: &Path,
 ) -> Result<(), String> {
-    let Some(surreal) = surreal else {
-        return Ok(());
-    };
-    surreal
-        .project_doc_chunks_from_artifacts(dag, artifacts_dir, &[])
-        .map_err(|err| format!("surrealdb doc_chunk projection failed: {}", err))?;
+    projection
+        .with_store("surrealdb doc_chunk projection", |surreal| {
+            surreal
+                .project_doc_chunks_from_artifacts(dag, artifacts_dir, &[])
+                .map_err(|err| format!("surrealdb doc_chunk projection failed: {}", err))?;
+            Ok(())
+        })?
+        .map(|_| ());
     Ok(())
 }
 
 fn maybe_project_doc_files(
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
     dag: &admit_dag::GovernedDag,
     artifacts_dir: &Path,
 ) -> Result<(), String> {
-    let Some(surreal) = surreal else {
-        return Ok(());
-    };
-    surreal
-        .project_doc_files_from_artifacts(dag, artifacts_dir)
-        .map_err(|err| format!("surrealdb doc_file projection failed: {}", err))?;
+    projection
+        .with_store("surrealdb doc_file projection", |surreal| {
+            surreal
+                .project_doc_files_from_artifacts(dag, artifacts_dir)
+                .map_err(|err| format!("surrealdb doc_file projection failed: {}", err))?;
+            Ok(())
+        })?
+        .map(|_| ());
     Ok(())
 }
 
 fn maybe_project_vault_links(
-    surreal: Option<&SurrealCliProjectionStore>,
+    projection: &mut ProjectionCoordinator,
     dag: &admit_dag::GovernedDag,
     artifacts_dir: &Path,
 ) -> Result<(), String> {
-    let Some(surreal) = surreal else {
-        return Ok(());
-    };
-    surreal
-        .project_vault_obsidian_links_from_artifacts(dag, artifacts_dir, &["irrev-vault/", "chatgpt/vault/"])
-        .map_err(|err| format!("surrealdb vault link projection failed: {}", err))?;
+    projection
+        .with_store("surrealdb vault link projection", |surreal| {
+            surreal
+                .project_vault_obsidian_links_from_artifacts(
+                    dag,
+                    artifacts_dir,
+                    &["irrev-vault/", "chatgpt/vault/"],
+                    None,
+                    None,
+                )
+                .map_err(|err| format!("surrealdb vault link projection failed: {}", err))?;
+            Ok(())
+        })?
+        .map(|_| ());
     Ok(())
 }
 

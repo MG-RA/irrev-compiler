@@ -205,13 +205,15 @@ pub struct BatchSizes {
 impl Default for BatchSizes {
     fn default() -> Self {
         Self {
-            nodes: 200,
-            edges: 200,
-            doc_chunks: 50,
-            doc_files: 200,
-            headings: 200,
-            links: 100,
-            stats: 200,
+            // Count-based limits are primarily a safety bound; `max_sql_bytes` is the main flush
+            // control knob that keeps `surreal sql` subprocess overhead low.
+            nodes: 1_000,
+            edges: 1_000,
+            doc_chunks: 200,
+            doc_files: 500,
+            headings: 500,
+            links: 500,
+            stats: 500,
             // Let `max_sql_bytes` control flushing for embedding-heavy batches; count-based flushing
             // at 16 causes excessive `surreal sql` subprocess spawns for large vectors.
             embeddings: 128,
@@ -345,6 +347,7 @@ mod tests {
     #[test]
     fn test_batch_size_overrides() {
         let mut batch_sizes = BatchSizes::default();
+        let default_edges = batch_sizes.edges;
         let mut overrides = BTreeMap::new();
         overrides.insert("nodes".to_string(), 100);
         overrides.insert("doc_chunks".to_string(), 25);
@@ -354,7 +357,7 @@ mod tests {
 
         assert_eq!(batch_sizes.nodes, 100);
         assert_eq!(batch_sizes.doc_chunks, 25);
-        assert_eq!(batch_sizes.edges, 200); // Unchanged
+        assert_eq!(batch_sizes.edges, default_edges); // Unchanged
         assert_eq!(batch_sizes.max_sql_bytes, 1234);
     }
 

@@ -8,6 +8,7 @@ mod verify;
 mod plan;
 mod scope_validation;
 mod scope_commands;
+mod ingest_dir;
 pub mod calc_commands;
 
 // Re-export all public types
@@ -41,3 +42,6 @@ pub use scope_commands::{
     scope_add, scope_verify, scope_list, scope_show,
     ScopeAddArgs, ScopeVerifyArgs, ScopeListArgs, ScopeShowArgs,
 };
+
+// Directory ingestion (snapshot + parse)
+pub use ingest_dir::{ingest_dir, IngestDirOutput, IngestedChunk, IngestedFile};

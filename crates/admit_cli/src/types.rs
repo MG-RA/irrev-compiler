@@ -307,26 +307,8 @@ pub struct PlanCreatedEvent {
 // Public reference / entry structs
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArtifactRef {
-    pub kind: String,
-    pub schema_id: String,
-    pub sha256: String,
-    pub size_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompilerRef {
-    pub build_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgramRef {
-    pub module: String,
-    pub scope: String,
-}
+// Re-export from admit_core for backward compatibility
+pub use admit_core::{ArtifactRef, CompilerRef, ProgramRef};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanProducerRef {

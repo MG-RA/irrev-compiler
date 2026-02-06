@@ -158,11 +158,13 @@ fn full_registry_json() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
-            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" }
+            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
+            { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
         "scopes": [
             { "id": "scope:meta.registry", "version": 0 },
-            { "id": "scope:main",          "version": 0 }
+            { "id": "scope:main",          "version": 0 },
+            { "id": "scope:select.path",   "version": 0 }
         ]
     })
 }
@@ -180,10 +182,12 @@ fn registry_without_main_scope() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
-            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" }
+            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
+            { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
         "scopes": [
-            { "id": "scope:meta.registry", "version": 0 }
+            { "id": "scope:meta.registry", "version": 0 },
+            { "id": "scope:select.path",   "version": 0 }
         ]
     })
 }
@@ -200,11 +204,13 @@ fn registry_without_witness_schema() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
-            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" }
+            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
+            { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
         "scopes": [
             { "id": "scope:meta.registry", "version": 0 },
-            { "id": "scope:main",          "version": 0 }
+            { "id": "scope:main",          "version": 0 },
+            { "id": "scope:select.path",   "version": 0 }
         ]
     })
 }

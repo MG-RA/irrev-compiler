@@ -190,11 +190,13 @@ fn shipped_registry_json() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
-            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" }
+            { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
+            { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
         "scopes": [
             { "id": "scope:meta.registry", "version": 0 },
-            { "id": "scope:main",          "version": 0 }
+            { "id": "scope:main",          "version": 0 },
+            { "id": "scope:select.path",   "version": 0 }
         ]
     })
 }
@@ -212,7 +214,7 @@ fn registry_canonical_hash_is_pinned() {
 
     assert_eq!(
         artifact_ref.sha256,
-        "3697683bfe1d86e38745ab4e7deb663e062060d0fb18b9875f136b6189d86dd6",
+        "8e058953d9a156cbab091a5bd54db667f107c52af6a01058cf0727e4a061cd30",
         "pinned registry hash changed — update pin or bump registry_version"
     );
 }

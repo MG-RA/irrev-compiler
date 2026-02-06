@@ -1,0 +1,11 @@
+[package]
+name = "admit_surrealdb"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+admit_core = { path = "../admit_core" }
+admit_dag = { path = "../admit_dag" }
+serde_json = "1.0"
+sha2 = "0.10"
+

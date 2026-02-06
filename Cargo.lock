@@ -7,6 +7,9 @@ name = "admit_cli"
 version = "0.1.0"
 dependencies = [
  "admit_core",
+ "admit_dag",
+ "admit_embed",
+ "admit_surrealdb",
  "chrono",
  "clap",
  "facts_bundle",
@@ -31,6 +34,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "admit_dag"
+version = "0.1.0"
+dependencies = [
+ "admit_core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "admit_dsl"
 version = "0.1.0"
 dependencies = [
@@ -38,6 +51,23 @@ dependencies = [
  "chumsky",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "admit_embed"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "admit_surrealdb"
+version = "0.1.0"
+dependencies = [
+ "admit_core",
+ "admit_dag",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

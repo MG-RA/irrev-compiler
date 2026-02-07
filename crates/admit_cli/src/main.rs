@@ -8,19 +8,19 @@ use admit_dag::{DagEdge, DagNode, DagTraceCollector, NodeKind, ScopeTag, Tracer}
 use admit_embed::{OllamaEmbedConfig, OllamaEmbedder};
 use admit_surrealdb::{
     projection_config::ProjectionConfig, DocChunkEmbeddingRow, DocEmbeddingRow, EmbedRunRow,
-    FunctionArtifactRow, IngestEventRow, IngestRunRow, ProjectionEventRow, ProjectionStoreOps,
-    QueryArtifactRow, SurrealCliConfig, SurrealCliProjectionStore,
+    IngestEventRow, IngestRunRow, ProjectionEventRow, ProjectionStoreOps,
+    SurrealCliConfig, SurrealCliProjectionStore,
 };
 
 use admit_cli::scope_obsidian as obsidian_adapter;
 use admit_cli::{
-    append_checked_event, append_court_event, append_event, append_executed_event,
+    append_checked_event, append_event, append_executed_event,
     append_ingest_event, append_plan_created_event, append_projection_event,
-    build_court_event, build_projection_event, check_cost_declared,
+    build_projection_event, check_cost_declared,
     create_plan, declare_cost, default_artifacts_dir, default_ledger_path, execute_checked,
     export_plan_markdown, ingest_dir_protocol_with_cache, init_project, list_artifacts,
-    load_meta_registry, parse_plan_answers_markdown, read_artifact_projection, read_file_bytes,
-    register_function_artifact, register_query_artifact, registry_build, registry_init,
+    parse_plan_answers_markdown, read_artifact_projection, read_file_bytes,
+    registry_build, registry_init,
     render_plan_prompt_template, render_plan_text, resolve_scope_enablement,
     scope_add, scope_list, scope_show, scope_verify,
     summarize_ledger, verify_ledger, verify_witness, ArtifactInput,
@@ -1469,10 +1469,10 @@ fn main() {
         },
         Commands::Court(args) => match args.command {
             CourtCommands::Query(q) => match q.command {
-                CourtQueryCommands::Add(a) => run_court_query_add(a, &mut projection),
+                CourtQueryCommands::Add(a) => commands::court::run_court_query_add(a, &mut projection),
             },
             CourtCommands::Function(f) => match f.command {
-                CourtFunctionCommands::Add(a) => run_court_function_add(a, &mut projection),
+                CourtFunctionCommands::Add(a) => commands::court::run_court_function_add(a, &mut projection),
             },
         },
         Commands::Lint(args) => match args.command {
@@ -3519,197 +3519,6 @@ fn compute_run_status(
     }
 }
 
-fn run_court_query_add(
-    args: CourtQueryAddArgs,
-    projection: &mut ProjectionCoordinator,
-) -> Result<(), String> {
-    let artifacts_dir = args
-        .artifacts_dir
-        .clone()
-        .unwrap_or_else(default_artifacts_dir);
-    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
-
-    let source_bytes =
-        read_file_bytes(&args.file).map_err(|e| format!("read query file: {}", e))?;
-    let source =
-        String::from_utf8(source_bytes).map_err(|e| format!("query file must be UTF-8: {}", e))?;
-
-    let mut tags = args.tags.clone();
-    tags.sort();
-    tags.dedup();
-
-    let (registry, _registry_hash): (Option<MetaRegistryV0>, Option<String>) =
-        match load_meta_registry(args.meta_registry.as_deref()).map_err(|e| e.to_string())? {
-            Some((r, h)) => (Some(r), Some(h)),
-            None => (None, None),
-        };
-
-    let artifact = register_query_artifact(
-        &artifacts_dir,
-        &args.name,
-        &args.lang,
-        &source,
-        tags.clone(),
-        registry.as_ref(),
-    )
-    .map_err(|e| e.to_string())?;
-
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    let event = build_court_event(
-        "court.query.registered",
-        timestamp.clone(),
-        "query",
-        artifact.clone(),
-        Some(args.name.clone()),
-        Some(args.lang.clone()),
-        Some(tags.clone()),
-    )
-    .map_err(|e| e.to_string())?;
-
-    if !args.no_ledger {
-        append_court_event(&ledger_path, &event).map_err(|e| e.to_string())?;
-    }
-
-    projection.with_store("surrealdb project query artifact", |surreal| {
-        let store_ops: &dyn ProjectionStoreOps = surreal;
-        store_ops
-            .ensure_schemas()
-            .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
-        store_ops
-            .project_query_artifacts(&[QueryArtifactRow {
-                artifact_sha256: artifact.sha256.clone(),
-                schema_id: artifact.schema_id.clone(),
-                name: args.name.clone(),
-                lang: args.lang.clone(),
-                source,
-                tags: tags.clone(),
-                created_at_utc: timestamp.clone(),
-            }])
-            .map_err(|err| format!("surrealdb project query artifact failed: {}", err))?;
-        Ok(())
-    })?;
-
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "event": event,
-                "artifact": artifact,
-                "ledger": ledger_path,
-                "artifacts_dir": artifacts_dir,
-            }))
-            .map_err(|e| format!("json encode: {}", e))?
-        );
-    } else {
-        println!("event_id={}", event.event_id);
-        println!("artifact_kind={}", artifact.kind);
-        println!("artifact_sha256={}", artifact.sha256);
-        println!("schema_id={}", artifact.schema_id);
-        println!("ledger={}", ledger_path.display());
-        println!("artifacts_dir={}", artifacts_dir.display());
-        if args.no_ledger {
-            println!("no_ledger=true");
-        }
-    }
-
-    Ok(())
-}
-
-fn run_court_function_add(
-    args: CourtFunctionAddArgs,
-    projection: &mut ProjectionCoordinator,
-) -> Result<(), String> {
-    let artifacts_dir = args
-        .artifacts_dir
-        .clone()
-        .unwrap_or_else(default_artifacts_dir);
-    let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
-
-    let source_bytes =
-        read_file_bytes(&args.file).map_err(|e| format!("read function file: {}", e))?;
-    let source = String::from_utf8(source_bytes)
-        .map_err(|e| format!("function file must be UTF-8: {}", e))?;
-
-    let mut tags = args.tags.clone();
-    tags.sort();
-    tags.dedup();
-
-    let (registry, _registry_hash): (Option<MetaRegistryV0>, Option<String>) =
-        match load_meta_registry(args.meta_registry.as_deref()).map_err(|e| e.to_string())? {
-            Some((r, h)) => (Some(r), Some(h)),
-            None => (None, None),
-        };
-
-    let artifact = register_function_artifact(
-        &artifacts_dir,
-        &args.name,
-        &args.lang,
-        &source,
-        tags.clone(),
-        registry.as_ref(),
-    )
-    .map_err(|e| e.to_string())?;
-
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    let event = build_court_event(
-        "court.function.registered",
-        timestamp.clone(),
-        "function",
-        artifact.clone(),
-        Some(args.name.clone()),
-        Some(args.lang.clone()),
-        Some(tags.clone()),
-    )
-    .map_err(|e| e.to_string())?;
-
-    if !args.no_ledger {
-        append_court_event(&ledger_path, &event).map_err(|e| e.to_string())?;
-    }
-
-    projection.with_store("surrealdb project function artifact", |surreal| {
-        let store_ops: &dyn ProjectionStoreOps = surreal;
-        store_ops
-            .ensure_schemas()
-            .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
-        store_ops
-            .project_function_artifacts(&[FunctionArtifactRow {
-                artifact_sha256: artifact.sha256.clone(),
-                schema_id: artifact.schema_id.clone(),
-                name: args.name.clone(),
-                lang: args.lang.clone(),
-                source,
-                tags: tags.clone(),
-                created_at_utc: timestamp.clone(),
-            }])
-            .map_err(|err| format!("surrealdb project function artifact failed: {}", err))?;
-        Ok(())
-    })?;
-
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "event": event,
-                "artifact": artifact,
-                "ledger": ledger_path,
-                "artifacts_dir": artifacts_dir,
-            }))
-            .map_err(|e| format!("json encode: {}", e))?
-        );
-    } else {
-        println!("event_id={}", event.event_id);
-        println!("artifact_kind={}", artifact.kind);
-        println!("artifact_sha256={}", artifact.sha256);
-        println!("schema_id={}", artifact.schema_id);
-        println!("ledger={}", ledger_path.display());
-        println!("artifacts_dir={}", artifacts_dir.display());
-        if args.no_ledger {
-            println!("no_ledger=true");
-        }
-    }
-
-    Ok(())
-}
 
 fn to_projection_event_row(event: &admit_cli::ProjectionEvent) -> ProjectionEventRow {
     ProjectionEventRow {

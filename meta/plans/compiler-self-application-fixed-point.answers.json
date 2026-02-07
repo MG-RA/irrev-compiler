@@ -1,0 +1,50 @@
+[
+  {
+    "prompt_id": "action_definition",
+    "answer": "Establish compiler self-application as the baseline court loop: run admit over the compiler itself and require stable witness identity across repeated executions with identical inputs."
+  },
+  {
+    "prompt_id": "boundary_declaration",
+    "answer": "In scope: admit CLI flow, deterministic ingest/lint/check execution paths, witness identity reproducibility checks, and CI gates for fixed-point stability. Out of scope: new DSL features and non-deterministic experimental adapters."
+  },
+  {
+    "prompt_id": "persistence_analysis",
+    "answer": "Persistent effects include new reproducibility contracts, additional CI assertions, ledger evidence from self-runs, and workflow expectations for contributors. These effects alter governance posture and release criteria."
+  },
+  {
+    "prompt_id": "erasure_cost",
+    "answer": "Grade 3: reversing this would require removing fixed-point guarantees, changing CI policy, and invalidating trust assumptions built from published reproducible witnesses."
+  },
+  {
+    "prompt_id": "displacement_ownership",
+    "answer": "Compiler maintainers and CI owners carry primary cost for enforcing determinism; contributors carry secondary cost by adapting code to strict reproducibility boundaries."
+  },
+  {
+    "prompt_id": "preconditions",
+    "answer": "Canonical input ordering, normalized paths, explicit time/provenance contracts, stable batch/hash rules, and zero hidden entropy from env/random/CWD before enforcement is enabled."
+  },
+  {
+    "prompt_id": "execution_constraints",
+    "answer": "Must preserve existing witness schemas, keep ordering deterministic in all court paths, avoid weakening rules to force green status, and ensure failures report exact non-deterministic source."
+  },
+  {
+    "prompt_id": "postconditions",
+    "answer": "Repeated self-application runs on identical source trees produce identical witness hashes, identical event identities, and auditable ledger proof of reproducibility."
+  },
+  {
+    "prompt_id": "accountability",
+    "answer": "Accountability anchor is repository commit SHA plus emitted plan/lint/check witness hashes and corresponding ledger event IDs from self-application runs."
+  },
+  {
+    "prompt_id": "acceptance_criteria",
+    "answer": "Accepted when clean-room reruns of admit lint rust . and compiler check paths produce identical witness IDs across at least two fresh executions, and CI enforces this invariant."
+  },
+  {
+    "prompt_id": "refusal_conditions",
+    "answer": "Do not proceed if canonical ordering is incomplete, required provenance fields are ambiguous, or enforcement would pass by suppressing non-determinism instead of fixing it."
+  },
+  {
+    "prompt_id": "final_check",
+    "answer": "Yes: effects and ownership are explicit, erasure cost is declared, and the fixed-point self-application loop is testable and reconstructable from witnesses."
+  }
+]

@@ -1328,40 +1328,20 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
 
     pub fn search_doc_title_embeddings(
         &self,
-        vault_prefix: &str,
+        obsidian_vault_prefix: &str,
         model: &str,
         dim_target: u32,
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<(String, f64)>, String> {
-        self.ensure_doc_file_schema()?;
-        let emb_json = serde_json::to_string(query_embedding)
-            .map_err(|err| format!("json encode query embedding: {}", err))?;
-        let lim = limit.max(1).min(50);
-        let sql = format!(
-            "SELECT doc_path, vector::similarity::cosine(embedding, {q}) AS sim FROM doc_title_embedding WHERE model={model} AND dim_target={dim} AND string::starts_with(doc_path, {prefix}) ORDER BY sim DESC LIMIT {lim};",
-            q = emb_json,
-            model = json_string(model),
-            dim = dim_target,
-            prefix = json_string(vault_prefix),
-            lim = lim,
-        );
-        let rows = self.select_rows_from_single_select(&sql)?;
-        let mut out = Vec::new();
-        for r in rows {
-            let Some(obj) = r.as_object() else { continue };
-            let doc_path = obj
-                .get("doc_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let sim = obj.get("sim").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            if doc_path.is_empty() {
-                continue;
-            }
-            out.push((doc_path, sim));
-        }
-        Ok(out)
+        obsidian_projection::search_doc_title_embeddings(
+            self,
+            obsidian_vault_prefix,
+            model,
+            dim_target,
+            query_embedding,
+            limit,
+        )
     }
 
     pub fn project_unresolved_link_suggestions(

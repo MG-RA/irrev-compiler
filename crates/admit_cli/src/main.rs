@@ -269,8 +269,13 @@ struct Cli {
     projection_failure_mode: Option<admit_surrealdb::projection_config::FailureHandling>,
 
     /// Obsidian vault prefix for link resolution (repeatable, e.g., irrev-vault/)
-    #[arg(long, value_name = "PREFIX")]
-    vault_prefix: Option<Vec<String>>,
+    /// Prefer `--obsidian-vault-prefix`; `--vault-prefix` is kept as a compatibility alias.
+    #[arg(
+        long = "obsidian-vault-prefix",
+        alias = "vault-prefix",
+        value_name = "PREFIX"
+    )]
+    obsidian_vault_prefix: Option<Vec<String>>,
 
     #[command(subcommand)]
     command: Commands,
@@ -5594,7 +5599,7 @@ fn build_projection_config(cli: &Cli) -> ProjectionConfig {
         batch_size_overrides,
         cli.projection_max_sql_bytes,
         cli.projection_failure_mode,
-        cli.vault_prefix.clone(),
+        cli.obsidian_vault_prefix.clone(),
     )
 }
 

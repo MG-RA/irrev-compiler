@@ -12,6 +12,7 @@ mod project_init;
 mod registry;
 mod rust_ir_lint;
 mod scope_commands;
+mod scope_enablement;
 mod scope_validation;
 mod status_summary;
 mod types;
@@ -55,6 +56,10 @@ pub use project_init::{init_project, InitProjectInput, InitProjectOutput};
 pub use scope_commands::{
     scope_add, scope_list, scope_show, scope_verify, ScopeAddArgs, ScopeListArgs, ScopeShowArgs,
     ScopeVerifyArgs,
+};
+pub use scope_enablement::{
+    operation_is_enabled, resolve_scope_enablement, scope_is_enabled, scope_operation_human_hint,
+    KnownScope, ScopeEnablement, ScopeOperation, KNOWN_SCOPES,
 };
 pub use scope_validation::{parse_scope_spec, ScopeValidationLevel, ScopeValidator};
 pub use status_summary::{summarize_ledger, StatusEventSummary, StatusSummary};

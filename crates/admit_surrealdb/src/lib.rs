@@ -1105,39 +1105,7 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
     }
 
     pub fn ensure_vault_link_schema(&self) -> Result<(), String> {
-        // `doc_file` is a stable keyspace for Obsidian-style notes. It is keyed by doc_path hash,
-        // so links remain stable across file content edits.
-        let sql = r#"
-DEFINE TABLE obsidian_link SCHEMALESS;
-DEFINE INDEX obsidian_link_from ON TABLE obsidian_link COLUMNS from_doc_path;
-DEFINE INDEX obsidian_link_to ON TABLE obsidian_link COLUMNS to_doc_path;
-DEFINE INDEX obsidian_link_run ON TABLE obsidian_link COLUMNS projection_run_id;
-
-DEFINE TABLE obsidian_file_link SCHEMALESS;
-DEFINE INDEX obsidian_file_link_from ON TABLE obsidian_file_link COLUMNS from_doc_path;
-DEFINE INDEX obsidian_file_link_to_path ON TABLE obsidian_file_link COLUMNS to_file_path;
-DEFINE INDEX obsidian_file_link_run ON TABLE obsidian_file_link COLUMNS projection_run_id;
-
-DEFINE TABLE doc_link_unresolved SCHEMALESS;
-DEFINE INDEX doc_link_unresolved_from ON TABLE doc_link_unresolved COLUMNS from_doc_path;
-DEFINE INDEX doc_link_unresolved_kind ON TABLE doc_link_unresolved COLUMNS resolution_kind;
-DEFINE INDEX doc_link_unresolved_run ON TABLE doc_link_unresolved COLUMNS projection_run_id;
-
-DEFINE TABLE unresolved_link_suggestion SCHEMALESS;
-DEFINE INDEX unresolved_link_suggestion_link ON TABLE unresolved_link_suggestion COLUMNS link_id;
-DEFINE INDEX unresolved_link_suggestion_run ON TABLE unresolved_link_suggestion COLUMNS run_id;
-DEFINE INDEX unresolved_link_suggestion_kind ON TABLE unresolved_link_suggestion COLUMNS resolution_kind;
-DEFINE INDEX unresolved_link_suggestion_from ON TABLE unresolved_link_suggestion COLUMNS from_doc_path;
-DEFINE INDEX unresolved_link_suggestion_vault ON TABLE unresolved_link_suggestion COLUMNS vault_prefix;
-
-DEFINE TABLE doc_heading SCHEMALESS;
-DEFINE INDEX doc_heading_doc ON TABLE doc_heading COLUMNS doc_path;
-DEFINE INDEX doc_heading_slug ON TABLE doc_heading COLUMNS heading_slug;
-
-DEFINE TABLE doc_stats SCHEMALESS;
-DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
-"#;
-        self.run_sql_allow_already_exists(sql)
+        obsidian_projection::ensure_vault_link_schema(self)
     }
 
     pub fn project_embed_run(&self, run: &EmbedRunRow) -> Result<(), String> {
@@ -1349,89 +1317,13 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         limit: usize,
         projection_run_id: Option<&str>,
     ) -> Result<Vec<UnresolvedLinkRow>, String> {
-        self.ensure_vault_link_schema()?;
-        if prefixes.is_empty() || kinds.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut conds = Vec::new();
-        for p in prefixes {
-            conds.push(format!(
-                "string::starts_with(from_doc_path, {})",
-                json_string(p)
-            ));
-        }
-        let where_prefix = conds.join(" OR ");
-        let kinds_json = serde_json::to_string(kinds).unwrap_or_else(|_| "[]".to_string());
-        let lim = limit.max(1).min(100000);
-        let run_filter = projection_run_id
-            .map(|rid| format!(" AND projection_run_id = {}", json_string(rid)))
-            .unwrap_or_default();
-        let sql = format!(
-            "SELECT link_id, from_doc_path, raw_target, raw_heading, resolution_kind, candidates, resolved_doc_path, line, embed FROM doc_link_unresolved WHERE ({}) AND resolution_kind IN {}{} LIMIT {};",
-            where_prefix, kinds_json, run_filter, lim
-        );
-        let rows = self.select_rows_from_single_select(&sql)?;
-        let mut out = Vec::new();
-        for r in rows {
-            let Some(obj) = r.as_object() else { continue };
-            let link_id = obj
-                .get("link_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let from_doc_path = obj
-                .get("from_doc_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let raw_target = obj
-                .get("raw_target")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let raw_heading = obj
-                .get("raw_heading")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let resolution_kind = obj
-                .get("resolution_kind")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let resolved_doc_path = obj
-                .get("resolved_doc_path")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let line = obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let embed = obj.get("embed").and_then(|v| v.as_bool()).unwrap_or(false);
-            let mut candidates: Vec<String> = Vec::new();
-            if let Some(arr) = obj.get("candidates").and_then(|v| v.as_array()) {
-                for c in arr {
-                    if let Some(s) = c.as_str() {
-                        candidates.push(s.to_string());
-                    }
-                }
-            }
-            if link_id.is_empty()
-                || from_doc_path.is_empty()
-                || raw_target.is_empty()
-                || resolution_kind.is_empty()
-            {
-                continue;
-            }
-            out.push(UnresolvedLinkRow {
-                link_id,
-                from_doc_path,
-                raw_target,
-                raw_heading,
-                resolution_kind,
-                candidates,
-                resolved_doc_path,
-                line,
-                embed,
-            });
-        }
-        Ok(out)
+        obsidian_projection::select_unresolved_links(
+            self,
+            prefixes,
+            kinds,
+            limit,
+            projection_run_id,
+        )
     }
 
     pub fn search_doc_title_embeddings(
@@ -1477,56 +1369,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         run_id: &str,
         rows: &[UnresolvedLinkSuggestionRow],
     ) -> Result<(), String> {
-        self.ensure_vault_link_schema()?;
-        let mut sql = String::new();
-        // IR-DELETE-JUSTIFIED: run-scoped replacement semantics for suggestion rows.
-        sql.push_str(&format!(
-            "DELETE unresolved_link_suggestion WHERE run_id = {} RETURN NONE;",
-            json_string(run_id)
-        ));
-
-        let batch_limit = self.projection_config.batch_sizes.links;
-        let max_sql_bytes = self.projection_config.batch_sizes.max_sql_bytes.max(1);
-        let mut batch_count: usize = 0;
-
-        for row in rows {
-            let candidates_json = serde_json::to_string(
-                &row.candidates
-                    .iter()
-                    .map(|(p, s)| serde_json::json!({ "doc_path": p, "sim": s }))
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap_or_else(|_| "[]".to_string());
-
-            sql.push_str(&format!(
-                "UPSERT {thing_id} CONTENT {{ suggestion_id: {suggestion_id}, run_id: {run_id}, link_id: {link_id}, from_doc_path: {from_doc_path}, line: {line}, embed: {embed}, raw_target: {raw_target}, raw_heading: {raw_heading}, resolution_kind: {resolution_kind}, vault_prefix: {vault_prefix}, model: {model}, dim_target: {dim_target}, recommended_doc_path: {recommended_doc_path}, candidates: {candidates} }} RETURN NONE;",
-                thing_id = thing("unresolved_link_suggestion", &row.suggestion_id),
-                suggestion_id = json_string(&row.suggestion_id),
-                run_id = json_string(&row.run_id),
-                link_id = json_string(&row.link_id),
-                from_doc_path = json_string(&row.from_doc_path),
-                line = row.line,
-                embed = if row.embed { "true" } else { "false" },
-                raw_target = json_string(&row.raw_target),
-                raw_heading = json_opt_string(row.raw_heading.as_deref()),
-                resolution_kind = json_string(&row.resolution_kind),
-                vault_prefix = json_string(&row.vault_prefix),
-                model = json_string(&row.model),
-                dim_target = row.dim_target,
-                recommended_doc_path = json_opt_string(row.recommended_doc_path.as_deref()),
-                candidates = candidates_json,
-            ));
-            batch_count += 1;
-            if batch_count >= batch_limit || sql.len() >= max_sql_bytes {
-                self.run_sql(&sql)?;
-                sql.clear();
-                batch_count = 0;
-            }
-        }
-        if !sql.is_empty() {
-            self.run_sql(&sql)?;
-        }
-        Ok(())
+        obsidian_projection::project_unresolved_link_suggestions(self, run_id, rows)
     }
 
     fn select_rows_from_single_select(&self, sql: &str) -> Result<Vec<serde_json::Value>, String> {

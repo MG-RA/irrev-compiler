@@ -13,6 +13,8 @@ mod registry;
 mod rust_ir_lint;
 mod scope_commands;
 mod scope_enablement;
+#[path = "obsidian_adapter.rs"]
+pub mod scope_obsidian;
 mod scope_validation;
 mod status_summary;
 mod types;

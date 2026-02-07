@@ -5,6 +5,11 @@ use admit_surrealdb::{
 };
 use sha2::Digest;
 
+pub use admit_scope_obsidian::{
+    extract_obsidian_links, file_stem_title, normalize_heading, normalize_target,
+    obsidian_heading_slug,
+};
+
 pub const OBSIDIAN_VAULT_LINKS_PHASE: &str = admit_scope_obsidian::OBSIDIAN_VAULT_LINKS_PHASE;
 
 pub fn is_obsidian_vault_links_phase(phase: &str) -> bool {

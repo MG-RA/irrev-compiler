@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use sha2::Digest;
 
-mod obsidian_adapter;
-
 use admit_dag::ProjectionStore;
 use admit_dag::{DagEdge, DagNode, DagTraceCollector, NodeKind, ScopeTag, Tracer};
 use admit_embed::{OllamaEmbedConfig, OllamaEmbedder};
@@ -14,6 +12,7 @@ use admit_surrealdb::{
     QueryArtifactRow, SurrealCliConfig, SurrealCliProjectionStore,
 };
 
+use admit_cli::scope_obsidian as obsidian_adapter;
 use admit_cli::{
     append_checked_event, append_court_event, append_event, append_executed_event,
     append_ingest_event, append_plan_created_event, append_projection_event,

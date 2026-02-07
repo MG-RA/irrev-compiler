@@ -25,6 +25,17 @@ fn write_answers(dir: &PathBuf, answers: serde_json::Value) -> PathBuf {
     path
 }
 
+fn write_registry(path: &PathBuf, value: serde_json::Value) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create dir");
+    }
+    fs::write(
+        path,
+        serde_json::to_string(&value).expect("serialize registry"),
+    )
+    .expect("write registry");
+}
+
 fn full_answers() -> serde_json::Value {
     serde_json::json!([
         { "prompt_id": "action_definition",      "answer": "Add a new config file to out/" },
@@ -69,8 +80,34 @@ fn create_plan_produces_deterministic_event_id() {
     assert_eq!(event_a.event_id, event_b.event_id);
     assert_eq!(event_a.plan_witness.sha256, event_b.plan_witness.sha256);
     assert_eq!(event_a.plan_witness.kind, "plan_witness");
-    assert_eq!(event_a.plan_witness.schema_id, "plan-witness/1");
+    assert_eq!(event_a.plan_witness.schema_id, "plan-witness/2");
     assert_eq!(event_a.template_id, "plan:diagnostic@1");
+}
+
+#[test]
+fn create_plan_uses_legacy_schema_with_v1_only_registry() {
+    let dir = temp_dir("legacy-schema");
+    let registry_path = dir.join("meta-registry.json");
+    write_registry(
+        &registry_path,
+        serde_json::json!({
+            "schema_id": "meta-registry/0",
+            "schema_version": 0,
+            "registry_version": 0,
+            "stdlib": [{ "module_id": "module:irrev_std@1" }],
+            "schemas": [
+                { "id": "meta-registry/0", "schema_version": 0, "kind": "meta_registry", "canonical_encoding": "canonical-cbor" },
+                { "id": "plan-witness/1", "schema_version": 1, "kind": "plan_witness", "canonical_encoding": "canonical-cbor" }
+            ],
+            "scopes": [{ "id": "scope:patch.plan", "version": 0 }]
+        }),
+    );
+
+    let mut input = make_input(&dir, full_answers());
+    input.meta_registry_path = Some(registry_path);
+
+    let event = create_plan(input).expect("create plan");
+    assert_eq!(event.plan_witness.schema_id, "plan-witness/1");
 }
 
 #[test]
@@ -105,8 +142,7 @@ fn create_plan_and_verify_ledger_passes() {
     let event = create_plan(input).expect("create plan");
     append_plan_created_event(&ledger_path, &event).expect("append event");
 
-    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path()))
-        .expect("verify ledger");
+    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).expect("verify ledger");
     assert_eq!(
         report.issues.len(),
         0,
@@ -192,7 +228,7 @@ fn render_plan_text_produces_output() {
 
     let text = render_plan_text(&artifacts_dir, plan_id).expect("render plan");
     assert!(text.contains(&format!("plan_id={}", plan_id)));
-    assert!(text.contains("schema_id=plan-witness/1"));
+    assert!(text.contains("schema_id=plan-witness/2"));
     assert!(text.contains("--- Section 1: Action Definition ---"));
     assert!(text.contains("Add a new config file to out/"));
     assert!(text.contains("--- Section 4: Erasure Cost ---"));
@@ -252,8 +288,7 @@ fn risk_derivation_grade3_is_destructive() {
     let artifacts_dir = dir.join("artifacts");
 
     let event = create_plan(input).expect("create plan");
-    let text =
-        render_plan_text(&artifacts_dir, &event.plan_witness.sha256).expect("render plan");
+    let text = render_plan_text(&artifacts_dir, &event.plan_witness.sha256).expect("render plan");
     assert!(
         text.contains("risk_label=mutation_destructive"),
         "Grade 3 should produce mutation_destructive"
@@ -277,8 +312,7 @@ fn risk_derivation_detects_invariant_keywords() {
     let artifacts_dir = dir.join("artifacts");
 
     let event = create_plan(input).expect("create plan");
-    let text =
-        render_plan_text(&artifacts_dir, &event.plan_witness.sha256).expect("render plan");
+    let text = render_plan_text(&artifacts_dir, &event.plan_witness.sha256).expect("render plan");
     assert!(
         text.contains("attribution"),
         "should detect attribution keyword"
@@ -294,7 +328,10 @@ fn nonexistent_plan_id_returns_error() {
     let dir = temp_dir("missing-plan");
     fs::create_dir_all(&dir).expect("create dir");
 
-    let err = render_plan_text(&dir, "0000000000000000000000000000000000000000000000000000000000000000");
+    let err = render_plan_text(
+        &dir,
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
     assert!(err.is_err(), "nonexistent plan_id should error");
     assert!(
         format!("{}", err.unwrap_err()).contains("plan witness not found"),

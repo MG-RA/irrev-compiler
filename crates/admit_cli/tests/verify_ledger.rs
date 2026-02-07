@@ -119,8 +119,7 @@ fn verify_ledger_reports_no_issues_for_valid_chain() {
     .expect("execute event");
     append_executed_event(&ledger_path, &executed).expect("append executed");
 
-    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path()))
-        .expect("verify ledger");
+    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).expect("verify ledger");
     assert_eq!(report.issues.len(), 0);
 
     let _ = std::fs::remove_file(ledger_path);
@@ -158,6 +157,7 @@ fn full_registry_json() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
+            { "id": "plan-witness/2",         "schema_version": 2, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
             { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
             { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
@@ -182,6 +182,7 @@ fn registry_without_main_scope() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
+            { "id": "plan-witness/2",         "schema_version": 2, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
             { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
             { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
@@ -204,6 +205,7 @@ fn registry_without_witness_schema() -> serde_json::Value {
             { "id": "vault-snapshot/0",       "schema_version": 0, "kind": "snapshot",       "canonical_encoding": "canonical-json" },
             { "id": "program-bundle/0",       "schema_version": 0, "kind": "program_bundle", "canonical_encoding": "canonical-json" },
             { "id": "facts-bundle/0",         "schema_version": 0, "kind": "facts_bundle",   "canonical_encoding": "canonical-json" },
+            { "id": "plan-witness/2",         "schema_version": 2, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
             { "id": "plan-witness/1",         "schema_version": 1, "kind": "plan_witness",   "canonical_encoding": "canonical-cbor" },
             { "id": "select-path-witness/0",  "schema_version": 0, "kind": "witness",        "canonical_encoding": "canonical-cbor" }
         ],
@@ -342,8 +344,7 @@ fn verify_ledger_legacy_no_registry_hash_is_clean() {
         "legacy event must have no registry_hash"
     );
 
-    let report =
-        verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).expect("verify");
+    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).expect("verify");
     assert!(
         report.issues.is_empty(),
         "legacy event (no registry_hash) must pass verification: {:?}",
@@ -381,8 +382,7 @@ fn verify_ledger_detects_scope_drift() {
     );
     std::fs::write(&ledger_path, patched).expect("write patched ledger");
 
-    let report =
-        verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).expect("verify drift");
+    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).expect("verify drift");
     let has_scope_issue = report.issues.iter().any(|i| {
         i.message.contains("registry missing scope_id") && i.message.contains("scope:main")
     });

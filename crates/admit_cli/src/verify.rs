@@ -4,14 +4,15 @@ use std::path::Path;
 use super::artifact::default_artifacts_dir;
 use super::internal::{
     artifact_path_from_ref, decode_cbor_to_value, payload_hash, sha256_hex,
-    PLAN_WITNESS_SCHEMA_ID,
+    PLAN_WITNESS_SCHEMA_IDS, RUST_IR_LINT_WITNESS_SCHEMA_ID,
 };
 use super::registry::{load_registry_cached, registry_allows_schema, registry_allows_scope};
 use super::types::{
     AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactRef, CheckedPayload,
-    CostDeclaredEvent, DeclareCostError, ExecutedPayload, LedgerIssue,
-    CourtEvent, CourtEventPayload, IngestEvent, IngestEventPayload, LedgerReport, PlanCreatedEvent, PlanCreatedPayload,
-    ProjectionEvent, ProjectionEventPayload,
+    CostDeclaredEvent, CourtEvent, CourtEventPayload, DeclareCostError, ExecutedPayload,
+    IngestEvent, IngestEventPayload, LedgerIssue, LedgerReport, PlanCreatedEvent,
+    PlanCreatedPayload, ProjectionEvent, ProjectionEventPayload, RustIrLintEvent,
+    RustIrLintPayload, RustIrLintWitness,
 };
 use super::witness::payload_for_event;
 
@@ -192,12 +193,10 @@ pub fn verify_ledger(
                         "witness",
                     );
                     if let Some(bytes) = witness_bytes {
-                        match decode_cbor_to_value(&bytes)
-                            .and_then(|val| {
-                                serde_json::from_value::<admit_core::Witness>(val).map_err(|err| {
-                                    DeclareCostError::WitnessDecode(err.to_string())
-                                })
-                            }) {
+                        match decode_cbor_to_value(&bytes).and_then(|val| {
+                            serde_json::from_value::<admit_core::Witness>(val)
+                                .map_err(|err| DeclareCostError::WitnessDecode(err.to_string()))
+                        }) {
                             Ok(witness) => {
                                 if let (Some(witness_hash), Some(event_hash)) =
                                     (&witness.program.snapshot_hash, &event.snapshot_hash)
@@ -273,55 +272,59 @@ pub fn verify_ledger(
                         );
                     }
                     if let Some(registry_hash) = &event.registry_hash {
-                        match load_registry_cached(&mut registry_cache, &artifacts_root, registry_hash)
-                        {
+                        match load_registry_cached(
+                            &mut registry_cache,
+                            &artifacts_root,
+                            registry_hash,
+                        ) {
                             Ok(registry) => {
-                            if !registry_allows_schema(&registry, &event.witness.schema_id) {
-                                issues.push(LedgerIssue {
-                                    line: line_no,
-                                    event_id: event_id.clone(),
-                                    event_type: event_type.clone(),
-                                    message: format!(
-                                        "registry missing schema_id for witness: {}",
-                                        event.witness.schema_id
-                                    ),
-                                });
-                            }
-                            if !registry_allows_schema(&registry, &event.snapshot_ref.schema_id) {
-                                issues.push(LedgerIssue {
-                                    line: line_no,
-                                    event_id: event_id.clone(),
-                                    event_type: event_type.clone(),
-                                    message: format!(
-                                        "registry missing schema_id for snapshot: {}",
-                                        event.snapshot_ref.schema_id
-                                    ),
-                                });
-                            }
-                            if let Some(program_ref) = &event.program_bundle_ref {
-                                if !registry_allows_schema(&registry, &program_ref.schema_id) {
+                                if !registry_allows_schema(&registry, &event.witness.schema_id) {
                                     issues.push(LedgerIssue {
                                         line: line_no,
                                         event_id: event_id.clone(),
                                         event_type: event_type.clone(),
                                         message: format!(
-                                            "registry missing schema_id for program bundle: {}",
-                                            program_ref.schema_id
+                                            "registry missing schema_id for witness: {}",
+                                            event.witness.schema_id
                                         ),
                                     });
                                 }
-                            }
-                            if !registry_allows_scope(&registry, &event.program.scope) {
-                                issues.push(LedgerIssue {
-                                    line: line_no,
-                                    event_id: event_id.clone(),
-                                    event_type: event_type.clone(),
-                                    message: format!(
-                                        "registry missing scope_id for program: {}",
-                                        event.program.scope
-                                    ),
-                                });
-                            }
+                                if !registry_allows_schema(&registry, &event.snapshot_ref.schema_id)
+                                {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry missing schema_id for snapshot: {}",
+                                            event.snapshot_ref.schema_id
+                                        ),
+                                    });
+                                }
+                                if let Some(program_ref) = &event.program_bundle_ref {
+                                    if !registry_allows_schema(&registry, &program_ref.schema_id) {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing schema_id for program bundle: {}",
+                                                program_ref.schema_id
+                                            ),
+                                        });
+                                    }
+                                }
+                                if !registry_allows_scope(&registry, &event.program.scope) {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry missing scope_id for program: {}",
+                                            event.program.scope
+                                        ),
+                                    });
+                                }
                             }
                             Err(err) => {
                                 issues.push(LedgerIssue {
@@ -446,10 +449,8 @@ pub fn verify_ledger(
                                         }
                                     }
                                     if let Some(facts_ref) = &event.facts_bundle_ref {
-                                        if !registry_allows_schema(
-                                            &registry,
-                                            &facts_ref.schema_id,
-                                        ) {
+                                        if !registry_allows_schema(&registry, &facts_ref.schema_id)
+                                        {
                                             issues.push(LedgerIssue {
                                                 line: line_no,
                                                 event_id: event_id.clone(),
@@ -511,7 +512,9 @@ pub fn verify_ledger(
                             event_type: event.event_type.clone(),
                             timestamp: event.timestamp.clone(),
                             cost_declared_event_id: event.cost_declared_event_id.clone(),
-                            admissibility_checked_event_id: event.admissibility_checked_event_id.clone(),
+                            admissibility_checked_event_id: event
+                                .admissibility_checked_event_id
+                                .clone(),
                             witness: event.witness.clone(),
                             compiler: event.compiler.clone(),
                             snapshot_ref: event.snapshot_ref.clone(),
@@ -585,10 +588,8 @@ pub fn verify_ledger(
                                         }
                                     }
                                     if let Some(facts_ref) = &event.facts_bundle_ref {
-                                        if !registry_allows_schema(
-                                            &registry,
-                                            &facts_ref.schema_id,
-                                        ) {
+                                        if !registry_allows_schema(&registry, &facts_ref.schema_id)
+                                        {
                                             issues.push(LedgerIssue {
                                                 line: line_no,
                                                 event_id: event_id.clone(),
@@ -635,27 +636,155 @@ pub fn verify_ledger(
                     }),
                 }
             }
-            Some("plan.created") => {
-                match serde_json::from_value::<PlanCreatedEvent>(value) {
-                    Ok(event) => {
-                        if event.plan_witness.schema_id != PLAN_WITNESS_SCHEMA_ID {
+            Some("plan.created") => match serde_json::from_value::<PlanCreatedEvent>(value) {
+                Ok(event) => {
+                    let expected_plan_schema = PLAN_WITNESS_SCHEMA_IDS.join(", ");
+                    if !PLAN_WITNESS_SCHEMA_IDS.contains(&event.plan_witness.schema_id.as_str()) {
+                        issues.push(LedgerIssue {
+                            line: line_no,
+                            event_id: event_id.clone(),
+                            event_type: event_type.clone(),
+                            message: format!(
+                                "plan witness schema_id mismatch (expected one of [{}], found {})",
+                                expected_plan_schema, event.plan_witness.schema_id
+                            ),
+                        });
+                    }
+                    let payload = PlanCreatedPayload {
+                        event_type: event.event_type.clone(),
+                        timestamp: event.timestamp.clone(),
+                        plan_witness: event.plan_witness.clone(),
+                        producer: event.producer.clone(),
+                        template_id: event.template_id.clone(),
+                        repro: event.repro.clone(),
+                        registry_hash: event.registry_hash.clone(),
+                    };
+                    if let Ok(hash) = payload_hash(&payload) {
+                        if hash != event.event_id {
                             issues.push(LedgerIssue {
                                 line: line_no,
                                 event_id: event_id.clone(),
                                 event_type: event_type.clone(),
                                 message: format!(
-                                    "plan witness schema_id mismatch (expected {}, found {})",
-                                    PLAN_WITNESS_SCHEMA_ID, event.plan_witness.schema_id
+                                    "event_id mismatch (expected {}, computed {})",
+                                    event.event_id, hash
                                 ),
                             });
                         }
-                        let payload = PlanCreatedPayload {
+                    }
+                    let witness_bytes = verify_artifact_ref(
+                        &artifacts_root,
+                        &event.plan_witness,
+                        line_no,
+                        &event_id,
+                        &event_type,
+                        &mut issues,
+                        "plan_witness",
+                    );
+                    if let Some(bytes) = witness_bytes {
+                        match decode_cbor_to_value(&bytes).and_then(|val| {
+                            serde_json::from_value::<admit_core::PlanWitness>(val)
+                                .map_err(|err| DeclareCostError::Json(err.to_string()))
+                        }) {
+                            Ok(witness) => {
+                                if !PLAN_WITNESS_SCHEMA_IDS.contains(&witness.schema_id.as_str()) {
+                                    issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "plan witness schema_id mismatch (expected one of [{}], found {})",
+                                                expected_plan_schema, witness.schema_id
+                                            ),
+                                        });
+                                }
+                                if witness.schema_id != event.plan_witness.schema_id {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: "plan witness schema_id mismatch vs ref"
+                                            .to_string(),
+                                    });
+                                }
+                            }
+                            Err(err) => {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!("plan witness cbor decode failed: {}", err),
+                                });
+                            }
+                        }
+                    }
+                    if let Some(registry_hash) = &event.registry_hash {
+                        match load_registry_cached(
+                            &mut registry_cache,
+                            &artifacts_root,
+                            registry_hash,
+                        ) {
+                            Ok(registry) => {
+                                if !registry_allows_schema(&registry, &event.plan_witness.schema_id)
+                                {
+                                    issues.push(LedgerIssue {
+                                        line: line_no,
+                                        event_id: event_id.clone(),
+                                        event_type: event_type.clone(),
+                                        message: format!(
+                                            "registry missing schema_id for plan witness: {}",
+                                            event.plan_witness.schema_id
+                                        ),
+                                    });
+                                }
+                            }
+                            Err(err) => {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "registry load failed (hash {}): {}",
+                                        registry_hash, err
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    issues.push(LedgerIssue {
+                        line: line_no,
+                        event_id: event_id.clone(),
+                        event_type: event_type.clone(),
+                        message: format!("plan.created decode failed: {}", err),
+                    });
+                }
+            },
+            Some("rust.ir_lint.completed") => {
+                match serde_json::from_value::<RustIrLintEvent>(value) {
+                    Ok(event) => {
+                        if event.witness.schema_id != RUST_IR_LINT_WITNESS_SCHEMA_ID {
+                            issues.push(LedgerIssue {
+                                line: line_no,
+                                event_id: event_id.clone(),
+                                event_type: event_type.clone(),
+                                message: format!(
+                                    "rust ir lint witness schema_id mismatch (expected {}, found {})",
+                                    RUST_IR_LINT_WITNESS_SCHEMA_ID, event.witness.schema_id
+                                ),
+                            });
+                        }
+                        let payload = RustIrLintPayload {
                             event_type: event.event_type.clone(),
                             timestamp: event.timestamp.clone(),
-                            plan_witness: event.plan_witness.clone(),
-                            producer: event.producer.clone(),
-                            template_id: event.template_id.clone(),
-                            repro: event.repro.clone(),
+                            witness: event.witness.clone(),
+                            scope_id: event.scope_id.clone(),
+                            rule_pack: event.rule_pack.clone(),
+                            rules: event.rules.clone(),
+                            files_scanned: event.files_scanned,
+                            violations: event.violations,
+                            passed: event.passed,
                             registry_hash: event.registry_hash.clone(),
                         };
                         if let Ok(hash) = payload_hash(&payload) {
@@ -673,38 +802,67 @@ pub fn verify_ledger(
                         }
                         let witness_bytes = verify_artifact_ref(
                             &artifacts_root,
-                            &event.plan_witness,
+                            &event.witness,
                             line_no,
                             &event_id,
                             &event_type,
                             &mut issues,
-                            "plan_witness",
+                            "rust ir lint witness",
                         );
                         if let Some(bytes) = witness_bytes {
-                            match decode_cbor_to_value(&bytes)
-                                .and_then(|val| {
-                                    serde_json::from_value::<admit_core::PlanWitness>(val)
-                                        .map_err(|err| DeclareCostError::Json(err.to_string()))
-                                }) {
+                            match decode_cbor_to_value(&bytes).and_then(|val| {
+                                serde_json::from_value::<RustIrLintWitness>(val)
+                                    .map_err(|err| DeclareCostError::Json(err.to_string()))
+                            }) {
                                 Ok(witness) => {
-                                    if witness.schema_id != PLAN_WITNESS_SCHEMA_ID {
+                                    if witness.schema_id != RUST_IR_LINT_WITNESS_SCHEMA_ID {
                                         issues.push(LedgerIssue {
                                             line: line_no,
                                             event_id: event_id.clone(),
                                             event_type: event_type.clone(),
                                             message: format!(
-                                                "plan witness schema_id mismatch (expected {}, found {})",
-                                                PLAN_WITNESS_SCHEMA_ID, witness.schema_id
+                                                "rust ir lint witness schema_id mismatch (expected {}, found {})",
+                                                RUST_IR_LINT_WITNESS_SCHEMA_ID, witness.schema_id
                                             ),
                                         });
                                     }
-                                    if witness.schema_id != event.plan_witness.schema_id {
+                                    if witness.schema_id != event.witness.schema_id {
                                         issues.push(LedgerIssue {
                                             line: line_no,
                                             event_id: event_id.clone(),
                                             event_type: event_type.clone(),
-                                            message: "plan witness schema_id mismatch vs ref"
+                                            message:
+                                                "rust ir lint witness schema_id mismatch vs ref"
+                                                    .to_string(),
+                                        });
+                                    }
+                                    if witness.passed != event.passed {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: "rust ir lint passed flag mismatch vs witness"
                                                 .to_string(),
+                                        });
+                                    }
+                                    if witness.files_scanned != event.files_scanned {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message:
+                                                "rust ir lint files_scanned mismatch vs witness"
+                                                    .to_string(),
+                                        });
+                                    }
+                                    if witness.violations.len() as u64 != event.violations {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message:
+                                                "rust ir lint violation count mismatch vs witness"
+                                                    .to_string(),
                                         });
                                     }
                                 }
@@ -714,7 +872,7 @@ pub fn verify_ledger(
                                         event_id: event_id.clone(),
                                         event_type: event_type.clone(),
                                         message: format!(
-                                            "plan witness cbor decode failed: {}",
+                                            "rust ir lint witness cbor decode failed: {}",
                                             err
                                         ),
                                     });
@@ -728,18 +886,29 @@ pub fn verify_ledger(
                                 registry_hash,
                             ) {
                                 Ok(registry) => {
-                                if !registry_allows_schema(&registry, &event.plan_witness.schema_id)
-                                {
-                                    issues.push(LedgerIssue {
-                                        line: line_no,
-                                        event_id: event_id.clone(),
-                                        event_type: event_type.clone(),
-                                        message: format!(
-                                            "registry missing schema_id for plan witness: {}",
-                                            event.plan_witness.schema_id
-                                        ),
-                                    });
-                                }
+                                    if !registry_allows_schema(&registry, &event.witness.schema_id)
+                                    {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing schema_id for rust ir lint witness: {}",
+                                                event.witness.schema_id
+                                            ),
+                                        });
+                                    }
+                                    if !registry_allows_scope(&registry, &event.scope_id) {
+                                        issues.push(LedgerIssue {
+                                            line: line_no,
+                                            event_id: event_id.clone(),
+                                            event_type: event_type.clone(),
+                                            message: format!(
+                                                "registry missing scope_id for rust ir lint: {}",
+                                                event.scope_id
+                                            ),
+                                        });
+                                    }
                                 }
                                 Err(err) => {
                                     issues.push(LedgerIssue {
@@ -760,7 +929,7 @@ pub fn verify_ledger(
                             line: line_no,
                             event_id: event_id.clone(),
                             event_type: event_type.clone(),
-                            message: format!("plan.created decode failed: {}", err),
+                            message: format!("rust.ir_lint.completed decode failed: {}", err),
                         });
                     }
                 }
@@ -968,10 +1137,7 @@ pub fn verify_ledger(
         if let Some(cost) = cost_by_id.get(&checked.cost_declared_event_id) {
             if checked.witness.sha256 != cost.witness.sha256 {
                 issues.push(LedgerIssue {
-                    line: index_by_id
-                        .get(&checked.event_id)
-                        .copied()
-                        .unwrap_or(0),
+                    line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
                     event_id: Some(checked.event_id.clone()),
                     event_type: Some("admissibility.checked".to_string()),
                     message: "witness hash mismatch vs cost.declared".to_string(),
@@ -979,10 +1145,7 @@ pub fn verify_ledger(
             }
             if checked.snapshot_ref.sha256 != cost.snapshot_ref.sha256 {
                 issues.push(LedgerIssue {
-                    line: index_by_id
-                        .get(&checked.event_id)
-                        .copied()
-                        .unwrap_or(0),
+                    line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
                     event_id: Some(checked.event_id.clone()),
                     event_type: Some("admissibility.checked".to_string()),
                     message: "snapshot ref mismatch vs cost.declared".to_string(),
@@ -992,10 +1155,7 @@ pub fn verify_ledger(
                 != cost.program_bundle_ref.as_ref().map(|r| &r.sha256)
             {
                 issues.push(LedgerIssue {
-                    line: index_by_id
-                        .get(&checked.event_id)
-                        .copied()
-                        .unwrap_or(0),
+                    line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
                     event_id: Some(checked.event_id.clone()),
                     event_type: Some("admissibility.checked".to_string()),
                     message: "program bundle ref mismatch vs cost.declared".to_string(),
@@ -1003,10 +1163,7 @@ pub fn verify_ledger(
             }
             if checked.snapshot_hash != cost.snapshot_hash {
                 issues.push(LedgerIssue {
-                    line: index_by_id
-                        .get(&checked.event_id)
-                        .copied()
-                        .unwrap_or(0),
+                    line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
                     event_id: Some(checked.event_id.clone()),
                     event_type: Some("admissibility.checked".to_string()),
                     message: "snapshot hash mismatch vs cost.declared".to_string(),
@@ -1016,10 +1173,7 @@ pub fn verify_ledger(
                 if let Some(hash) = &checked.facts_bundle_hash {
                     if hash != &facts_ref.sha256 {
                         issues.push(LedgerIssue {
-                            line: index_by_id
-                                .get(&checked.event_id)
-                                .copied()
-                                .unwrap_or(0),
+                            line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
                             event_id: Some(checked.event_id.clone()),
                             event_type: Some("admissibility.checked".to_string()),
                             message: "facts bundle hash mismatch vs ref".to_string(),
@@ -1039,7 +1193,8 @@ pub fn verify_ledger(
                     line: idx,
                     event_id: Some(executed.event_id.clone()),
                     event_type: Some("admissibility.executed".to_string()),
-                    message: "admissibility.checked appears after admissibility.executed".to_string(),
+                    message: "admissibility.checked appears after admissibility.executed"
+                        .to_string(),
                 });
             }
         } else {

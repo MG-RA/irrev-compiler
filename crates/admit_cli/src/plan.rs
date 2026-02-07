@@ -6,12 +6,12 @@ use serde::Deserialize;
 use super::artifact::{default_artifacts_dir, store_artifact};
 use super::internal::{
     artifact_disk_path, decode_cbor_to_value, payload_hash, sha256_hex, PLAN_TEMPLATE_ID,
-    PLAN_WITNESS_SCHEMA_ID,
+    PLAN_WITNESS_SCHEMA_ID, PLAN_WITNESS_SCHEMA_ID_V1,
 };
-use super::registry::resolve_meta_registry;
+use super::registry::{registry_allows_schema, resolve_meta_registry};
 use super::types::{
-    DeclareCostError, PlanCreatedEvent, PlanCreatedPayload, PlanNewInput, PlanProducerRef,
-    PlanReproRef,
+    DeclareCostError, MetaRegistryV0, PlanCreatedEvent, PlanCreatedPayload, PlanNewInput,
+    PlanProducerRef, PlanReproRef,
 };
 
 // ---------------------------------------------------------------------------
@@ -123,12 +123,12 @@ pub fn parse_plan_answers_markdown(
     markdown: &str,
 ) -> Result<Vec<admit_core::PlanAnswer>, DeclareCostError> {
     let prompts = diagnostic_prompts();
-    let prompts_by_section: std::collections::HashMap<u32, &admit_core::PlanPrompt> =
+    let prompts_by_section: std::collections::BTreeMap<u32, &admit_core::PlanPrompt> =
         prompts.iter().map(|p| (p.section, p)).collect();
 
     let mut current_section: Option<u32> = None;
-    let mut section_lines: std::collections::HashMap<u32, Vec<String>> =
-        std::collections::HashMap::new();
+    let mut section_lines: std::collections::BTreeMap<u32, Vec<String>> =
+        std::collections::BTreeMap::new();
 
     for line in markdown.lines() {
         if let Some(section) = parse_section_heading(line) {
@@ -311,6 +311,18 @@ fn is_word_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+fn select_plan_witness_schema_id(registry: Option<&MetaRegistryV0>) -> &'static str {
+    if let Some(registry) = registry {
+        if registry_allows_schema(registry, PLAN_WITNESS_SCHEMA_ID) {
+            return PLAN_WITNESS_SCHEMA_ID;
+        }
+        if registry_allows_schema(registry, PLAN_WITNESS_SCHEMA_ID_V1) {
+            return PLAN_WITNESS_SCHEMA_ID_V1;
+        }
+    }
+    PLAN_WITNESS_SCHEMA_ID
+}
+
 // ---------------------------------------------------------------------------
 // Public: create plan
 // ---------------------------------------------------------------------------
@@ -356,7 +368,7 @@ pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostE
     }
 
     // Build answer map from input
-    let answer_map: std::collections::HashMap<&str, &str> = raw_answers
+    let answer_map: std::collections::BTreeMap<&str, &str> = raw_answers
         .iter()
         .map(|ra| (ra.prompt_id.as_str(), ra.answer.as_str()))
         .collect();
@@ -381,10 +393,14 @@ pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostE
     let template_bytes = admit_core::encode_canonical_value(&prompts_value)
         .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
     let template_hash = sha256_hex(&template_bytes);
+    let plan_witness_schema_id = select_plan_witness_schema_id(registry_ref);
 
     let witness = admit_core::PlanWitness {
-        schema_id: PLAN_WITNESS_SCHEMA_ID.to_string(),
+        schema_id: plan_witness_schema_id.to_string(),
         created_at: input.timestamp.clone(),
+        court_version: Some(input.tool_version.clone()),
+        input_id: Some(answers_file_hash.clone()),
+        config_hash: Some(template_hash.clone()),
         producer: admit_core::PlanProducer {
             surface: input.surface.clone(),
             tool_version: input.tool_version.clone(),
@@ -420,7 +436,7 @@ pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostE
     let witness_ref = store_artifact(
         &artifacts_root,
         "plan_witness",
-        PLAN_WITNESS_SCHEMA_ID,
+        plan_witness_schema_id,
         &cbor_bytes,
         "cbor",
         Some(json_projection),

@@ -14,8 +14,12 @@ pub(crate) const DEFAULT_ARTIFACT_ROOT: &str = "out/artifacts";
 pub(crate) const META_REGISTRY_SCHEMA_ID: &str = "meta-registry/0";
 pub(crate) const META_REGISTRY_KIND: &str = "meta_registry";
 pub(crate) const META_REGISTRY_ENV: &str = "ADMIT_META_REGISTRY";
-pub(crate) const PLAN_WITNESS_SCHEMA_ID: &str = "plan-witness/1";
+pub(crate) const PLAN_WITNESS_SCHEMA_ID: &str = "plan-witness/2";
+pub(crate) const PLAN_WITNESS_SCHEMA_ID_V1: &str = "plan-witness/1";
+pub(crate) const PLAN_WITNESS_SCHEMA_IDS: [&str; 2] =
+    [PLAN_WITNESS_SCHEMA_ID, PLAN_WITNESS_SCHEMA_ID_V1];
 pub(crate) const PLAN_TEMPLATE_ID: &str = "plan:diagnostic@1";
+pub(crate) const RUST_IR_LINT_WITNESS_SCHEMA_ID: &str = "rust-ir-lint-witness/1";
 
 // ---------------------------------------------------------------------------
 // Hashing & payload ID
@@ -68,19 +72,14 @@ pub(crate) fn decode_cbor_to_value(bytes: &[u8]) -> Result<serde_json::Value, De
     Ok(value)
 }
 
-fn decode_cbor_value(
-    bytes: &[u8],
-    idx: &mut usize,
-) -> Result<serde_json::Value, DeclareCostError> {
+fn decode_cbor_value(bytes: &[u8], idx: &mut usize) -> Result<serde_json::Value, DeclareCostError> {
     let byte = read_byte(bytes, idx)?;
     let major = byte >> 5;
     let ai = byte & 0x1f;
 
     let val = read_ai(bytes, idx, ai)?;
     match major {
-        0 => Ok(serde_json::Value::Number(
-            serde_json::Number::from(val),
-        )),
+        0 => Ok(serde_json::Value::Number(serde_json::Number::from(val))),
         1 => {
             let n = -1i64 - (val as i64);
             let num = serde_json::Number::from(n);

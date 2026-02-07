@@ -180,9 +180,21 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
                 canonical_encoding: "canonical-json".to_string(),
             },
             MetaRegistrySchema {
+                id: "plan-witness/2".to_string(),
+                schema_version: 2,
+                kind: "plan_witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
                 id: "plan-witness/1".to_string(),
                 schema_version: 1,
                 kind: "plan_witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "rust-ir-lint-witness/1".to_string(),
+                schema_version: 1,
+                kind: "rust_ir_lint_witness".to_string(),
                 canonical_encoding: "canonical-cbor".to_string(),
             },
             MetaRegistrySchema {
@@ -329,6 +341,19 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
             },
             MetaRegistryScope {
                 id: "scope:patch.plan".to_string(),
+                version: 0,
+                snapshot_schema_id: None,
+                phase: None,
+                deterministic: None,
+                foundational: None,
+                emits: None,
+                consumes: None,
+                deps: None,
+                role: None,
+                contract_ref: None,
+            },
+            MetaRegistryScope {
+                id: "scope:rust.ir_lint".to_string(),
                 version: 0,
                 snapshot_schema_id: None,
                 phase: None,

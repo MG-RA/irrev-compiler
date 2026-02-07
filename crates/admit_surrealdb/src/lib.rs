@@ -1,7 +1,7 @@
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::path::Path;
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Stdio};
 
 use admit_core::ArtifactRef;
 use admit_dag::{DagEdge, DagNode, EdgeType, GovernedDag, NodeKind, ProjectionStore};
@@ -17,8 +17,8 @@ pub mod projection_run;
 pub mod projection_events;
 
 // Ingestion run + events (queryable view)
-pub mod ingest_run;
 pub mod ingest_events;
+pub mod ingest_run;
 
 // Projection store trait and implementations
 pub mod projection_store;
@@ -27,11 +27,11 @@ pub mod projection_store;
 pub mod link_resolver;
 
 // Re-export key types for convenience
-pub use projection_store::{NullStore, ProjectionError, ProjectionResult, ProjectionStoreOps};
-pub use link_resolver::{VaultLinkResolver, ObsidianLink, ResolutionResult, AssetResolution};
-pub use projection_events::ProjectionEventRow;
 pub use ingest_events::IngestEventRow;
 pub use ingest_run::IngestRunRow;
+pub use link_resolver::{AssetResolution, ObsidianLink, ResolutionResult, VaultLinkResolver};
+pub use projection_events::ProjectionEventRow;
+pub use projection_store::{NullStore, ProjectionError, ProjectionResult, ProjectionStoreOps};
 
 #[derive(Debug, Clone)]
 pub struct SurrealCliConfig {
@@ -278,7 +278,10 @@ impl SurrealCliProjectionStore {
     fn run_sql(&self, sql: &str) -> Result<(), String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         Ok(())
     }
@@ -286,7 +289,10 @@ impl SurrealCliProjectionStore {
     fn run_sql_allow_already_exists(&self, sql: &str) -> Result<(), String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream_allow_already_exists(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         Ok(())
     }
@@ -428,7 +434,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
     }
 
     /// Begin a new projection run, returns the run_id
-    pub fn begin_projection_run(&self, run: &crate::projection_run::ProjectionRun) -> Result<String, String> {
+    pub fn begin_projection_run(
+        &self,
+        run: &crate::projection_run::ProjectionRun,
+    ) -> Result<String, String> {
         use crate::projection_run::RunStatus;
 
         let status_str = match run.status {
@@ -503,7 +512,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
     }
 
     /// Get the latest projection run for a given trace
-    pub fn get_latest_projection_run(&self, trace_sha256: &str) -> Result<Option<serde_json::Value>, String> {
+    pub fn get_latest_projection_run(
+        &self,
+        trace_sha256: &str,
+    ) -> Result<Option<serde_json::Value>, String> {
         let sql = format!(
             "SELECT * FROM projection_run \
             WHERE trace_sha256 = {} \
@@ -555,7 +567,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
         );
         let output = self.run_sql_output(&sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         let values = extract_result_array(&output.values)?;
         Ok(values.first().cloned())
@@ -568,7 +583,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
         );
         let output = self.run_sql_output(&sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         let values = extract_result_array(&output.values)?;
         Ok(values.first().cloned())
@@ -581,7 +599,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
         );
         let output = self.run_sql_output(&sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         let values = extract_result_array(&output.values)?;
         for value in values {
@@ -719,7 +740,12 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
                                 doc_sql.push_str(&facet_upsert_sql(facet));
                                 let edge_id = has_facet_edge_id(&doc.doc_path, facet)
                                     .map_err(|e| format!("facet edge id: {}", e))?;
-                                doc_sql.push_str(&has_facet_relate_sql(&doc, facet, &edge_id, Some(run_id)));
+                                doc_sql.push_str(&has_facet_relate_sql(
+                                    &doc,
+                                    facet,
+                                    &edge_id,
+                                    Some(run_id),
+                                ));
                             }
                         }
                     }
@@ -796,7 +822,8 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
             let mut sql = String::new();
             let mut found = 0usize;
             for node_id in &batch.item_ids {
-                let Some((chunk_sha256, doc_path, heading_path, start_line, artifact_ref)) = chunk_index.get(node_id)
+                let Some((chunk_sha256, doc_path, heading_path, start_line, artifact_ref)) =
+                    chunk_index.get(node_id)
                 else {
                     continue;
                 };
@@ -929,7 +956,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
         );
         let output = self.run_sql_output(&sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         let values = extract_result_array(&output.values)?;
         for value in values {
@@ -947,7 +977,10 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
         );
         let output = self.run_sql_output(&sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         let values = extract_result_array(&output.values)?;
         let mut out: Vec<String> = Vec::new();
@@ -969,8 +1002,9 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
         if run_ids.is_empty() {
             return Ok(());
         }
-        let runs_json = serde_json::to_string(run_ids)
-            .map_err(|e| format!("serialize run_ids: {}", e))?;
+        let runs_json =
+            serde_json::to_string(run_ids).map_err(|e| format!("serialize run_ids: {}", e))?;
+        // IR-DELETE-JUSTIFIED: explicit projection vacuum operation by run_id.
         let sql = format!(
             "LET $runs = {runs};\
 DELETE node WHERE projection_run_id IN $runs RETURN NONE;\
@@ -1034,7 +1068,10 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
         }
 
         for row in doc_rows {
-            let embed_id = sha256_hex_str(&format!("{}|{}|{}", row.model, row.dim_target, row.doc_path));
+            let embed_id = sha256_hex_str(&format!(
+                "{}|{}|{}",
+                row.model, row.dim_target, row.doc_path
+            ));
             let emb_json = serde_json::to_string(&row.embedding)
                 .map_err(|err| format!("json encode embedding: {}", err))?;
             let dim = row.embedding.len() as u32;
@@ -1187,6 +1224,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             }
 
             // Refresh facet relations (derived view).
+            // IR-DELETE-JUSTIFIED: per-document replacement semantics for derived facet edges.
             sql.push_str(&format!(
                 "DELETE has_facet WHERE doc_path = {} RETURN NONE;",
                 json_string(&doc.doc_path)
@@ -1232,13 +1270,24 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             conds.push(format!("string::starts_with(doc_path, {})", json_string(p)));
         }
         let where_sql = conds.join(" OR ");
-        let sql = format!("SELECT doc_path, title FROM doc_file WHERE {} LIMIT 100000;", where_sql);
+        let sql = format!(
+            "SELECT doc_path, title FROM doc_file WHERE {} LIMIT 100000;",
+            where_sql
+        );
         let rows = self.select_rows_from_single_select(&sql)?;
         let mut out = Vec::new();
         for r in rows {
             let Some(obj) = r.as_object() else { continue };
-            let doc_path = obj.get("doc_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let doc_path = obj
+                .get("doc_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let title = obj
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             if doc_path.is_empty() {
                 continue;
             }
@@ -1247,7 +1296,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         Ok(out)
     }
 
-    pub fn project_doc_title_embeddings(&self, rows: &[DocTitleEmbeddingRow]) -> Result<(), String> {
+    pub fn project_doc_title_embeddings(
+        &self,
+        rows: &[DocTitleEmbeddingRow],
+    ) -> Result<(), String> {
         self.ensure_doc_file_schema()?;
         let batch_limit = self.projection_config.batch_sizes.embeddings;
         let max_sql_bytes = self.projection_config.batch_sizes.max_sql_bytes.max(1);
@@ -1255,7 +1307,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         let mut sql = String::new();
 
         for row in rows {
-            let embed_id = sha256_hex_str(&format!("{}|{}|{}", row.model, row.dim_target, row.doc_path));
+            let embed_id = sha256_hex_str(&format!(
+                "{}|{}|{}",
+                row.model, row.dim_target, row.doc_path
+            ));
             let emb_json = serde_json::to_string(&row.embedding)
                 .map_err(|err| format!("json encode embedding: {}", err))?;
             let dim = row.embedding.len() as u32;
@@ -1299,7 +1354,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         }
         let mut conds = Vec::new();
         for p in prefixes {
-            conds.push(format!("string::starts_with(from_doc_path, {})", json_string(p)));
+            conds.push(format!(
+                "string::starts_with(from_doc_path, {})",
+                json_string(p)
+            ));
         }
         let where_prefix = conds.join(" OR ");
         let kinds_json = serde_json::to_string(kinds).unwrap_or_else(|_| "[]".to_string());
@@ -1315,12 +1373,34 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         let mut out = Vec::new();
         for r in rows {
             let Some(obj) = r.as_object() else { continue };
-            let link_id = obj.get("link_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let from_doc_path = obj.get("from_doc_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let raw_target = obj.get("raw_target").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let raw_heading = obj.get("raw_heading").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let resolution_kind = obj.get("resolution_kind").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let resolved_doc_path = obj.get("resolved_doc_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let link_id = obj
+                .get("link_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let from_doc_path = obj
+                .get("from_doc_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw_target = obj
+                .get("raw_target")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let raw_heading = obj
+                .get("raw_heading")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let resolution_kind = obj
+                .get("resolution_kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let resolved_doc_path = obj
+                .get("resolved_doc_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let line = obj.get("line").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let embed = obj.get("embed").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut candidates: Vec<String> = Vec::new();
@@ -1331,7 +1411,11 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                     }
                 }
             }
-            if link_id.is_empty() || from_doc_path.is_empty() || raw_target.is_empty() || resolution_kind.is_empty() {
+            if link_id.is_empty()
+                || from_doc_path.is_empty()
+                || raw_target.is_empty()
+                || resolution_kind.is_empty()
+            {
                 continue;
             }
             out.push(UnresolvedLinkRow {
@@ -1358,8 +1442,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         limit: usize,
     ) -> Result<Vec<(String, f64)>, String> {
         self.ensure_doc_file_schema()?;
-        let emb_json =
-            serde_json::to_string(query_embedding).map_err(|err| format!("json encode query embedding: {}", err))?;
+        let emb_json = serde_json::to_string(query_embedding)
+            .map_err(|err| format!("json encode query embedding: {}", err))?;
         let lim = limit.max(1).min(50);
         let sql = format!(
             "SELECT doc_path, vector::similarity::cosine(embedding, {q}) AS sim FROM doc_title_embedding WHERE model={model} AND dim_target={dim} AND string::starts_with(doc_path, {prefix}) ORDER BY sim DESC LIMIT {lim};",
@@ -1373,7 +1457,11 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         let mut out = Vec::new();
         for r in rows {
             let Some(obj) = r.as_object() else { continue };
-            let doc_path = obj.get("doc_path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let doc_path = obj
+                .get("doc_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let sim = obj.get("sim").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if doc_path.is_empty() {
                 continue;
@@ -1390,6 +1478,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
     ) -> Result<(), String> {
         self.ensure_vault_link_schema()?;
         let mut sql = String::new();
+        // IR-DELETE-JUSTIFIED: run-scoped replacement semantics for suggestion rows.
         sql.push_str(&format!(
             "DELETE unresolved_link_suggestion WHERE run_id = {} RETURN NONE;",
             json_string(run_id)
@@ -1401,8 +1490,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
 
         for row in rows {
             let candidates_json = serde_json::to_string(
-                &row
-                    .candidates
+                &row.candidates
                     .iter()
                     .map(|(p, s)| serde_json::json!({ "doc_path": p, "sim": s }))
                     .collect::<Vec<_>>(),
@@ -1443,7 +1531,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
     fn select_rows_from_single_select(&self, sql: &str) -> Result<Vec<serde_json::Value>, String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
-            format!("{}\nstdout:\n{}\nstderr:\n{}", msg, output.stdout, output.stderr)
+            format!(
+                "{}\nstdout:\n{}\nstderr:\n{}",
+                msg, output.stdout, output.stderr
+            )
         })?;
         let Some(first) = output.values.first() else {
             return Ok(Vec::new());
@@ -1497,7 +1588,9 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             let text = String::from_utf8_lossy(&bytes);
 
             let record_id = id.to_string();
-            let doc_ref = if doc_file_prefixes.is_empty() || doc_file_prefixes.iter().any(|p| doc_path.starts_with(p)) {
+            let doc_ref = if doc_file_prefixes.is_empty()
+                || doc_file_prefixes.iter().any(|p| doc_path.starts_with(p))
+            {
                 Some(thing("doc_file", &sha256_hex_str(doc_path)))
             } else {
                 None
@@ -1578,7 +1671,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                     artifact_abs_path: abs_path,
                 },
             );
-            title_exact_index.entry(title.clone()).or_default().insert(path.clone());
+            title_exact_index
+                .entry(title.clone())
+                .or_default()
+                .insert(path.clone());
             title_casefold_index
                 .entry(title.to_lowercase())
                 .or_default()
@@ -1637,7 +1733,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             if heading_slug.is_empty() {
                 continue;
             }
-            let heading_id = sha256_hex_str(&format!("{}|{}|{}", doc_path, start_line, heading_slug));
+            let heading_id =
+                sha256_hex_str(&format!("{}|{}|{}", doc_path, start_line, heading_slug));
             let sql = doc_heading_upsert_sql(
                 &heading_id,
                 doc_path,
@@ -1677,6 +1774,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             if run_id.is_none() {
                 // Projection is derived; make it self-cleaning per source document so we don't accumulate ghosts
                 // when notes change between ingestions.
+                // IR-DELETE-JUSTIFIED: per-document replacement semantics for derived link projections.
                 let mut delete_sql = String::new();
                 delete_sql.push_str(&format!(
                     "DELETE obsidian_link WHERE from_doc_path = {} RETURN NONE;",
@@ -1735,7 +1833,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                             &asset_res.kind,
                             run_id,
                         );
-                        link_batches.push_item(format!("obsidian_file_link:{}", edge_id), &link_sql);
+                        link_batches
+                            .push_item(format!("obsidian_file_link:{}", edge_id), &link_sql);
                         continue;
                     }
                     // If the asset can't be resolved, treat it as a missing link (unresolved).
@@ -1774,7 +1873,11 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                     &title_casefold_index,
                 );
                 resolution.norm_alias = normalize_optional(link.alias.as_deref());
-                resolution.norm_heading = link.heading.as_deref().map(normalize_heading).filter(|s| !s.is_empty());
+                resolution.norm_heading = link
+                    .heading
+                    .as_deref()
+                    .map(normalize_heading)
+                    .filter(|s| !s.is_empty());
 
                 match resolution.kind.as_str() {
                     "missing" | "ambiguous" => {
@@ -1806,7 +1909,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                         || (!wanted_slug.is_empty() && set.contains(&wanted_slug))
                                 });
                                 if !ok {
-                                    stats.heading_missing_out = stats.heading_missing_out.saturating_add(1);
+                                    stats.heading_missing_out =
+                                        stats.heading_missing_out.saturating_add(1);
                                     let mut heading_miss = resolution.clone();
                                     heading_miss.kind = "heading_missing".to_string();
                                     let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
@@ -1818,8 +1922,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                         Some(to_doc_path),
                                         run_id,
                                     );
-                                    link_batches
-                                        .push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
+                                    link_batches.push_item(
+                                        format!("doc_link_unresolved:{}", link_id),
+                                        &link_sql,
+                                    );
                                     continue;
                                 }
                             }
@@ -1853,7 +1959,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                             None,
                             run_id,
                         );
-                        link_batches.push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
+                        link_batches
+                            .push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
                     }
                     _ => {
                         let Some(to_doc_path) = resolution.resolved.as_ref() else {
@@ -1880,7 +1987,8 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                     || (!wanted_slug.is_empty() && set.contains(&wanted_slug))
                             });
                             if !ok {
-                                stats.heading_missing_out = stats.heading_missing_out.saturating_add(1);
+                                stats.heading_missing_out =
+                                    stats.heading_missing_out.saturating_add(1);
                                 let mut heading_miss = resolution.clone();
                                 heading_miss.kind = "heading_missing".to_string();
                                 let link_id = obsidian_unresolved_id(&doc.doc_path, &link)?;
@@ -1892,15 +2000,22 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                                     Some(to_doc_path),
                                     run_id,
                                 );
-                                link_batches
-                                    .push_item(format!("doc_link_unresolved:{}", link_id), &link_sql);
+                                link_batches.push_item(
+                                    format!("doc_link_unresolved:{}", link_id),
+                                    &link_sql,
+                                );
                                 continue;
                             }
                         }
 
                         stats.out_links = stats.out_links.saturating_add(1);
                         *inbound_links.entry(to_doc_path.clone()).or_insert(0) += 1;
-                        let edge_id = obsidian_link_edge_id(&doc.doc_path, to_doc_path, &link, &resolution.kind)?;
+                        let edge_id = obsidian_link_edge_id(
+                            &doc.doc_path,
+                            to_doc_path,
+                            &link,
+                            &resolution.kind,
+                        )?;
                         let link_sql = obsidian_link_relate_sql(
                             &doc.doc_path,
                             to_doc_path,
@@ -2117,14 +2232,15 @@ impl<'a> BatchAccumulator<'a> {
                 self.successful_batches = self.successful_batches.saturating_add(1);
             }
             Err(err) => {
-                self.failed_batches.push(crate::projection_run::FailedBatch::new(
-                    self.phase,
-                    &self.run_id,
-                    batch_index,
-                    item_ids,
-                    err,
-                    1,
-                ));
+                self.failed_batches
+                    .push(crate::projection_run::FailedBatch::new(
+                        self.phase,
+                        &self.run_id,
+                        batch_index,
+                        item_ids,
+                        err,
+                        1,
+                    ));
             }
         }
         self.db_write_time_ms = self
@@ -2429,9 +2545,8 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
         let mut edge_batches = BatchAccumulator::new(self, phase, run_id, batch_limit);
         for edge in dag.edges() {
-            let edge_id = edge_identity_sha256(edge).map_err(|e| {
-                crate::projection_store::ProjectionError::new(e).with_phase(phase)
-            })?;
+            let edge_id = edge_identity_sha256(edge)
+                .map_err(|e| crate::projection_store::ProjectionError::new(e).with_phase(phase))?;
             let sql = edge_relate_sql_with_run(&edge_id, edge, run_id);
             edge_batches.push_item(edge_id, &sql);
         }
@@ -2525,6 +2640,7 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
             // Refresh facet relations (derived view).
             if run_id.is_none() {
+                // IR-DELETE-JUSTIFIED: per-document replacement semantics for derived facet edges.
                 doc_sql.push_str(&format!(
                     "DELETE has_facet WHERE doc_path = {} RETURN NONE;",
                     json_string(&doc.doc_path)
@@ -2700,7 +2816,7 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
             doc_filter,
             run_id,
         )
-            .map_err(|e| e.into())
+        .map_err(|e| e.into())
     }
 
     fn project_embeddings(
@@ -2715,7 +2831,10 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
             .map_err(|e| e.into())
     }
 
-    fn project_embed_run(&self, run: &EmbedRunRow) -> crate::projection_store::ProjectionResult<()> {
+    fn project_embed_run(
+        &self,
+        run: &EmbedRunRow,
+    ) -> crate::projection_store::ProjectionResult<()> {
         SurrealCliProjectionStore::project_embed_run(self, run).map_err(|e| e.into())
     }
 
@@ -2725,7 +2844,8 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
         _run_id: Option<&str>,
     ) -> crate::projection_store::ProjectionResult<()> {
         // Delegate to existing implementation (already has run_id in rows)
-        self.project_doc_title_embeddings(rows).map_err(|e| e.into())
+        self.project_doc_title_embeddings(rows)
+            .map_err(|e| e.into())
     }
 
     fn project_unresolved_suggestions(
@@ -2752,8 +2872,7 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
         for row in rows {
             let thing_id = thing("query_artifact", &row.artifact_sha256);
-            let tags_json = serde_json::to_string(&row.tags)
-                .unwrap_or_else(|_| "[]".to_string());
+            let tags_json = serde_json::to_string(&row.tags).unwrap_or_else(|_| "[]".to_string());
 
             sql.push_str(&format!(
                 "UPSERT {thing_id} CONTENT {{ artifact_sha256: {artifact_sha256}, schema_id: {schema_id}, name: {name}, lang: {lang}, source: {source}, tags: {tags}, created_at_utc: {created_at_utc} }} RETURN NONE;\n",
@@ -2797,8 +2916,7 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
         for row in rows {
             let thing_id = thing("fn_artifact", &row.artifact_sha256);
-            let tags_json = serde_json::to_string(&row.tags)
-                .unwrap_or_else(|_| "[]".to_string());
+            let tags_json = serde_json::to_string(&row.tags).unwrap_or_else(|_| "[]".to_string());
 
             sql.push_str(&format!(
                 "UPSERT {thing_id} CONTENT {{ artifact_sha256: {artifact_sha256}, schema_id: {schema_id}, name: {name}, lang: {lang}, source: {source}, tags: {tags}, created_at_utc: {created_at_utc} }} RETURN NONE;\n",
@@ -2841,8 +2959,14 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
         limit: usize,
         projection_run_id: Option<&str>,
     ) -> crate::projection_store::ProjectionResult<Vec<UnresolvedLinkRow>> {
-        SurrealCliProjectionStore::select_unresolved_links(self, prefixes, kinds, limit, projection_run_id)
-            .map_err(|e| e.into())
+        SurrealCliProjectionStore::select_unresolved_links(
+            self,
+            prefixes,
+            kinds,
+            limit,
+            projection_run_id,
+        )
+        .map_err(|e| e.into())
     }
 
     fn search_title_embeddings(
@@ -2929,8 +3053,12 @@ fn chunk_repr_artifact_from_node(node: &DagNode) -> Option<ArtifactRef> {
 fn decode_chunk_repr_value(bytes: &[u8]) -> Result<serde_json::Value, String> {
     match serde_cbor::from_slice::<serde_json::Value>(bytes) {
         Ok(v) => Ok(v),
-        Err(cbor_err) => serde_json::from_slice::<serde_json::Value>(bytes)
-            .map_err(|json_err| format!("decode chunk_repr artifact: cbor={}, json={}", cbor_err, json_err)),
+        Err(cbor_err) => serde_json::from_slice::<serde_json::Value>(bytes).map_err(|json_err| {
+            format!(
+                "decode chunk_repr artifact: cbor={}, json={}",
+                cbor_err, json_err
+            )
+        }),
     }
 }
 
@@ -3011,8 +3139,7 @@ fn doc_chunk_upsert_sql_with_run(
     doc_ref: Option<&str>,
     run_id: Option<&str>,
 ) -> String {
-    let headings_json =
-        serde_json::to_string(heading_path).unwrap_or_else(|_| "[]".to_string());
+    let headings_json = serde_json::to_string(heading_path).unwrap_or_else(|_| "[]".to_string());
     let node_ref = thing("node", node_id);
     let doc_field = surreal_record_or_null(doc_ref);
     let run_id_field = if let Some(rid) = run_id {
@@ -3288,7 +3415,10 @@ fn split_kind(kind: &NodeKind) -> (String, String) {
         }
         other => other,
     };
-    (tag, serde_json::to_string(&fields).unwrap_or_else(|_| "{}".to_string()))
+    (
+        tag,
+        serde_json::to_string(&fields).unwrap_or_else(|_| "{}".to_string()),
+    )
 }
 
 fn split_edge_type(edge_type: &EdgeType) -> (String, String) {
@@ -3305,7 +3435,10 @@ fn split_edge_type(edge_type: &EdgeType) -> (String, String) {
         }
         other => other,
     };
-    (tag, serde_json::to_string(&fields).unwrap_or_else(|_| "{}".to_string()))
+    (
+        tag,
+        serde_json::to_string(&fields).unwrap_or_else(|_| "{}".to_string()),
+    )
 }
 
 fn json_string(s: &str) -> String {
@@ -3360,10 +3493,18 @@ fn file_stem_title(path: &str) -> String {
     crate::link_resolver::file_stem_title(path)
 }
 
-fn build_heading_index(dag: &GovernedDag, vault_prefixes: &[&str]) -> BTreeMap<String, BTreeSet<String>> {
+fn build_heading_index(
+    dag: &GovernedDag,
+    vault_prefixes: &[&str],
+) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (_id, node) in dag.nodes() {
-        let NodeKind::TextChunk { doc_path, heading_path, .. } = &node.kind else {
+        let NodeKind::TextChunk {
+            doc_path,
+            heading_path,
+            ..
+        } = &node.kind
+        else {
             continue;
         };
         if !vault_prefixes.iter().any(|p| doc_path.starts_with(p)) {
@@ -3436,7 +3577,10 @@ fn parse_frontmatter_yaml(raw_yaml: &str) -> Option<DocFrontmatter> {
                       key: &mut Option<String>,
                       list: &mut Vec<String>| {
         if let Some(k) = key.take() {
-            let arr: Vec<serde_json::Value> = list.drain(..).map(|s| serde_json::Value::String(s)).collect();
+            let arr: Vec<serde_json::Value> = list
+                .drain(..)
+                .map(|s| serde_json::Value::String(s))
+                .collect();
             obj.insert(k, serde_json::Value::Array(arr));
         }
     };
@@ -3502,8 +3646,14 @@ fn parse_frontmatter_yaml(raw_yaml: &str) -> Option<DocFrontmatter> {
 
     let json = serde_json::Value::Object(obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
 
-    let role = obj.get("role").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let doc_type = obj.get("type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let role = obj
+        .get("role")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let doc_type = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let canonical = obj.get("canonical").and_then(|v| {
         if let Some(b) = v.as_bool() {
             Some(b)
@@ -3590,7 +3740,12 @@ fn facet_upsert_sql(facet: &str) -> String {
     )
 }
 
-fn has_facet_relate_sql(doc: &VaultDoc, facet: &str, edge_id: &str, run_id: Option<&str>) -> String {
+fn has_facet_relate_sql(
+    doc: &VaultDoc,
+    facet: &str,
+    edge_id: &str,
+    run_id: Option<&str>,
+) -> String {
     let fid = facet_id(facet);
     let record_id = run_scoped_id(edge_id, run_id);
     let run_id_field = if let Some(rid) = run_id {
@@ -3638,7 +3793,12 @@ fn resolve_obsidian_asset_target(
     vault_prefixes: &[&str],
     vault_files: &BTreeMap<String, String>,
 ) -> Option<AssetResolution> {
-    crate::link_resolver::resolve_obsidian_asset_target(from_doc_path, raw_target, vault_prefixes, vault_files)
+    crate::link_resolver::resolve_obsidian_asset_target(
+        from_doc_path,
+        raw_target,
+        vault_prefixes,
+        vault_files,
+    )
 }
 
 fn normalize_target(s: &str) -> String {
@@ -3748,7 +3908,10 @@ fn resolve_obsidian_target(
     }
 
     // Title resolution. Strip `.md` if present.
-    let title = norm_target.trim_end_matches(".md").trim_end_matches(".MD").to_string();
+    let title = norm_target
+        .trim_end_matches(".md")
+        .trim_end_matches(".MD")
+        .to_string();
     if let Some(cands) = title_exact_index.get(&title) {
         if cands.len() == 1 {
             let p = cands.iter().next().cloned();
@@ -3819,7 +3982,10 @@ fn choose_ambiguous_target(from_doc_path: &str, candidates: &[String]) -> Option
         return None;
     };
 
-    let in_same_root: Vec<&String> = candidates.iter().filter(|c| c.starts_with(from_root)).collect();
+    let in_same_root: Vec<&String> = candidates
+        .iter()
+        .filter(|c| c.starts_with(from_root))
+        .collect();
     if in_same_root.len() == 1 {
         return Some((in_same_root[0].clone(), "prefer_same_root".to_string()));
     }
@@ -3991,7 +4157,9 @@ fn check_surreal_json_stream(values: &[serde_json::Value]) -> Result<(), String>
     Ok(())
 }
 
-fn check_surreal_json_stream_allow_already_exists(values: &[serde_json::Value]) -> Result<(), String> {
+fn check_surreal_json_stream_allow_already_exists(
+    values: &[serde_json::Value],
+) -> Result<(), String> {
     if values.is_empty() {
         return Err("surreal sql returned empty json stream".to_string());
     }
@@ -4118,7 +4286,8 @@ mod tests {
             "heading_path": [],
             "meta": {"cell_index": 0}
         });
-        let sql = chunk_repr_upsert_sql_with_run(&node_id, &artifact_sha256, &repr, Some("run_123"));
+        let sql =
+            chunk_repr_upsert_sql_with_run(&node_id, &artifact_sha256, &repr, Some("run_123"));
         assert!(sql.contains("UPSERT chunk_repr:h"));
         assert!(sql.contains("RETURN NONE"));
         assert!(sql.contains("projection_run_id"));
@@ -4181,21 +4350,15 @@ line 4 ![[Embed#H|A]]\n";
         );
 
         let mut exact: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        exact
-            .entry("X".to_string())
-            .or_default()
-            .extend([
-                "chatgpt/vault/papers/X.md".to_string(),
-                "irrev-vault/papers/X.md".to_string(),
-            ]);
+        exact.entry("X".to_string()).or_default().extend([
+            "chatgpt/vault/papers/X.md".to_string(),
+            "irrev-vault/papers/X.md".to_string(),
+        ]);
         let mut casefold: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        casefold
-            .entry("x".to_string())
-            .or_default()
-            .extend([
-                "chatgpt/vault/papers/X.md".to_string(),
-                "irrev-vault/papers/X.md".to_string(),
-            ]);
+        casefold.entry("x".to_string()).or_default().extend([
+            "chatgpt/vault/papers/X.md".to_string(),
+            "irrev-vault/papers/X.md".to_string(),
+        ]);
 
         let res = resolve_obsidian_target(
             "irrev-vault/papers/Some.md",
@@ -4273,6 +4436,9 @@ status_date: 2026-02-05
         assert_eq!(fm.doc_type.as_deref(), Some("runtime-plan"));
         assert_eq!(fm.canonical, Some(true));
         assert_eq!(fm.status_date.as_deref(), Some("2026-02-05"));
-        assert_eq!(fm.facets, vec!["governance".to_string(), "runtime".to_string()]);
+        assert_eq!(
+            fm.facets,
+            vec!["governance".to_string(), "runtime".to_string()]
+        );
     }
 }

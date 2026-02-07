@@ -198,6 +198,20 @@ pub trait ProjectionStoreOps {
         run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult>;
 
+    /// Project Obsidian-vault links from DAG artifacts.
+    ///
+    /// This is the preferred name. `project_vault_links` remains for compatibility.
+    fn project_obsidian_vault_links(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        vault_prefixes: &[&str],
+        doc_filter: Option<&BTreeSet<String>>,
+        run_id: Option<&str>,
+    ) -> ProjectionResult<PhaseResult> {
+        self.project_vault_links(dag, artifacts_root, vault_prefixes, doc_filter, run_id)
+    }
+
     // =========================================================================
     // Embedding projections
     // =========================================================================

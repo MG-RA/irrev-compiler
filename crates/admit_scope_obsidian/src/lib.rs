@@ -18,6 +18,23 @@ use admit_dag::NodeKind;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+pub const OBSIDIAN_VAULT_LINKS_PHASE: &str = "obsidian_vault_links";
+pub const LEGACY_VAULT_LINKS_PHASE: &str = "vault_links";
+
+/// Returns true when a projection phase refers to the Obsidian vault links phase.
+pub fn is_obsidian_vault_links_phase(phase: &str) -> bool {
+    matches!(phase, OBSIDIAN_VAULT_LINKS_PHASE | LEGACY_VAULT_LINKS_PHASE)
+}
+
+/// Normalize a phase name to the legacy storage key used by existing run records.
+pub fn normalize_obsidian_vault_links_phase(phase: &str) -> String {
+    if is_obsidian_vault_links_phase(phase) {
+        LEGACY_VAULT_LINKS_PHASE.to_string()
+    } else {
+        phase.to_string()
+    }
+}
+
 /// Represents a parsed Obsidian wikilink from markdown text.
 #[derive(Debug, Clone)]
 pub struct ObsidianLink {
@@ -665,6 +682,59 @@ pub fn parse_obsidian_inner(inner: &str) -> Option<(String, Option<String>, Opti
     Some((target, alias, heading))
 }
 
+/// Select the best (longest) configured vault prefix that matches `doc_path`.
+///
+/// Returns `""` when no configured prefix matches.
+pub fn select_vault_prefix_for_doc_path(doc_path: &str, vault_prefixes: &[String]) -> String {
+    let mut best: Option<&str> = None;
+    for p in vault_prefixes {
+        if p.is_empty() {
+            continue;
+        }
+        if doc_path.starts_with(p) {
+            match best {
+                Some(b) if b.len() >= p.len() => {}
+                _ => best = Some(p.as_str()),
+            }
+        }
+    }
+    best.unwrap_or("").to_string()
+}
+
+/// If configured prefixes match none of the provided doc paths, fall back to `[""]`.
+///
+/// Returns `(effective_prefixes, did_fallback)`.
+pub fn effective_vault_prefixes_for_doc_paths(
+    doc_paths: &[String],
+    vault_prefixes: &[String],
+) -> (Vec<String>, bool) {
+    if vault_prefixes.is_empty() {
+        return (vec!["".to_string()], false);
+    }
+    if doc_paths.is_empty() {
+        return (vault_prefixes.to_vec(), false);
+    }
+    if vault_prefixes.iter().any(|p| p.is_empty()) {
+        return (vault_prefixes.to_vec(), false);
+    }
+
+    let mut any_match = false;
+    'outer: for doc_path in doc_paths {
+        for p in vault_prefixes {
+            if doc_path.starts_with(p) {
+                any_match = true;
+                break 'outer;
+            }
+        }
+    }
+
+    if any_match {
+        (vault_prefixes.to_vec(), false)
+    } else {
+        (vec!["".to_string()], true)
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -756,5 +826,50 @@ mod tests {
             Some("chatgpt/vault/")
         );
         assert_eq!(vault_root_for_path("other/path.md", &prefixes), None);
+    }
+
+    #[test]
+    fn phase_alias_helpers_accept_both_names() {
+        assert!(is_obsidian_vault_links_phase(OBSIDIAN_VAULT_LINKS_PHASE));
+        assert!(is_obsidian_vault_links_phase(LEGACY_VAULT_LINKS_PHASE));
+        assert!(!is_obsidian_vault_links_phase("doc_chunks"));
+        assert_eq!(
+            normalize_obsidian_vault_links_phase(OBSIDIAN_VAULT_LINKS_PHASE),
+            LEGACY_VAULT_LINKS_PHASE
+        );
+        assert_eq!(
+            normalize_obsidian_vault_links_phase(LEGACY_VAULT_LINKS_PHASE),
+            LEGACY_VAULT_LINKS_PHASE
+        );
+    }
+
+    #[test]
+    fn selects_longest_matching_prefix_or_root() {
+        let prefixes = vec!["a/".to_string(), "a/b/".to_string()];
+        assert_eq!(
+            select_vault_prefix_for_doc_path("a/b/c.md", &prefixes),
+            "a/b/"
+        );
+        assert_eq!(select_vault_prefix_for_doc_path("x.md", &prefixes), "");
+    }
+
+    #[test]
+    fn falls_back_to_root_when_prefixes_match_nothing() {
+        let prefixes = vec!["irrev-vault/".to_string(), "chatgpt/vault/".to_string()];
+        let doc_paths = vec!["Foo.md".to_string(), "Bar/Baz.md".to_string()];
+        let (effective, did_fallback) =
+            effective_vault_prefixes_for_doc_paths(&doc_paths, &prefixes);
+        assert!(did_fallback);
+        assert_eq!(effective, vec!["".to_string()]);
+    }
+
+    #[test]
+    fn does_not_fallback_when_any_prefix_matches() {
+        let prefixes = vec!["irrev-vault/".to_string(), "chatgpt/vault/".to_string()];
+        let doc_paths = vec!["irrev-vault/Foo.md".to_string()];
+        let (effective, did_fallback) =
+            effective_vault_prefixes_for_doc_paths(&doc_paths, &prefixes);
+        assert!(!did_fallback);
+        assert_eq!(effective, prefixes);
     }
 }

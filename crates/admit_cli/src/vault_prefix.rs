@@ -5,58 +5,15 @@
 /// a configurable "vault prefix" filter, but that filter must degrade safely when the configured
 /// prefixes match nothing.
 
-/// Select the best (longest) vault prefix that matches `doc_path`.
-///
-/// Returns `""` when no configured prefix matches (i.e. treat as root-relative).
 pub fn select_vault_prefix_for_doc_path(doc_path: &str, vault_prefixes: &[String]) -> String {
-    let mut best: Option<&str> = None;
-    for p in vault_prefixes {
-        if p.is_empty() {
-            // Empty prefix matches everything but we only want it if nothing else matches.
-            continue;
-        }
-        if doc_path.starts_with(p) {
-            match best {
-                Some(b) if b.len() >= p.len() => {}
-                _ => best = Some(p.as_str()),
-            }
-        }
-    }
-    best.unwrap_or("").to_string()
+    admit_scope_obsidian::select_vault_prefix_for_doc_path(doc_path, vault_prefixes)
 }
 
-/// If the configured `vault_prefixes` match **zero** of the provided `doc_paths`, fall back to `[""]`.
-///
-/// Returns `(effective_prefixes, did_fallback)`.
 pub fn effective_vault_prefixes_for_doc_paths(
     doc_paths: &[String],
     vault_prefixes: &[String],
 ) -> (Vec<String>, bool) {
-    if vault_prefixes.is_empty() {
-        return (vec!["".to_string()], false);
-    }
-    if doc_paths.is_empty() {
-        return (vault_prefixes.to_vec(), false);
-    }
-    if vault_prefixes.iter().any(|p| p.is_empty()) {
-        return (vault_prefixes.to_vec(), false);
-    }
-
-    let mut any_match = false;
-    'outer: for doc_path in doc_paths {
-        for p in vault_prefixes {
-            if doc_path.starts_with(p) {
-                any_match = true;
-                break 'outer;
-            }
-        }
-    }
-
-    if any_match {
-        (vault_prefixes.to_vec(), false)
-    } else {
-        (vec!["".to_string()], true)
-    }
+    admit_scope_obsidian::effective_vault_prefixes_for_doc_paths(doc_paths, vault_prefixes)
 }
 
 #[cfg(test)]

@@ -124,7 +124,7 @@ impl ProjectionPhases {
                 "doc_chunks" => phases.doc_chunks = true,
                 "chunk_repr" => phases.chunk_repr = true,
                 "headings" => phases.headings = true,
-                "vault_links" => phases.vault_links = true,
+                "vault_links" | "obsidian_vault_links" => phases.vault_links = true,
                 "stats" => phases.stats = true,
                 "embeddings" => phases.embeddings = true,
                 "title_embeddings" => phases.title_embeddings = true,
@@ -399,13 +399,14 @@ mod tests {
             "dag_trace".to_string(),
             "doc_chunks".to_string(),
             "chunk_repr".to_string(),
+            "obsidian_vault_links".to_string(),
         ];
         let phases = ProjectionPhases::from_phase_names(&names);
 
         assert!(phases.dag_trace);
         assert!(phases.doc_chunks);
         assert!(phases.chunk_repr);
-        assert!(!phases.vault_links);
+        assert!(phases.vault_links);
     }
 
     #[test]

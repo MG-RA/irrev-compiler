@@ -302,6 +302,19 @@ DEFINE INDEX doc_chunk_doc_path ON TABLE doc_chunk COLUMNS doc_path;
         self.run_sql_allow_already_exists(sql)
     }
 
+    pub fn ensure_chunk_repr_schema(&self) -> Result<(), String> {
+        let sql = r#"
+DEFINE TABLE chunk_repr SCHEMALESS;
+DEFINE INDEX chunk_repr_doc_path ON TABLE chunk_repr COLUMNS doc_path;
+DEFINE INDEX chunk_repr_format ON TABLE chunk_repr COLUMNS format;
+DEFINE INDEX chunk_repr_language ON TABLE chunk_repr COLUMNS language;
+DEFINE INDEX chunk_repr_chunk_kind ON TABLE chunk_repr COLUMNS chunk_kind;
+DEFINE INDEX chunk_repr_chunk_sha256 ON TABLE chunk_repr COLUMNS chunk_sha256;
+DEFINE INDEX chunk_repr_projection_run_id ON TABLE chunk_repr COLUMNS projection_run_id;
+"#;
+        self.run_sql_allow_already_exists(sql)
+    }
+
     pub fn ensure_doc_file_schema(&self) -> Result<(), String> {
         let sql = r#"
 DEFINE TABLE doc_file SCHEMALESS;
@@ -816,6 +829,81 @@ DEFINE INDEX fn_artifact_created ON TABLE fn_artifact COLUMNS created_at_utc;
                 failed.push(crate::projection_run::FailedBatch {
                     attempt_count: batch.attempt_count.saturating_add(1),
                     error: "no matching doc_chunks for batch".to_string(),
+                    ..batch.clone()
+                });
+                continue;
+            }
+
+            match self.run_sql(&sql) {
+                Ok(()) => successful += 1,
+                Err(err) => failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: format!("retry {} batch failed: {}", phase, err),
+                    ..batch.clone()
+                }),
+            }
+        }
+
+        Ok((successful, failed))
+    }
+
+    pub fn retry_chunk_repr_batches(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        run_id: &str,
+        failed_batches: &[crate::projection_run::FailedBatch],
+    ) -> Result<(usize, Vec<crate::projection_run::FailedBatch>), String> {
+        let phase = "chunk_repr";
+        self.ensure_chunk_repr_schema()?;
+
+        let mut chunk_index: BTreeMap<String, ArtifactRef> = BTreeMap::new();
+        for (id, node) in dag.nodes() {
+            let NodeKind::TextChunk { .. } = &node.kind else {
+                continue;
+            };
+            let Some(repr_artifact) = chunk_repr_artifact_from_node(node) else {
+                continue;
+            };
+            chunk_index.insert(id.to_string(), repr_artifact);
+        }
+
+        let mut successful = 0usize;
+        let mut failed: Vec<crate::projection_run::FailedBatch> = Vec::new();
+
+        for batch in failed_batches {
+            let mut sql = String::new();
+            let mut found = 0usize;
+            for node_id in &batch.item_ids {
+                let Some(repr_artifact) = chunk_index.get(node_id) else {
+                    continue;
+                };
+                let Some(rel_path) = repr_artifact.path.as_ref() else {
+                    continue;
+                };
+                let abs_path = artifacts_root.join(Path::new(rel_path));
+                let bytes = match std::fs::read(&abs_path) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                let repr_value = match decode_chunk_repr_value(&bytes) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let sql_item = chunk_repr_upsert_sql_with_run(
+                    node_id,
+                    &repr_artifact.sha256,
+                    &repr_value,
+                    Some(run_id),
+                );
+                sql.push_str(&sql_item);
+                found += 1;
+            }
+
+            if found == 0 {
+                failed.push(crate::projection_run::FailedBatch {
+                    attempt_count: batch.attempt_count.saturating_add(1),
+                    error: "no matching chunk_repr for batch".to_string(),
                     ..batch.clone()
                 });
                 continue;
@@ -2155,6 +2243,7 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
     fn ensure_schemas(&self) -> crate::projection_store::ProjectionResult<()> {
         self.ensure_doc_chunk_schema()?;
+        self.ensure_chunk_repr_schema()?;
         self.ensure_doc_file_schema()?;
         self.ensure_vault_link_schema()?;
         self.ensure_projection_run_schema()?;
@@ -2541,6 +2630,60 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
         Ok(result)
     }
 
+    fn project_chunk_repr(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        run_id: Option<&str>,
+    ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
+        let phase = "chunk_repr";
+        let phase_start = std::time::Instant::now();
+        self.ensure_chunk_repr_schema()
+            .map_err(|e| crate::projection_store::ProjectionError::new(e).with_phase(phase))?;
+
+        let batch_limit = self.projection_config.batch_sizes.chunk_repr;
+        let mut batcher = BatchAccumulator::new(self, phase, run_id, batch_limit);
+        let mut files_read: u64 = 0;
+
+        for (id, node) in dag.nodes() {
+            let NodeKind::TextChunk { .. } = &node.kind else {
+                continue;
+            };
+            let Some(repr_artifact) = chunk_repr_artifact_from_node(node) else {
+                continue;
+            };
+            let Some(rel_path) = repr_artifact.path.as_ref() else {
+                continue;
+            };
+            let abs_path = artifacts_root.join(Path::new(rel_path));
+            let bytes = match std::fs::read(&abs_path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            files_read = files_read.saturating_add(1);
+            let repr_value = match decode_chunk_repr_value(&bytes) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let record_id = id.to_string();
+            let sql = chunk_repr_upsert_sql_with_run(
+                &record_id,
+                &repr_artifact.sha256,
+                &repr_value,
+                run_id,
+            );
+            batcher.push_item(record_id, &sql);
+        }
+
+        let mut result = batcher.finish();
+        let total_ms = phase_start.elapsed().as_millis() as u64;
+        let db_write_ms = result.db_write_time_ms.unwrap_or(0);
+        result.duration_ms = total_ms;
+        result.files_read = Some(files_read);
+        result.parse_time_ms = Some(total_ms.saturating_sub(db_write_ms));
+        Ok(result)
+    }
+
     fn project_vault_links(
         &self,
         dag: &GovernedDag,
@@ -2770,6 +2913,66 @@ fn node_upsert_sql_with_run(node_id: &str, node: &DagNode, run_id: Option<&str>)
         artifact_sha256 = json_opt_string(artifact_sha256),
         artifact_kind = json_opt_string(artifact_kind),
         artifact_schema_id = json_opt_string(artifact_schema_id),
+        run_id_field = run_id_field,
+    )
+}
+
+fn chunk_repr_artifact_from_node(node: &DagNode) -> Option<ArtifactRef> {
+    let kind_meta = node.kind_meta.as_ref()?;
+    let repr_value = kind_meta.get("repr_artifact")?;
+    if repr_value.is_null() {
+        return None;
+    }
+    serde_json::from_value(repr_value.clone()).ok()
+}
+
+fn decode_chunk_repr_value(bytes: &[u8]) -> Result<serde_json::Value, String> {
+    match serde_cbor::from_slice::<serde_json::Value>(bytes) {
+        Ok(v) => Ok(v),
+        Err(cbor_err) => serde_json::from_slice::<serde_json::Value>(bytes)
+            .map_err(|json_err| format!("decode chunk_repr artifact: cbor={}, json={}", cbor_err, json_err)),
+    }
+}
+
+fn chunk_repr_upsert_sql_with_run(
+    node_id: &str,
+    artifact_sha256: &str,
+    repr: &serde_json::Value,
+    run_id: Option<&str>,
+) -> String {
+    let node_ref = thing("node", node_id);
+    let get_field = |key: &str| repr.get(key).cloned().unwrap_or(serde_json::Value::Null);
+    let run_id_field = if let Some(rid) = run_id {
+        format!(", projection_run_id: {}", json_string(rid))
+    } else {
+        String::new()
+    };
+
+    format!(
+        "UPSERT {thing_id} CONTENT {{ node_id: {node_id}, node: {node_ref}, artifact_sha256: {artifact_sha256}, schema_id: {schema_id}, chunk_sha256: {chunk_sha256}, doc_path: {doc_path}, format: {format}, language: {language}, chunk_kind: {chunk_kind}, start_line: {start_line}, end_line: {end_line}, start_byte: {start_byte}, end_byte: {end_byte}, byte_len: {byte_len}, line_count: {line_count}, normalized_text_sha256: {normalized_text_sha256}, token_sha256: {token_sha256}, ast_sha256: {ast_sha256}, ast_summary: {ast_summary}, heading_path: {heading_path}, meta: {meta}, repr: {repr_json}{run_id_field} }} RETURN NONE;",
+        thing_id = thing("chunk_repr", node_id),
+        node_id = json_string(node_id),
+        node_ref = node_ref,
+        artifact_sha256 = json_string(artifact_sha256),
+        schema_id = json_value(&get_field("schema_id")),
+        chunk_sha256 = json_value(&get_field("chunk_sha256")),
+        doc_path = json_value(&get_field("doc_path")),
+        format = json_value(&get_field("format")),
+        language = json_value(&get_field("language")),
+        chunk_kind = json_value(&get_field("chunk_kind")),
+        start_line = json_value(&get_field("start_line")),
+        end_line = json_value(&get_field("end_line")),
+        start_byte = json_value(&get_field("start_byte")),
+        end_byte = json_value(&get_field("end_byte")),
+        byte_len = json_value(&get_field("byte_len")),
+        line_count = json_value(&get_field("line_count")),
+        normalized_text_sha256 = json_value(&get_field("normalized_text_sha256")),
+        token_sha256 = json_value(&get_field("token_sha256")),
+        ast_sha256 = json_value(&get_field("ast_sha256")),
+        ast_summary = json_value(&get_field("ast_summary")),
+        heading_path = json_value(&get_field("heading_path")),
+        meta = json_value(&get_field("meta")),
+        repr_json = json_value(repr),
         run_id_field = run_id_field,
     )
 }
@@ -3107,6 +3310,10 @@ fn split_edge_type(edge_type: &EdgeType) -> (String, String) {
 
 fn json_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+fn json_value(v: &serde_json::Value) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
 }
 
 fn json_opt_string(s: Option<&str>) -> String {
@@ -3885,6 +4092,38 @@ mod tests {
         assert!(sql.contains("heading_path"));
         assert!(sql.contains("text"));
         assert!(sql.contains("node:h"));
+    }
+
+    #[test]
+    fn chunk_repr_upsert_sql_is_stable_and_safe() {
+        let node_id = "ab".repeat(32);
+        let artifact_sha256 = "ef".repeat(32);
+        let repr = serde_json::json!({
+            "schema_id": "chunk-repr/1",
+            "chunk_sha256": "cd".repeat(32),
+            "doc_path": "src/lib.rs",
+            "format": "rs",
+            "language": "rust",
+            "chunk_kind": "rust_item",
+            "start_line": 1,
+            "end_line": 10,
+            "start_byte": 0,
+            "end_byte": 120,
+            "byte_len": 120,
+            "line_count": 10,
+            "normalized_text_sha256": "aa".repeat(32),
+            "token_sha256": "bb".repeat(32),
+            "ast_sha256": "cc".repeat(32),
+            "ast_summary": {"items": 1},
+            "heading_path": [],
+            "meta": {"cell_index": 0}
+        });
+        let sql = chunk_repr_upsert_sql_with_run(&node_id, &artifact_sha256, &repr, Some("run_123"));
+        assert!(sql.contains("UPSERT chunk_repr:h"));
+        assert!(sql.contains("RETURN NONE"));
+        assert!(sql.contains("projection_run_id"));
+        assert!(sql.contains("schema_id"));
+        assert!(sql.contains("repr"));
     }
 
     #[test]

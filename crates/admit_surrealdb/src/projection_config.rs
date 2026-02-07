@@ -90,6 +90,7 @@ pub struct ProjectionPhases {
     pub dag_trace: bool,
     pub doc_files: bool,
     pub doc_chunks: bool,
+    pub chunk_repr: bool,
     pub headings: bool,
     pub vault_links: bool,
     pub stats: bool,
@@ -104,6 +105,7 @@ impl Default for ProjectionPhases {
             dag_trace: true,
             doc_files: true,
             doc_chunks: true,
+            chunk_repr: true,
             headings: true,
             vault_links: true,
             stats: true,
@@ -123,6 +125,7 @@ impl ProjectionPhases {
                 "dag_trace" => phases.dag_trace = true,
                 "doc_files" => phases.doc_files = true,
                 "doc_chunks" => phases.doc_chunks = true,
+                "chunk_repr" => phases.chunk_repr = true,
                 "headings" => phases.headings = true,
                 "vault_links" => phases.vault_links = true,
                 "stats" => phases.stats = true,
@@ -140,6 +143,7 @@ impl ProjectionPhases {
             dag_trace: false,
             doc_files: false,
             doc_chunks: false,
+            chunk_repr: false,
             headings: false,
             vault_links: false,
             stats: false,
@@ -160,6 +164,9 @@ impl ProjectionPhases {
         }
         if self.doc_chunks {
             names.push("doc_chunks".to_string());
+        }
+        if self.chunk_repr {
+            names.push("chunk_repr".to_string());
         }
         if self.headings {
             names.push("headings".to_string());
@@ -189,6 +196,7 @@ pub struct BatchSizes {
     pub nodes: usize,
     pub edges: usize,
     pub doc_chunks: usize,
+    pub chunk_repr: usize,
     pub doc_files: usize,
     pub headings: usize,
     pub links: usize,
@@ -210,6 +218,7 @@ impl Default for BatchSizes {
             nodes: 1_000,
             edges: 1_000,
             doc_chunks: 200,
+            chunk_repr: 200,
             doc_files: 500,
             headings: 500,
             links: 500,
@@ -230,6 +239,7 @@ impl BatchSizes {
                 "nodes" => self.nodes = *size,
                 "edges" => self.edges = *size,
                 "doc_chunks" => self.doc_chunks = *size,
+                "chunk_repr" => self.chunk_repr = *size,
                 "doc_files" => self.doc_files = *size,
                 "headings" => self.headings = *size,
                 "links" => self.links = *size,
@@ -255,6 +265,7 @@ impl BatchSizes {
             "nodes" => Some(self.nodes),
             "edges" => Some(self.edges),
             "doc_chunks" => Some(self.doc_chunks),
+            "chunk_repr" => Some(self.chunk_repr),
             "doc_files" => Some(self.doc_files),
             "headings" => Some(self.headings),
             "links" => Some(self.links),
@@ -351,12 +362,14 @@ mod tests {
         let mut overrides = BTreeMap::new();
         overrides.insert("nodes".to_string(), 100);
         overrides.insert("doc_chunks".to_string(), 25);
+        overrides.insert("chunk_repr".to_string(), 30);
         overrides.insert("max_sql_bytes".to_string(), 1234);
 
         batch_sizes.apply_overrides(&overrides);
 
         assert_eq!(batch_sizes.nodes, 100);
         assert_eq!(batch_sizes.doc_chunks, 25);
+        assert_eq!(batch_sizes.chunk_repr, 30);
         assert_eq!(batch_sizes.edges, default_edges); // Unchanged
         assert_eq!(batch_sizes.max_sql_bytes, 1234);
     }
@@ -386,11 +399,16 @@ mod tests {
 
     #[test]
     fn test_phase_names_parsing() {
-        let names = vec!["dag_trace".to_string(), "doc_chunks".to_string()];
+        let names = vec![
+            "dag_trace".to_string(),
+            "doc_chunks".to_string(),
+            "chunk_repr".to_string(),
+        ];
         let phases = ProjectionPhases::from_phase_names(&names);
 
         assert!(phases.dag_trace);
         assert!(phases.doc_chunks);
+        assert!(phases.chunk_repr);
         assert!(!phases.vault_links);
     }
 

@@ -19,6 +19,7 @@ dependencies = [
  "serde_cbor",
  "serde_json",
  "sha2",
+ "syn",
  "tempfile",
  "vault_snapshot",
 ]
@@ -71,6 +72,7 @@ dependencies = [
  "clap",
  "hex",
  "serde",
+ "serde_cbor",
  "serde_json",
  "sha2",
 ]

@@ -244,7 +244,7 @@ struct Cli {
     #[arg(long, default_value = "surreal")]
     surrealdb_bin: String,
 
-    /// Projection phases to enable (comma-separated: dag_trace,doc_files,doc_chunks,headings,vault_links,stats,embeddings)
+    /// Projection phases to enable (comma-separated: dag_trace,doc_files,doc_chunks,chunk_repr,headings,vault_links,stats,embeddings)
     #[arg(long, value_delimiter = ',')]
     projection_enabled: Option<Vec<String>>,
 
@@ -2746,6 +2746,18 @@ fn run_projection_retry(
                     merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
                 }
             }
+            "chunk_repr" => {
+                if selected_batches.is_empty() || original.status == PhaseStatus::Failed {
+                    store_ops
+                        .project_chunk_repr(&dag, &artifacts_dir, Some(&args.run))
+                        .map_err(|e| e.to_string())?
+                } else {
+                    let (succeeded, still_failed) = store
+                        .retry_chunk_repr_batches(&dag, &artifacts_dir, &args.run, &selected_batches)
+                        .map_err(|e| format!("retry chunk_repr: {}", e))?;
+                    merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
+                }
+            }
             "vault_links" => {
                 let dag_doc_paths: Vec<String> = dag
                     .nodes()
@@ -3192,7 +3204,7 @@ fn project_ingest_dir_projections(
         .enabled_phases
         .enabled_phase_names()
         .into_iter()
-        .filter(|p| matches!(p.as_str(), "dag_trace" | "doc_files" | "doc_chunks" | "vault_links"))
+        .filter(|p| matches!(p.as_str(), "dag_trace" | "doc_files" | "doc_chunks" | "chunk_repr" | "vault_links"))
         .collect();
 
     let store_ops: &dyn ProjectionStoreOps = store;
@@ -3354,6 +3366,7 @@ fn project_ingest_dir_projections(
                 .project_dag_trace(trace_sha256, trace_cbor, dag, Some(&run_id)),
             "doc_files" => store_ops.project_doc_files(dag, artifacts_dir, Some(&run_id)),
             "doc_chunks" => store_ops.project_doc_chunks(dag, artifacts_dir, &[], Some(&run_id)),
+            "chunk_repr" => store_ops.project_chunk_repr(dag, artifacts_dir, Some(&run_id)),
             "vault_links" => {
                 let vault_prefix_refs: Vec<&str> =
                     effective_vault_prefixes.iter().map(|s| s.as_str()).collect();
@@ -4373,6 +4386,16 @@ fn build_trace_for_ingest_dir(out: &admit_cli::IngestDirOutput) -> Result<DagTra
             vec![],
         )?;
         node.artifact_ref = Some(chunk.artifact.clone());
+        node.kind_meta = Some(serde_json::json!({
+            "format": chunk.format.clone(),
+            "language": chunk.language.clone(),
+            "chunk_kind": chunk.chunk_kind.clone(),
+            "start_line": chunk.start_line,
+            "end_line": chunk.end_line,
+            "start_byte": chunk.start_byte,
+            "end_byte": chunk.end_byte,
+            "repr_artifact": chunk.repr_artifact.clone(),
+        }));
         trace.ensure_node(node.clone());
         chunk_nodes.push((chunk.rel_path.clone(), node));
     }

@@ -34,7 +34,7 @@ fn ingest_incremental_cache_tracks_changes_and_dependencies() {
     assert!(inc.enabled);
     assert_eq!(inc.files_parsed, 3);
     assert_eq!(inc.files_cached, 0);
-    assert_eq!(inc.chunks_parsed, 3);
+    assert_eq!(inc.chunks_parsed, 4);
     assert_eq!(inc.chunks_cached, 0);
     let mut expected: BTreeSet<String> = ["A.md".to_string(), "B.md".to_string()].into_iter().collect();
     let actual: BTreeSet<String> = inc.docs_to_resolve_links.iter().cloned().collect();
@@ -51,7 +51,7 @@ fn ingest_incremental_cache_tracks_changes_and_dependencies() {
     assert_eq!(inc.files_parsed, 0);
     assert_eq!(inc.files_cached, 3);
     assert_eq!(inc.chunks_parsed, 0);
-    assert_eq!(inc.chunks_cached, 3);
+    assert_eq!(inc.chunks_cached, 4);
     assert!(inc.docs_to_resolve_links.is_empty());
 
     std::fs::write(root.join("B.md"), "# B\n\n## Heading2\nContent\n").expect("write B.md v2");
@@ -66,7 +66,7 @@ fn ingest_incremental_cache_tracks_changes_and_dependencies() {
     assert_eq!(inc.files_parsed, 1);
     assert_eq!(inc.files_cached, 2);
     assert_eq!(inc.chunks_parsed, 2);
-    assert_eq!(inc.chunks_cached, 1);
+    assert_eq!(inc.chunks_cached, 2);
     expected = ["A.md".to_string(), "B.md".to_string()].into_iter().collect();
     let actual: BTreeSet<String> = inc.docs_to_resolve_links.iter().cloned().collect();
     assert_eq!(actual, expected);

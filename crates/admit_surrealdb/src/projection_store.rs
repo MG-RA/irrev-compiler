@@ -180,6 +180,14 @@ pub trait ProjectionStoreOps {
         run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult>;
 
+    /// Project chunk representations from DAG artifacts
+    fn project_chunk_repr(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        run_id: Option<&str>,
+    ) -> ProjectionResult<PhaseResult>;
+
     /// Project vault Obsidian links from DAG artifacts
     fn project_vault_links(
         &self,
@@ -339,6 +347,15 @@ impl ProjectionStoreOps for NullStore {
         _run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult> {
         Ok(PhaseResult::success("doc_chunks".to_string(), 0, 0))
+    }
+
+    fn project_chunk_repr(
+        &self,
+        _dag: &GovernedDag,
+        _artifacts_root: &Path,
+        _run_id: Option<&str>,
+    ) -> ProjectionResult<PhaseResult> {
+        Ok(PhaseResult::success("chunk_repr".to_string(), 0, 0))
     }
 
     fn project_vault_links(

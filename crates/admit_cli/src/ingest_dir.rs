@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
@@ -25,10 +25,18 @@ pub struct IngestedFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestedChunk {
     pub rel_path: String,
+    pub format: String,
+    pub language: Option<String>,
+    pub chunk_kind: String,
     pub heading_path: Vec<String>,
     pub start_line: u32,
+    pub end_line: u32,
+    pub start_byte: u32,
+    pub end_byte: u32,
     pub chunk_sha256: String,
     pub artifact: ArtifactRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repr_artifact: Option<ArtifactRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,12 +78,16 @@ pub struct IngestIncremental {
 
 const SNAPSHOT_SCHEMA_ID: &str = "dir-snapshot/0";
 const SNAPSHOT_KIND: &str = "dir_snapshot";
-const PARSE_SCHEMA_ID: &str = "dir-parse/0";
+const PARSE_SCHEMA_ID: &str = "dir-parse/1";
 const PARSE_KIND: &str = "dir_parse";
 const FILE_SCHEMA_ID: &str = "file-blob/0";
 const FILE_KIND: &str = "file_blob";
-const CHUNK_SCHEMA_ID: &str = "text-chunk/0";
+const CHUNK_SCHEMA_ID: &str = "text-chunk/1";
 const CHUNK_KIND: &str = "text_chunk";
+const CHUNK_REPR_SCHEMA_ID: &str = "chunk-repr/1";
+const CHUNK_REPR_KIND: &str = "chunk_repr";
+const DEFAULT_CHUNK_MAX_CHARS: usize = 2400;
+const DEFAULT_CHUNK_OVERLAP_CHARS: usize = 160;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SnapshotEntry {
@@ -87,9 +99,31 @@ struct SnapshotEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ParseEntry {
     path: String,
+    format: String,
+    language: Option<String>,
+    chunk_kind: String,
     chunk_sha256: String,
     start_line: u32,
+    end_line: u32,
+    start_byte: u32,
+    end_byte: u32,
     heading_path: Vec<String>,
+    repr_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ChunkSpec {
+    format: String,
+    language: Option<String>,
+    chunk_kind: String,
+    heading_path: Vec<String>,
+    start_line: u32,
+    end_line: u32,
+    start_byte: u32,
+    end_byte: u32,
+    text: String,
+    extra_meta: Option<serde_json::Value>,
+    ast_summary: Option<serde_json::Value>,
 }
 
 pub fn ingest_dir(root: &Path, artifacts_root: Option<&Path>) -> Result<IngestDirOutput, DeclareCostError> {
@@ -217,22 +251,49 @@ pub fn ingest_dir_with_cache(
                         rel_path: rel_path.clone(),
                         artifact: cached.artifact.clone(),
                     });
-                    if cached.is_markdown {
-                        for chunk in &cached.chunks {
-                            parse_entries.push(ParseEntry {
-                                path: rel_path.clone(),
-                                chunk_sha256: chunk.chunk_sha256.clone(),
-                                start_line: chunk.start_line,
-                                heading_path: chunk.heading_path.clone(),
-                            });
-                            chunks.push(IngestedChunk {
-                                rel_path: rel_path.clone(),
-                                heading_path: chunk.heading_path.clone(),
-                                start_line: chunk.start_line,
-                                chunk_sha256: chunk.chunk_sha256.clone(),
-                                artifact: chunk.artifact.clone(),
-                            });
-                        }
+                    for chunk in &cached.chunks {
+                        let format = chunk
+                            .format
+                            .clone()
+                            .unwrap_or_else(|| infer_format_from_path(&rel_path));
+                        let language = chunk
+                            .language
+                            .clone()
+                            .or_else(|| default_language_for_format(&format));
+                        let chunk_kind = chunk
+                            .chunk_kind
+                            .clone()
+                            .unwrap_or_else(|| default_chunk_kind_for_format(&format));
+                        let end_line = chunk.end_line.unwrap_or(chunk.start_line);
+                        let start_byte = chunk.start_byte.unwrap_or(0);
+                        let end_byte = chunk.end_byte.unwrap_or(0);
+                        parse_entries.push(ParseEntry {
+                            path: rel_path.clone(),
+                            format: format.clone(),
+                            language: language.clone(),
+                            chunk_kind: chunk_kind.clone(),
+                            chunk_sha256: chunk.chunk_sha256.clone(),
+                            start_line: chunk.start_line,
+                            end_line,
+                            start_byte,
+                            end_byte,
+                            heading_path: chunk.heading_path.clone(),
+                            repr_sha256: chunk.repr_artifact.as_ref().map(|a| a.sha256.clone()),
+                        });
+                        chunks.push(IngestedChunk {
+                            rel_path: rel_path.clone(),
+                            format,
+                            language,
+                            chunk_kind,
+                            heading_path: chunk.heading_path.clone(),
+                            start_line: chunk.start_line,
+                            end_line,
+                            start_byte,
+                            end_byte,
+                            chunk_sha256: chunk.chunk_sha256.clone(),
+                            artifact: chunk.artifact.clone(),
+                            repr_artifact: chunk.repr_artifact.clone(),
+                        });
                     }
                     if let Some(info) = incremental.as_mut() {
                         info.files_cached = info.files_cached.saturating_add(1);
@@ -271,22 +332,49 @@ pub fn ingest_dir_with_cache(
                         rel_path: rel_path.clone(),
                         artifact: cached.artifact.clone(),
                     });
-                    if cached.is_markdown {
-                        for chunk in &cached.chunks {
-                            parse_entries.push(ParseEntry {
-                                path: rel_path.clone(),
-                                chunk_sha256: chunk.chunk_sha256.clone(),
-                                start_line: chunk.start_line,
-                                heading_path: chunk.heading_path.clone(),
-                            });
-                            chunks.push(IngestedChunk {
-                                rel_path: rel_path.clone(),
-                                heading_path: chunk.heading_path.clone(),
-                                start_line: chunk.start_line,
-                                chunk_sha256: chunk.chunk_sha256.clone(),
-                                artifact: chunk.artifact.clone(),
-                            });
-                        }
+                    for chunk in &cached.chunks {
+                        let format = chunk
+                            .format
+                            .clone()
+                            .unwrap_or_else(|| infer_format_from_path(&rel_path));
+                        let language = chunk
+                            .language
+                            .clone()
+                            .or_else(|| default_language_for_format(&format));
+                        let chunk_kind = chunk
+                            .chunk_kind
+                            .clone()
+                            .unwrap_or_else(|| default_chunk_kind_for_format(&format));
+                        let end_line = chunk.end_line.unwrap_or(chunk.start_line);
+                        let start_byte = chunk.start_byte.unwrap_or(0);
+                        let end_byte = chunk.end_byte.unwrap_or(0);
+                        parse_entries.push(ParseEntry {
+                            path: rel_path.clone(),
+                            format: format.clone(),
+                            language: language.clone(),
+                            chunk_kind: chunk_kind.clone(),
+                            chunk_sha256: chunk.chunk_sha256.clone(),
+                            start_line: chunk.start_line,
+                            end_line,
+                            start_byte,
+                            end_byte,
+                            heading_path: chunk.heading_path.clone(),
+                            repr_sha256: chunk.repr_artifact.as_ref().map(|a| a.sha256.clone()),
+                        });
+                        chunks.push(IngestedChunk {
+                            rel_path: rel_path.clone(),
+                            format,
+                            language,
+                            chunk_kind,
+                            heading_path: chunk.heading_path.clone(),
+                            start_line: chunk.start_line,
+                            end_line,
+                            start_byte,
+                            end_byte,
+                            chunk_sha256: chunk.chunk_sha256.clone(),
+                            artifact: chunk.artifact.clone(),
+                            repr_artifact: chunk.repr_artifact.clone(),
+                        });
                     }
                     if let Some(info) = incremental.as_mut() {
                         info.files_cached = info.files_cached.saturating_add(1);
@@ -327,49 +415,95 @@ pub fn ingest_dir_with_cache(
 
         if is_markdown {
             title = Some(file_stem_title(&rel_path));
+        }
+
+        if is_chunked_text_format(&ext) {
             match std::str::from_utf8(&bytes) {
                 Ok(text) => {
-                    let (lt, ltc, lp) = extract_link_keys(text);
-                    link_title_keys = lt;
-                    link_title_keys_casefold = ltc;
-                    link_path_keys = lp;
-
-                    let md_chunks = chunk_markdown(text);
-                    for c in md_chunks {
-                        let chunk_bytes = c.text.as_bytes();
-                        let chunk_sha256 = sha256_hex(chunk_bytes);
-                        let chunk_artifact = store_artifact(
-                            artifacts_root,
-                            CHUNK_KIND,
-                            CHUNK_SCHEMA_ID,
-                            chunk_bytes,
-                            "md",
-                            None,
-                            None,
-                        )?;
-                        parse_entries.push(ParseEntry {
-                            path: rel_path.clone(),
-                            chunk_sha256: chunk_sha256.clone(),
-                            start_line: c.start_line,
-                            heading_path: c.heading_path.clone(),
-                        });
-                        let ingested = IngestedChunk {
-                            rel_path: rel_path.clone(),
-                            heading_path: c.heading_path,
-                            start_line: c.start_line,
-                            chunk_sha256,
-                            artifact: chunk_artifact,
-                        };
-                        file_chunks.push(ingested.clone());
-                        chunks.push(ingested);
+                    if is_markdown {
+                        let (lt, ltc, lp) = extract_link_keys(text);
+                        link_title_keys = lt;
+                        link_title_keys_casefold = ltc;
+                        link_path_keys = lp;
                     }
-                    heading_hash = heading_hash_from_chunks(&file_chunks);
+
+                    match chunk_file_by_format(&rel_path, &ext, text) {
+                        Ok(specs) => {
+                            for spec in specs {
+                                let chunk_bytes = spec.text.as_bytes();
+                                let chunk_sha256 = sha256_hex(chunk_bytes);
+                                let chunk_artifact = store_artifact(
+                                    artifacts_root,
+                                    CHUNK_KIND,
+                                    CHUNK_SCHEMA_ID,
+                                    chunk_bytes,
+                                    chunk_artifact_ext(&spec.format, spec.language.as_deref()),
+                                    None,
+                                    None,
+                                )?;
+                                let repr_value = chunk_repr_value(&rel_path, &chunk_sha256, &spec);
+                                let repr_cbor = admit_core::encode_canonical_value(&repr_value)
+                                    .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
+                                let repr_json = serde_json::to_vec_pretty(&repr_value)
+                                    .map_err(|err| DeclareCostError::Json(err.to_string()))?;
+                                let repr_artifact = store_artifact(
+                                    artifacts_root,
+                                    CHUNK_REPR_KIND,
+                                    CHUNK_REPR_SCHEMA_ID,
+                                    &repr_cbor,
+                                    "cbor",
+                                    Some(repr_json),
+                                    None,
+                                )?;
+
+                                parse_entries.push(ParseEntry {
+                                    path: rel_path.clone(),
+                                    format: spec.format.clone(),
+                                    language: spec.language.clone(),
+                                    chunk_kind: spec.chunk_kind.clone(),
+                                    chunk_sha256: chunk_sha256.clone(),
+                                    start_line: spec.start_line,
+                                    end_line: spec.end_line,
+                                    start_byte: spec.start_byte,
+                                    end_byte: spec.end_byte,
+                                    heading_path: spec.heading_path.clone(),
+                                    repr_sha256: Some(repr_artifact.sha256.clone()),
+                                });
+                                let ingested = IngestedChunk {
+                                    rel_path: rel_path.clone(),
+                                    format: spec.format,
+                                    language: spec.language,
+                                    chunk_kind: spec.chunk_kind,
+                                    heading_path: spec.heading_path,
+                                    start_line: spec.start_line,
+                                    end_line: spec.end_line,
+                                    start_byte: spec.start_byte,
+                                    end_byte: spec.end_byte,
+                                    chunk_sha256,
+                                    artifact: chunk_artifact,
+                                    repr_artifact: Some(repr_artifact),
+                                };
+                                file_chunks.push(ingested.clone());
+                                chunks.push(ingested);
+                            }
+                            if is_markdown {
+                                heading_hash = heading_hash_from_chunks(&file_chunks);
+                            }
+                        }
+                        Err(err) => {
+                            warnings.push(IngestWarning {
+                                kind: format!("{}_chunk_error", ext),
+                                rel_path: Some(rel_path.clone()),
+                                message: err,
+                            });
+                        }
+                    }
                 }
                 Err(_) => {
                     warnings.push(IngestWarning {
-                        kind: "md_non_utf8".to_string(),
+                        kind: format!("{}_non_utf8", ext),
                         rel_path: Some(rel_path.clone()),
-                        message: "markdown file is not valid utf-8; skipping chunking".to_string(),
+                        message: format!("{} file is not valid utf-8; skipping chunking", ext),
                     });
                 }
             }
@@ -416,8 +550,15 @@ pub fn ingest_dir_with_cache(
                 .map(|c| CachedChunk {
                     heading_path: c.heading_path.clone(),
                     start_line: c.start_line,
+                    end_line: Some(c.end_line),
+                    start_byte: Some(c.start_byte),
+                    end_byte: Some(c.end_byte),
+                    format: Some(c.format.clone()),
+                    language: c.language.clone(),
+                    chunk_kind: Some(c.chunk_kind.clone()),
                     chunk_sha256: c.chunk_sha256.clone(),
                     artifact: c.artifact.clone(),
+                    repr_artifact: c.repr_artifact.clone(),
                 })
                 .collect();
             cache.update(CachedFile {
@@ -970,31 +1111,145 @@ fn to_rel_path(root: &Path, path: &Path) -> Result<String, DeclareCostError> {
     Ok(parts.join("/"))
 }
 
-#[derive(Debug, Clone)]
-struct MdChunk {
-    heading_path: Vec<String>,
-    start_line: u32,
-    text: String,
+fn infer_format_from_path(rel_path: &str) -> String {
+    Path::new(rel_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin")
+        .to_lowercase()
 }
 
-fn chunk_markdown(input: &str) -> Vec<MdChunk> {
-    let mut chunks = Vec::new();
-    let mut heading_stack: Vec<(u8, String)> = Vec::new();
-    let mut current_start: u32 = 1;
-    let mut current_text = String::new();
-    let mut current_heading_path: Vec<String> = Vec::new();
+fn default_language_for_format(format: &str) -> Option<String> {
+    match format {
+        "md" => Some("markdown".to_string()),
+        "rs" => Some("rust".to_string()),
+        "py" => Some("python".to_string()),
+        "txt" => Some("text".to_string()),
+        "ipynb" => Some("notebook".to_string()),
+        _ => None,
+    }
+}
 
-    let lines: Vec<&str> = input.lines().collect();
+fn default_chunk_kind_for_format(format: &str) -> String {
+    match format {
+        "md" => "markdown_section".to_string(),
+        "rs" => "rust_item".to_string(),
+        "py" => "python_block".to_string(),
+        "txt" => "text_paragraph".to_string(),
+        "ipynb" => "ipynb_cell".to_string(),
+        _ => "text_chunk".to_string(),
+    }
+}
+
+fn chunk_artifact_ext<'a>(format: &'a str, language: Option<&str>) -> &'a str {
+    if format == "ipynb" {
+        if let Some(lang) = language {
+            return match lang {
+                "python" => "py",
+                "markdown" => "md",
+                _ => "txt",
+            };
+        }
+        return "txt";
+    }
+    match format {
+        "md" | "rs" | "py" | "txt" => format,
+        _ => "txt",
+    }
+}
+
+fn is_chunked_text_format(ext: &str) -> bool {
+    matches!(ext, "md" | "rs" | "py" | "txt" | "ipynb")
+}
+
+fn split_inclusive_lines(input: &str) -> Vec<&str> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+    input.split_inclusive('\n').collect()
+}
+
+fn line_offsets(lines: &[&str]) -> Vec<u32> {
+    let mut out = Vec::with_capacity(lines.len() + 1);
+    let mut acc: u32 = 0;
+    out.push(acc);
+    for line in lines {
+        acc = acc.saturating_add(line.len() as u32);
+        out.push(acc);
+    }
+    out
+}
+
+fn lines_concat(lines: &[&str], start: usize, end: usize) -> String {
+    let mut out = String::new();
+    for line in &lines[start..end] {
+        out.push_str(line);
+    }
+    out
+}
+
+fn make_line_chunk(
+    format: &str,
+    language: Option<&str>,
+    chunk_kind: &str,
+    heading_path: Vec<String>,
+    lines: &[&str],
+    offsets: &[u32],
+    start: usize,
+    end: usize,
+    extra_meta: Option<serde_json::Value>,
+    ast_summary: Option<serde_json::Value>,
+) -> Option<ChunkSpec> {
+    if start >= end || end > lines.len() {
+        return None;
+    }
+    let text = lines_concat(lines, start, end);
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(ChunkSpec {
+        format: format.to_string(),
+        language: language.map(|s| s.to_string()),
+        chunk_kind: chunk_kind.to_string(),
+        heading_path,
+        start_line: (start as u32) + 1,
+        end_line: end as u32,
+        start_byte: offsets[start],
+        end_byte: offsets[end],
+        text,
+        extra_meta,
+        ast_summary,
+    })
+}
+
+fn chunk_markdown_specs(input: &str) -> Vec<ChunkSpec> {
+    let lines = split_inclusive_lines(input);
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let offsets = line_offsets(&lines);
+
+    let mut out = Vec::new();
+    let mut heading_stack: Vec<(u8, String)> = Vec::new();
+    let mut current_heading_path: Vec<String> = Vec::new();
+    let mut current_start = 0usize;
+
     for (idx, line) in lines.iter().enumerate() {
-        let line_no = (idx as u32) + 1;
-        if let Some((level, title)) = parse_heading(line) {
-            if !current_text.is_empty() {
-                chunks.push(MdChunk {
-                    heading_path: current_heading_path.clone(),
-                    start_line: current_start,
-                    text: current_text.clone(),
-                });
-                current_text.clear();
+        let line_no_nl = line.trim_end_matches('\n').trim_end_matches('\r');
+        if let Some((level, title)) = parse_heading(line_no_nl) {
+            if let Some(chunk) = make_line_chunk(
+                "md",
+                Some("markdown"),
+                "markdown_section",
+                current_heading_path.clone(),
+                &lines,
+                &offsets,
+                current_start,
+                idx,
+                None,
+                None,
+            ) {
+                out.push(chunk);
             }
 
             while let Some((l, _)) = heading_stack.last() {
@@ -1006,19 +1261,483 @@ fn chunk_markdown(input: &str) -> Vec<MdChunk> {
             }
             heading_stack.push((level, title));
             current_heading_path = heading_stack.iter().map(|(_, t)| t.clone()).collect();
-            current_start = line_no;
+            current_start = idx;
         }
-        current_text.push_str(line);
-        current_text.push('\n');
     }
-    if !current_text.is_empty() {
-        chunks.push(MdChunk {
-            heading_path: current_heading_path,
-            start_line: current_start,
-            text: current_text,
+
+    if let Some(chunk) = make_line_chunk(
+        "md",
+        Some("markdown"),
+        "markdown_section",
+        current_heading_path,
+        &lines,
+        &offsets,
+        current_start,
+        lines.len(),
+        None,
+        None,
+    ) {
+        out.push(chunk);
+    }
+    out
+}
+
+fn rust_ast_summary(input: &str) -> Option<serde_json::Value> {
+    let parsed = syn::parse_file(input).ok()?;
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for item in parsed.items {
+        let key = match item {
+            syn::Item::Const(_) => "const",
+            syn::Item::Enum(_) => "enum",
+            syn::Item::ExternCrate(_) => "extern_crate",
+            syn::Item::Fn(_) => "fn",
+            syn::Item::ForeignMod(_) => "foreign_mod",
+            syn::Item::Impl(_) => "impl",
+            syn::Item::Macro(_) => "macro",
+            syn::Item::Mod(_) => "mod",
+            syn::Item::Static(_) => "static",
+            syn::Item::Struct(_) => "struct",
+            syn::Item::Trait(_) => "trait",
+            syn::Item::TraitAlias(_) => "trait_alias",
+            syn::Item::Type(_) => "type",
+            syn::Item::Union(_) => "union",
+            syn::Item::Use(_) => "use",
+            _ => "other",
+        };
+        *counts.entry(key.to_string()).or_default() += 1;
+    }
+    Some(serde_json::json!({
+        "summary_type": "rust_ast_item_counts",
+        "counts": counts,
+    }))
+}
+
+fn looks_like_rust_item_start(line: &str) -> bool {
+    let t = line.trim_start();
+    [
+        "fn ",
+        "pub fn ",
+        "struct ",
+        "pub struct ",
+        "enum ",
+        "pub enum ",
+        "trait ",
+        "pub trait ",
+        "impl ",
+        "pub impl ",
+        "mod ",
+        "pub mod ",
+        "type ",
+        "pub type ",
+        "const ",
+        "pub const ",
+        "static ",
+        "pub static ",
+    ]
+    .iter()
+    .any(|p| t.starts_with(p))
+}
+
+fn chunk_rust_specs(input: &str) -> Vec<ChunkSpec> {
+    let lines = split_inclusive_lines(input);
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let offsets = line_offsets(&lines);
+    let ast_summary = rust_ast_summary(input);
+
+    let mut boundaries = vec![0usize];
+    let mut depth: i64 = 0;
+    for (idx, line) in lines.iter().enumerate() {
+        if idx > 0 && depth == 0 && looks_like_rust_item_start(line) {
+            boundaries.push(idx);
+        }
+        for ch in line.chars() {
+            if ch == '{' {
+                depth += 1;
+            } else if ch == '}' {
+                depth -= 1;
+            }
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    if boundaries.is_empty() {
+        boundaries.push(0);
+    }
+
+    let mut out = Vec::new();
+    if boundaries.len() <= 1 {
+        return chunk_line_windows("rs", Some("rust"), "rust_fallback_window", input, 120, 24, ast_summary);
+    }
+    boundaries.push(lines.len());
+    for i in 0..(boundaries.len() - 1) {
+        if let Some(chunk) = make_line_chunk(
+            "rs",
+            Some("rust"),
+            "rust_item",
+            Vec::new(),
+            &lines,
+            &offsets,
+            boundaries[i],
+            boundaries[i + 1],
+            None,
+            ast_summary.clone(),
+        ) {
+            out.push(chunk);
+        }
+    }
+    out
+}
+
+fn looks_like_python_block_start(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with('#') {
+        return false;
+    }
+    t.starts_with("def ") || t.starts_with("async def ") || t.starts_with("class ")
+}
+
+fn chunk_python_specs(input: &str, format: &str, chunk_kind: &str, extra_meta: Option<serde_json::Value>) -> Vec<ChunkSpec> {
+    let lines = split_inclusive_lines(input);
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let offsets = line_offsets(&lines);
+    let mut boundaries = vec![0usize];
+    for (idx, line) in lines.iter().enumerate() {
+        if idx == 0 {
+            continue;
+        }
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        if looks_like_python_block_start(line) {
+            boundaries.push(idx);
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    if boundaries.len() <= 1 {
+        return chunk_line_windows(format, Some("python"), "python_fallback_window", input, 100, 20, None);
+    }
+
+    boundaries.push(lines.len());
+    let mut out = Vec::new();
+    for i in 0..(boundaries.len() - 1) {
+        if let Some(chunk) = make_line_chunk(
+            format,
+            Some("python"),
+            chunk_kind,
+            Vec::new(),
+            &lines,
+            &offsets,
+            boundaries[i],
+            boundaries[i + 1],
+            extra_meta.clone(),
+            None,
+        ) {
+            out.push(chunk);
+        }
+    }
+    out
+}
+
+fn chunk_txt_specs(input: &str, format: &str, language: Option<&str>, chunk_kind: &str, extra_meta: Option<serde_json::Value>) -> Vec<ChunkSpec> {
+    let lines = split_inclusive_lines(input);
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let offsets = line_offsets(&lines);
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut idx = 0usize;
+    while idx < lines.len() {
+        let trimmed = lines[idx].trim();
+        if trimmed.is_empty() {
+            if let Some(chunk) = make_line_chunk(
+                format,
+                language,
+                chunk_kind,
+                Vec::new(),
+                &lines,
+                &offsets,
+                start,
+                idx,
+                extra_meta.clone(),
+                None,
+            ) {
+                out.push(chunk);
+            }
+            start = idx + 1;
+        }
+        idx += 1;
+    }
+    if let Some(chunk) = make_line_chunk(
+        format,
+        language,
+        chunk_kind,
+        Vec::new(),
+        &lines,
+        &offsets,
+        start,
+        lines.len(),
+        extra_meta,
+        None,
+    ) {
+        out.push(chunk);
+    }
+    out
+}
+
+fn chunk_line_windows(
+    format: &str,
+    language: Option<&str>,
+    chunk_kind: &str,
+    input: &str,
+    window_lines: usize,
+    overlap_lines: usize,
+    ast_summary: Option<serde_json::Value>,
+) -> Vec<ChunkSpec> {
+    let lines = split_inclusive_lines(input);
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let offsets = line_offsets(&lines);
+    let window = window_lines.max(1);
+    let step = window.saturating_sub(overlap_lines).max(1);
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < lines.len() {
+        let end = (i + window).min(lines.len());
+        if let Some(chunk) = make_line_chunk(
+            format,
+            language,
+            chunk_kind,
+            Vec::new(),
+            &lines,
+            &offsets,
+            i,
+            end,
+            None,
+            ast_summary.clone(),
+        ) {
+            out.push(chunk);
+        }
+        if end == lines.len() {
+            break;
+        }
+        i = i.saturating_add(step);
+    }
+    out
+}
+
+fn chunk_ipynb_specs(input: &str) -> Result<Vec<ChunkSpec>, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(input).map_err(|e| format!("parse ipynb json: {}", e))?;
+    let cells = value
+        .get("cells")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "ipynb missing cells array".to_string())?;
+
+    let mut out = Vec::new();
+    for (idx, cell) in cells.iter().enumerate() {
+        let cell_type = cell
+            .get("cell_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let source = match cell.get("source") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(serde_json::Value::Array(arr)) => {
+                let mut s = String::new();
+                for v in arr {
+                    if let Some(line) = v.as_str() {
+                        s.push_str(line);
+                    }
+                }
+                s
+            }
+            _ => String::new(),
+        };
+        if source.trim().is_empty() {
+            continue;
+        }
+        let base_meta = Some(serde_json::json!({
+            "cell_index": idx,
+            "cell_type": cell_type,
+        }));
+        let mut cell_chunks = match cell_type {
+            "markdown" => {
+                let mut chunks = chunk_markdown_specs(&source);
+                for c in chunks.iter_mut() {
+                    c.format = "ipynb".to_string();
+                    c.language = Some("markdown".to_string());
+                    c.chunk_kind = "ipynb_markdown_cell".to_string();
+                    c.heading_path.insert(0, format!("Cell {}", idx + 1));
+                    c.extra_meta = base_meta.clone();
+                }
+                chunks
+            }
+            "code" => chunk_python_specs(
+                &source,
+                "ipynb",
+                "ipynb_code_cell",
+                base_meta.clone(),
+            ),
+            _ => chunk_txt_specs(
+                &source,
+                "ipynb",
+                Some("text"),
+                "ipynb_text_cell",
+                base_meta.clone(),
+            ),
+        };
+        out.append(&mut cell_chunks);
+    }
+    Ok(out)
+}
+
+fn chunk_file_by_format(rel_path: &str, ext: &str, input: &str) -> Result<Vec<ChunkSpec>, String> {
+    let mut chunks = match ext {
+        "md" => chunk_markdown_specs(input),
+        "rs" => chunk_rust_specs(input),
+        "py" => chunk_python_specs(input, "py", "python_block", None),
+        "txt" => chunk_txt_specs(input, "txt", Some("text"), "text_paragraph", None),
+        "ipynb" => chunk_ipynb_specs(input)?,
+        _ => Vec::new(),
+    };
+
+    if chunks.is_empty() && !input.trim().is_empty() {
+        // Conservative fallback for formats we thought we could parse.
+        chunks = chunk_line_windows(ext, default_language_for_format(ext).as_deref(), "fallback_window", input, 120, 24, None);
+    }
+
+    let mut out = Vec::new();
+    for chunk in chunks {
+        out.extend(split_chunk_by_size(
+            chunk,
+            DEFAULT_CHUNK_MAX_CHARS,
+            DEFAULT_CHUNK_OVERLAP_CHARS,
+        ));
+    }
+    if out.is_empty() && !input.trim().is_empty() {
+        return Err(format!("no chunks emitted for {}", rel_path));
+    }
+    Ok(out)
+}
+
+fn byte_at_char(s: &str, char_idx: usize) -> usize {
+    if char_idx == 0 {
+        return 0;
+    }
+    let mut count = 0usize;
+    for (i, (byte_idx, _)) in s.char_indices().enumerate() {
+        if i == char_idx {
+            return byte_idx;
+        }
+        count = i + 1;
+    }
+    if char_idx >= count {
+        s.len()
+    } else {
+        0
+    }
+}
+
+fn split_chunk_by_size(chunk: ChunkSpec, max_chars: usize, overlap_chars: usize) -> Vec<ChunkSpec> {
+    let max_chars = max_chars.max(1);
+    let overlap_chars = overlap_chars.min(max_chars.saturating_sub(1));
+    let step = max_chars.saturating_sub(overlap_chars).max(1);
+    let total_chars = chunk.text.chars().count();
+    if total_chars <= max_chars {
+        return vec![chunk];
+    }
+    let mut out = Vec::new();
+    let mut start_char = 0usize;
+    while start_char < total_chars {
+        let end_char = (start_char + max_chars).min(total_chars);
+        let start_byte_rel = byte_at_char(&chunk.text, start_char);
+        let end_byte_rel = byte_at_char(&chunk.text, end_char);
+        let sub = chunk.text[start_byte_rel..end_byte_rel].to_string();
+        let prior = &chunk.text[..start_byte_rel];
+        let start_line = chunk.start_line + (prior.matches('\n').count() as u32);
+        let end_line = start_line + (sub.matches('\n').count() as u32);
+        out.push(ChunkSpec {
+            format: chunk.format.clone(),
+            language: chunk.language.clone(),
+            chunk_kind: chunk.chunk_kind.clone(),
+            heading_path: chunk.heading_path.clone(),
+            start_line,
+            end_line,
+            start_byte: chunk.start_byte.saturating_add(start_byte_rel as u32),
+            end_byte: chunk.start_byte.saturating_add(end_byte_rel as u32),
+            text: sub,
+            extra_meta: chunk.extra_meta.clone(),
+            ast_summary: chunk.ast_summary.clone(),
         });
+        if end_char == total_chars {
+            break;
+        }
+        start_char = start_char.saturating_add(step);
     }
-    chunks
+    out
+}
+
+fn normalize_text_for_hash(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn tokenize_simple(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            cur.push(ch);
+            continue;
+        }
+        if !cur.is_empty() {
+            out.push(cur.clone());
+            cur.clear();
+        }
+        if !ch.is_whitespace() {
+            out.push(ch.to_string());
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn chunk_repr_value(rel_path: &str, chunk_sha256: &str, chunk: &ChunkSpec) -> serde_json::Value {
+    let normalized = normalize_text_for_hash(&chunk.text);
+    let normalized_text_sha256 = sha256_hex(normalized.as_bytes());
+    let tokens = tokenize_simple(&chunk.text).join("\n");
+    let token_sha256 = sha256_hex(tokens.as_bytes());
+    let ast_sha256 = chunk.ast_summary.as_ref().and_then(|v| {
+        serde_json::to_vec(v).ok().map(|b| sha256_hex(&b))
+    });
+    serde_json::json!({
+        "schema_id": CHUNK_REPR_SCHEMA_ID,
+        "schema_version": 1,
+        "doc_path": rel_path,
+        "chunk_sha256": chunk_sha256,
+        "format": chunk.format,
+        "language": chunk.language,
+        "chunk_kind": chunk.chunk_kind,
+        "byte_len": chunk.text.as_bytes().len(),
+        "line_count": chunk.text.lines().count(),
+        "normalized_text_sha256": normalized_text_sha256,
+        "token_sha256": token_sha256,
+        "ast_sha256": ast_sha256,
+        "ast_summary": chunk.ast_summary,
+        "start_line": chunk.start_line,
+        "end_line": chunk.end_line,
+        "start_byte": chunk.start_byte,
+        "end_byte": chunk.end_byte,
+        "heading_path": chunk.heading_path,
+        "meta": chunk.extra_meta,
+    })
 }
 
 fn parse_heading(line: &str) -> Option<(u8, String)> {

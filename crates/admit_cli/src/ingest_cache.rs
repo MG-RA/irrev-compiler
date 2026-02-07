@@ -5,14 +5,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::ArtifactRef;
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedChunk {
     pub heading_path: Vec<String>,
     pub start_line: u32,
+    #[serde(default)]
+    pub end_line: Option<u32>,
+    #[serde(default)]
+    pub start_byte: Option<u32>,
+    #[serde(default)]
+    pub end_byte: Option<u32>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub chunk_kind: Option<String>,
     pub chunk_sha256: String,
     pub artifact: ArtifactRef,
+    #[serde(default)]
+    pub repr_artifact: Option<ArtifactRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

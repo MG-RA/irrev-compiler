@@ -177,8 +177,8 @@ pub enum Predicate {
         op: CmpOp,
         value: Quantity,
     },
-    #[serde(rename = "VaultRule")]
-    VaultRule { rule_id: String },
+    #[serde(rename = "ObsidianVaultRule", alias = "VaultRule")]
+    ObsidianVaultRule { rule_id: String },
     #[serde(rename = "CalcWitness")]
     CalcWitness {
         witness_hash: String,

@@ -61,11 +61,13 @@ pub fn eval_pred_with_provider(
                 Err(EvalError("commit is not a quantity".into()))
             }
         }
-        Predicate::VaultRule { rule_id } => {
+        Predicate::ObsidianVaultRule { rule_id } => {
             let Some(provider) = provider else {
-                return Err(EvalError("vault_rule requires a predicate provider".into()));
+                return Err(EvalError(
+                    "obsidian_vault_rule (vault_rule alias) requires a predicate provider".into(),
+                ));
             };
-            let findings = provider.eval_vault_rule(rule_id)?;
+            let findings = provider.eval_obsidian_vault_rule(rule_id)?;
             let triggered = !findings.is_empty();
             for f in findings {
                 trace.record(Fact::LintFinding {
@@ -186,7 +188,9 @@ pub fn predicate_to_string(pred: &Predicate) -> String {
             cmp_op_repr(op),
             quantity_repr(value)
         ),
-        Predicate::VaultRule { rule_id } => format!("vault_rule \"{}\"", rule_id),
+        Predicate::ObsidianVaultRule { rule_id } => {
+            format!("obsidian_vault_rule \"{}\"", rule_id)
+        }
         Predicate::CalcWitness {
             witness_hash,
             expected_schema_id,

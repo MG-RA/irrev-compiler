@@ -112,9 +112,9 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
                 value,
                 unit,
             }),
-        just(Token::KwVaultRule)
+        choice::<_, Simple<Token>>((just(Token::KwObsidianVaultRule), just(Token::KwVaultRule)))
             .ignore_then(rule_id_value.clone())
-            .map(|rule_id| Predicate::VaultRule { rule_id }),
+            .map(|rule_id| Predicate::ObsidianVaultRule { rule_id }),
     ));
 
     let expr = recursive(|expr| {

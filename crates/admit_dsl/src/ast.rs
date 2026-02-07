@@ -186,7 +186,8 @@ pub enum Predicate {
         value: f64,
         unit: String,
     },
-    VaultRule {
+    #[serde(rename = "ObsidianVaultRule", alias = "VaultRule")]
+    ObsidianVaultRule {
         rule_id: String,
     },
 }

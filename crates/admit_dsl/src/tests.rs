@@ -174,7 +174,7 @@ scope vault_lint
 
 constraint broken-link
 tag severity warning
-@inadmissible_if vault_rule("broken-link")
+@inadmissible_if obsidian_vault_rule("broken-link")
 
 query lint fail_on warning
 query witness
@@ -197,6 +197,31 @@ query witness
                     query: admit_core::Query::Lint { .. },
                     ..
                 }
+            )
+        }));
+    }
+
+    #[test]
+    fn parse_legacy_vault_rule_alias_lowers_to_obsidian_predicate() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope vault_lint
+
+@inadmissible_if vault_rule("broken-link")
+"#;
+
+        let program = parse_program(source, "legacy-vault-rule.adm").expect("parse program");
+        let ir = lower_to_ir(program).expect("lower to ir");
+        assert!(ir.statements.iter().any(|s| {
+            matches!(
+                s,
+                admit_core::Stmt::Constraint {
+                    expr: admit_core::BoolExpr::Pred {
+                        pred: admit_core::Predicate::ObsidianVaultRule { rule_id }
+                    },
+                    ..
+                } if rule_id == "broken-link"
             )
         }));
     }

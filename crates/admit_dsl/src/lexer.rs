@@ -74,6 +74,7 @@ pub(crate) fn lexer(
         make_keyword("has_commit", Token::KwHasCommit).boxed(),
         make_keyword("commit_equals", Token::KwCommitEquals).boxed(),
         make_keyword("commit_cmp", Token::KwCommitCmp).boxed(),
+        make_keyword("obsidian_vault_rule", Token::KwObsidianVaultRule).boxed(),
         make_keyword("vault_rule", Token::KwVaultRule).boxed(),
         make_keyword("true", Token::True).boxed(),
         make_keyword("false", Token::False).boxed(),

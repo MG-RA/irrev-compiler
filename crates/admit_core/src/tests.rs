@@ -40,6 +40,22 @@ mod tests {
     }
 
     #[test]
+    fn predicate_serde_accepts_legacy_vault_rule_variant() {
+        let json = r#"{"type":"VaultRule","rule_id":"broken-link"}"#;
+        let pred: Predicate = serde_json::from_str(json).expect("deserialize predicate");
+        assert_eq!(
+            pred,
+            Predicate::ObsidianVaultRule {
+                rule_id: "broken-link".to_string()
+            }
+        );
+        assert_eq!(
+            crate::predicates::predicate_to_string(&pred),
+            r#"obsidian_vault_rule "broken-link""#
+        );
+    }
+
+    #[test]
     fn allow_erasure_triggers_inadmissible() {
         let witness = allow_erasure_witness();
         assert_eq!(witness.verdict, Verdict::Inadmissible);

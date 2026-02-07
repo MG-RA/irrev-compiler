@@ -267,7 +267,7 @@ struct Cli {
     #[arg(long, value_enum)]
     projection_failure_mode: Option<admit_surrealdb::projection_config::FailureHandling>,
 
-    /// Vault prefix for link resolution (repeatable, e.g., irrev-vault/)
+    /// Obsidian vault prefix for link resolution (repeatable, e.g., irrev-vault/)
     #[arg(long, value_name = "PREFIX")]
     vault_prefix: Option<Vec<String>>,
 
@@ -1017,7 +1017,7 @@ struct IngestDirArgs {
     #[arg(long, default_value_t = 0)]
     ollama_dim: usize,
 
-    /// After ingest, propose repairs for unresolved vault links using embeddings (writes `unresolved_link_suggestion` rows)
+    /// After ingest, propose repairs for unresolved Obsidian vault links using embeddings (writes `unresolved_link_suggestion` rows)
     #[arg(long)]
     ollama_suggest_unresolved: bool,
 
@@ -1271,7 +1271,7 @@ struct PlanNewArgs {
     /// Compiler/tool version identifier
     #[arg(long)]
     tool_version: Option<String>,
-    /// Vault snapshot hash (optional, binds plan to a vault state)
+    /// Obsidian vault snapshot hash (optional, binds plan to a vault state)
     #[arg(long)]
     snapshot_hash: Option<String>,
     /// Witness created_at timestamp (included in plan_id; default: current UTC ISO-8601)
@@ -1490,7 +1490,7 @@ fn run_init(args: InitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String>
             "root": out.root,
             "created": out.created,
             "existing": out.existing,
-            "next": ["admit ingest .", "admit status", "admit lint vault"]
+            "next": ["admit ingest .", "admit status", "admit lint rust"]
         }))
         .map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
@@ -1508,7 +1508,7 @@ fn run_init(args: InitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String>
         println!("Next:");
         println!("  admit ingest .");
         println!("  admit status");
-        println!("  admit lint vault");
+        println!("  admit lint rust");
     }
 
     Ok(())
@@ -5806,7 +5806,7 @@ fn maybe_project_vault_links(
     artifacts_dir: &Path,
 ) -> Result<(), String> {
     projection
-        .with_store("surrealdb vault link projection", |surreal| {
+        .with_store("surrealdb obsidian vault link projection", |surreal| {
             surreal
                 .project_vault_obsidian_links_from_artifacts(
                     dag,
@@ -5815,7 +5815,9 @@ fn maybe_project_vault_links(
                     None,
                     None,
                 )
-                .map_err(|err| format!("surrealdb vault link projection failed: {}", err))?;
+                .map_err(|err| {
+                    format!("surrealdb obsidian vault link projection failed: {}", err)
+                })?;
             Ok(())
         })?
         .map(|_| ());

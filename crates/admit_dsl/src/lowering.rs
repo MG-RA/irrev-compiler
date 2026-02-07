@@ -412,7 +412,9 @@ fn lower_predicate(pred: Predicate, errors: &mut Vec<String>) -> admit_core::Pre
                 value: admit_core::Quantity { value, unit },
             }
         }
-        Predicate::VaultRule { rule_id } => admit_core::Predicate::VaultRule { rule_id },
+        Predicate::ObsidianVaultRule { rule_id } => {
+            admit_core::Predicate::ObsidianVaultRule { rule_id }
+        }
     }
 }
 

@@ -1,12 +1,13 @@
 # Proposed v0 Vault Lint Ruleset (ADM)
 #
 # Goal: replace `meta/rulesets/core.toml` (legacy Python rule carrier) with an ADM
-# module that the Rust vault-ingestion/lint module can evaluate directly.
+# module that the Rust Obsidian-vault ingestion/lint module can evaluate directly.
 #
 # v0 semantics:
 # - One constraint = one rule.
-# - Each `vault_rule(...)` predicate evaluates the rule and produces a finding set.
-# - `@inadmissible_if vault_rule(...)` means: inadmissible iff there exists >=1 finding.
+# - Each `obsidian_vault_rule(...)` predicate evaluates the rule and produces a finding set.
+#   (`vault_rule(...)` remains a compatibility alias.)
+# - `@inadmissible_if obsidian_vault_rule(...)` means: inadmissible iff there exists >=1 finding.
 # - `tag invariant <id>` and `tag severity <level>` attach machine-readable metadata
 #   to the constraint (avoid "comment truth").
 #
@@ -21,12 +22,12 @@ scope vault_lint
 constraint forbidden-edge
 tag invariant governance
 tag severity warning
-@inadmissible_if vault_rule("forbidden-edge")
+@inadmissible_if obsidian_vault_rule("forbidden-edge")
 
 constraint missing-role
 tag invariant governance
 tag severity warning
-@inadmissible_if vault_rule("missing-role")
+@inadmissible_if obsidian_vault_rule("missing-role")
 
 # ---------------------------------------------------------------------------
 # Irreversibility invariant
@@ -35,17 +36,17 @@ tag severity warning
 constraint missing-dependencies
 tag invariant irreversibility
 tag severity error
-@inadmissible_if vault_rule("missing-dependencies")
+@inadmissible_if obsidian_vault_rule("missing-dependencies")
 
 constraint mechanism-missing-residuals
 tag invariant irreversibility
 tag severity error
-@inadmissible_if vault_rule("mechanism-missing-residuals")
+@inadmissible_if obsidian_vault_rule("mechanism-missing-residuals")
 
 constraint hub-required-headings
 tag invariant irreversibility
 tag severity error
-@inadmissible_if vault_rule("hub-required-headings")
+@inadmissible_if obsidian_vault_rule("hub-required-headings")
 
 # ---------------------------------------------------------------------------
 # Decomposition invariant
@@ -54,12 +55,12 @@ tag severity error
 constraint layer-violation
 tag invariant decomposition
 tag severity error
-@inadmissible_if vault_rule("layer-violation")
+@inadmissible_if obsidian_vault_rule("layer-violation")
 
 constraint kind-violation
 tag invariant decomposition
 tag severity error
-@inadmissible_if vault_rule("kind-violation")
+@inadmissible_if obsidian_vault_rule("kind-violation")
 
 # ---------------------------------------------------------------------------
 # Attribution invariant
@@ -68,7 +69,7 @@ tag severity error
 constraint responsibility-scope
 tag invariant attribution
 tag severity info
-@inadmissible_if vault_rule("responsibility-scope")
+@inadmissible_if obsidian_vault_rule("responsibility-scope")
 
 # ---------------------------------------------------------------------------
 # Structural (supports all invariants)
@@ -76,19 +77,19 @@ tag severity info
 
 constraint dependency-cycle
 tag severity error
-@inadmissible_if vault_rule("dependency-cycle")
+@inadmissible_if obsidian_vault_rule("dependency-cycle")
 
 constraint broken-link
 tag severity warning
-@inadmissible_if vault_rule("broken-link")
+@inadmissible_if obsidian_vault_rule("broken-link")
 
 constraint alias-drift
 tag severity info
-@inadmissible_if vault_rule("alias-drift")
+@inadmissible_if obsidian_vault_rule("alias-drift")
 
 constraint registry-drift
 tag severity error
-@inadmissible_if vault_rule("registry-drift")
+@inadmissible_if obsidian_vault_rule("registry-drift")
 
 # CI policy knob (the vault owns policy; CLI may provide an override flag).
 query lint fail_on warning

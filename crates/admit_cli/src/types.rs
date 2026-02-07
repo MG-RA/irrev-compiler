@@ -119,11 +119,9 @@ impl fmt::Display for DeclareCostError {
                 "admissibility.checked event id mismatch (expected {}, computed {})",
                 expected, actual
             ),
-            DeclareCostError::ArtifactMissing { kind, sha256 } => write!(
-                f,
-                "artifact missing (kind {}, sha256 {})",
-                kind, sha256
-            ),
+            DeclareCostError::ArtifactMissing { kind, sha256 } => {
+                write!(f, "artifact missing (kind {}, sha256 {})", kind, sha256)
+            }
             DeclareCostError::Io(err) => write!(f, "io error: {}", err),
             DeclareCostError::Json(err) => write!(f, "json error: {}", err),
             DeclareCostError::PlanAnswersFileNotFound(path) => {
@@ -308,6 +306,22 @@ pub struct PlanCreatedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RustIrLintEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub witness: ArtifactRef,
+    pub scope_id: String,
+    pub rule_pack: String,
+    pub rules: Vec<String>,
+    pub files_scanned: u64,
+    pub violations: u64,
+    pub passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectionEvent {
     pub event_type: String,
     pub event_id: String,
@@ -377,6 +391,34 @@ pub struct CourtEvent {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RustIrLintWitness {
+    pub schema_id: String,
+    pub schema_version: u32,
+    pub created_at: String,
+    pub scope_id: String,
+    pub court_version: String,
+    pub input_root: String,
+    pub input_id: String,
+    pub input_ids: Vec<String>,
+    pub config_hash: String,
+    pub rule_pack: String,
+    pub rules: Vec<String>,
+    pub files_scanned: u64,
+    pub violations: Vec<RustIrLintViolation>,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RustIrLintViolation {
+    pub rule_id: String,
+    pub severity: String,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    pub message: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -537,9 +579,9 @@ pub enum ScopeGateMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ScopeValidationSeverity {
-    Error,  // Blocks addition
-    Warn,   // Doesn't block (unless strict mode)
-    Info,   // Informational only
+    Error, // Blocks addition
+    Warn,  // Doesn't block (unless strict mode)
+    Info,  // Informational only
 }
 
 impl std::fmt::Display for ScopeValidationSeverity {
@@ -563,16 +605,24 @@ pub struct ScopeValidation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeAdditionWitness {
-    pub schema_id: String,              // "scope-addition-witness/0"
+    pub schema_id: String, // "scope-addition-witness/0"
     pub schema_version: u32,
-    pub scope_id: String,               // "scope:domain.name" (no @version)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>, // Optional canonical creation timestamp
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub court_version: Option<String>, // Optional producer/tool version
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>, // Optional canonical input identity
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>, // Optional config hash for reproducibility
+    pub scope_id: String, // "scope:domain.name" (no @version)
     pub scope_version: u32,
-    pub validation_timestamp: String,   // ISO-8601 UTC, excluded from witness_id
+    pub validation_timestamp: String, // ISO-8601 UTC, excluded from witness_id
     pub validations: Vec<ScopeValidation>,
     pub registry_version_before: u32,
     pub registry_version_after: u32,
-    pub registry_hash_before: String,   // CRITICAL: hash before mutation
-    pub registry_hash_after: String,    // Hash after mutation
+    pub registry_hash_before: String, // CRITICAL: hash before mutation
+    pub registry_hash_after: String,  // Hash after mutation
 }
 
 // Witness identity payload (for deterministic witness_id calculation)
@@ -581,7 +631,7 @@ pub struct ScopeAdditionWitness {
 pub(crate) struct ScopeAdditionWitnessIdPayload {
     pub scope_id: String,
     pub scope_version: u32,
-    pub validation_checks: Vec<String>,  // Just check names, not messages
+    pub validation_checks: Vec<String>, // Just check names, not messages
     pub registry_version_before: u32,
     pub registry_version_after: u32,
     pub registry_hash_before: String,
@@ -680,6 +730,21 @@ pub(crate) struct PlanCreatedPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct RustIrLintPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub witness: ArtifactRef,
+    pub scope_id: String,
+    pub rule_pack: String,
+    pub rules: Vec<String>,
+    pub files_scanned: u64,
+    pub violations: u64,
+    pub passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProjectionEventPayload {
     pub event_type: String,
     pub timestamp: String,
@@ -750,17 +815,50 @@ pub(crate) struct CourtEventPayload {
 
 #[derive(Debug)]
 pub enum RegistryGateError {
-    ScopeIdMalformed { scope_id: String, reason: String },
-    ScopeIdContainsVersion { scope_id: String },
-    ScopeVersionMismatch { id_version: u32, field_version: u32 },
-    ScopeSnapshotSchemaMissing { scope_id: String, schema_id: String },
-    ScopeSnapshotSchemaWrongKind { scope_id: String, schema_id: String, found_kind: String },
-    ScopeEmitsSchemaUnknown { scope_id: String, schema_id: String },
-    ScopeConsumesSchemaUnknown { scope_id: String, schema_id: String },
-    ScopeDependencyCycle { scope_id: String, cycle: Vec<String> },
-    ScopeDependencyMissing { scope_id: String, dep_id: String },
-    MetaScopeMustBeComplete { scope_id: String, missing_field: String },
-    ValidationFailed { scope_id: String, errors: Vec<String> },
+    ScopeIdMalformed {
+        scope_id: String,
+        reason: String,
+    },
+    ScopeIdContainsVersion {
+        scope_id: String,
+    },
+    ScopeVersionMismatch {
+        id_version: u32,
+        field_version: u32,
+    },
+    ScopeSnapshotSchemaMissing {
+        scope_id: String,
+        schema_id: String,
+    },
+    ScopeSnapshotSchemaWrongKind {
+        scope_id: String,
+        schema_id: String,
+        found_kind: String,
+    },
+    ScopeEmitsSchemaUnknown {
+        scope_id: String,
+        schema_id: String,
+    },
+    ScopeConsumesSchemaUnknown {
+        scope_id: String,
+        schema_id: String,
+    },
+    ScopeDependencyCycle {
+        scope_id: String,
+        cycle: Vec<String>,
+    },
+    ScopeDependencyMissing {
+        scope_id: String,
+        dep_id: String,
+    },
+    MetaScopeMustBeComplete {
+        scope_id: String,
+        missing_field: String,
+    },
+    ValidationFailed {
+        scope_id: String,
+        errors: Vec<String>,
+    },
     InvalidValidationLevel(String),
     Io(String),
     Json(String),
@@ -779,35 +877,51 @@ impl fmt::Display for RegistryGateError {
                     scope_id
                 )
             }
-            RegistryGateError::ScopeVersionMismatch { id_version, field_version } => {
+            RegistryGateError::ScopeVersionMismatch {
+                id_version,
+                field_version,
+            } => {
                 write!(
                     f,
                     "scope version mismatch (id has @{}, field has {})",
                     id_version, field_version
                 )
             }
-            RegistryGateError::ScopeSnapshotSchemaMissing { scope_id, schema_id } => {
+            RegistryGateError::ScopeSnapshotSchemaMissing {
+                scope_id,
+                schema_id,
+            } => {
                 write!(
                     f,
                     "scope '{}' references unknown snapshot schema '{}'",
                     scope_id, schema_id
                 )
             }
-            RegistryGateError::ScopeSnapshotSchemaWrongKind { scope_id, schema_id, found_kind } => {
+            RegistryGateError::ScopeSnapshotSchemaWrongKind {
+                scope_id,
+                schema_id,
+                found_kind,
+            } => {
                 write!(
                     f,
                     "scope '{}' references schema '{}' as snapshot but it has kind '{}'",
                     scope_id, schema_id, found_kind
                 )
             }
-            RegistryGateError::ScopeEmitsSchemaUnknown { scope_id, schema_id } => {
+            RegistryGateError::ScopeEmitsSchemaUnknown {
+                scope_id,
+                schema_id,
+            } => {
                 write!(
                     f,
                     "scope '{}' emits unknown schema '{}'",
                     scope_id, schema_id
                 )
             }
-            RegistryGateError::ScopeConsumesSchemaUnknown { scope_id, schema_id } => {
+            RegistryGateError::ScopeConsumesSchemaUnknown {
+                scope_id,
+                schema_id,
+            } => {
                 write!(
                     f,
                     "scope '{}' consumes unknown schema '{}'",
@@ -829,7 +943,10 @@ impl fmt::Display for RegistryGateError {
                     scope_id, dep_id
                 )
             }
-            RegistryGateError::MetaScopeMustBeComplete { scope_id, missing_field } => {
+            RegistryGateError::MetaScopeMustBeComplete {
+                scope_id,
+                missing_field,
+            } => {
                 write!(
                     f,
                     "meta scope '{}' must have all Phase 2 fields (missing: {})",

@@ -27,7 +27,7 @@ use admit_cli::{
     DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanNewInput, RustIrLintInput,
     ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
     ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
-    VerifyWitnessInput,
+    VerifyWitnessInput, KNOWN_SCOPES,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -1518,9 +1518,29 @@ fn run_init(args: InitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String>
 fn run_status(args: StatusArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     let ledger = args.ledger.unwrap_or_else(default_ledger_path);
     let summary = summarize_ledger(&ledger).map_err(|err| err.to_string())?;
+    let scope_enablement = match resolve_scope_enablement(Path::new(".")) {
+        Ok(value) => Some(value),
+        Err(err) => {
+            if !args.json {
+                eprintln!("Warning: scope config unavailable: {}", err);
+            }
+            None
+        }
+    };
+    let known_scope_ids: Vec<&str> = KNOWN_SCOPES.iter().map(|scope| scope.id).collect();
 
     if args.json {
-        let json = serde_json::to_string_pretty(&summary)
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "summary": summary,
+            "scopes": {
+                "known": known_scope_ids,
+                "enabled": scope_enablement.as_ref().map(|v| v.enabled_scope_ids().to_vec()).unwrap_or_default(),
+                "source": scope_enablement
+                    .as_ref()
+                    .and_then(|v| v.source.as_ref())
+                    .map(|p| p.display().to_string()),
+            }
+        }))
             .map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
         return Ok(());
@@ -1565,6 +1585,16 @@ fn run_status(args: StatusArgs, _dag_trace_out: Option<&Path>) -> Result<(), Str
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "-".to_string())
         );
+    }
+    println!("known_scopes={}", known_scope_ids.join(","));
+    if let Some(enablement) = scope_enablement.as_ref() {
+        println!(
+            "enabled_scopes={}",
+            enablement.enabled_scope_ids().join(",")
+        );
+        if let Some(source) = enablement.source.as_ref() {
+            println!("scopes_source={}", source.display());
+        }
     }
 
     Ok(())

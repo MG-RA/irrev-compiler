@@ -3,31 +3,27 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 use sha2::Digest;
 
-use admit_dag::{DagEdge, DagNode, DagTraceCollector, NodeKind, ScopeTag, Tracer};
-use admit_surrealdb::{
-    DocChunkEmbeddingRow, DocEmbeddingRow, DocTitleEmbeddingRow, EmbedRunRow, IngestEventRow,
-    IngestRunRow, ProjectionEventRow, ProjectionStoreOps, SurrealCliConfig, SurrealCliProjectionStore,
-    UnresolvedLinkSuggestionRow,
-    QueryArtifactRow, FunctionArtifactRow,
-    projection_config::ProjectionConfig,
-};
 use admit_dag::ProjectionStore;
+use admit_dag::{DagEdge, DagNode, DagTraceCollector, NodeKind, ScopeTag, Tracer};
 use admit_embed::{OllamaEmbedConfig, OllamaEmbedder};
+use admit_surrealdb::{
+    projection_config::ProjectionConfig, DocChunkEmbeddingRow, DocEmbeddingRow,
+    DocTitleEmbeddingRow, EmbedRunRow, FunctionArtifactRow, IngestEventRow, IngestRunRow,
+    ProjectionEventRow, ProjectionStoreOps, QueryArtifactRow, SurrealCliConfig,
+    SurrealCliProjectionStore, UnresolvedLinkSuggestionRow,
+};
 
 use admit_cli::{
-    append_checked_event, append_event, append_executed_event, append_plan_created_event,
-    append_ingest_event, append_projection_event, build_projection_event,
-    append_court_event, build_court_event,
-    check_cost_declared, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
-    execute_checked, export_plan_markdown, list_artifacts, read_artifact_projection,
-    ingest_dir_protocol_with_cache,
-    read_file_bytes, registry_build, registry_init, render_plan_text, verify_ledger,
-    verify_witness, ArtifactInput, DeclareCostInput, MetaRegistryV0, PlanNewInput,
-    ScopeGateMode, VerifyWitnessInput,
-    register_query_artifact, register_function_artifact, load_meta_registry,
-    scope_add, scope_verify, scope_list, scope_show,
-    ScopeAddArgs as ScopeAddArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
-    ScopeListArgs as ScopeListArgsLib, ScopeShowArgs as ScopeShowArgsLib,
+    append_checked_event, append_court_event, append_event, append_executed_event,
+    append_ingest_event, append_plan_created_event, append_projection_event, build_court_event,
+    build_projection_event, check_cost_declared, create_plan, declare_cost, default_artifacts_dir,
+    default_ledger_path, execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache,
+    list_artifacts, load_meta_registry, read_artifact_projection, read_file_bytes,
+    register_function_artifact, register_query_artifact, registry_build, registry_init,
+    render_plan_text, scope_add, scope_list, scope_show, scope_verify, store_value_artifact,
+    verify_ledger, verify_witness, ArtifactInput, DeclareCostInput, MetaRegistryV0, PlanNewInput,
+    ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
+    ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -193,7 +189,11 @@ impl ProjectionCoordinator {
 }
 
 #[derive(Parser)]
-#[command(name = "admit-cli", version, about = "Admissibility compiler CLI utilities")]
+#[command(
+    name = "admit-cli",
+    version,
+    about = "Admissibility compiler CLI utilities"
+)]
 struct Cli {
     /// Emit a governed DAG trace (canonical CBOR). If PATH is omitted, writes to out/dag-trace.cbor
     #[arg(
@@ -289,6 +289,7 @@ enum Commands {
     Ingest(IngestArgs),
     Projection(ProjectionArgs),
     Court(CourtArgs),
+    Git(GitArgs),
 }
 
 #[derive(Parser)]
@@ -533,6 +534,172 @@ struct ProjectionArgs {
 struct CourtArgs {
     #[command(subcommand)]
     command: CourtCommands,
+}
+
+#[derive(Parser)]
+struct GitArgs {
+    #[command(subcommand)]
+    command: GitCommands,
+}
+
+#[derive(Subcommand)]
+enum GitCommands {
+    Snapshot(GitSnapshotArgs),
+    Diff(GitDiffArgs),
+    Provenance(GitProvenanceArgs),
+}
+
+#[derive(Parser)]
+struct GitSnapshotArgs {
+    /// Repository root path (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    repo: PathBuf,
+
+    /// Git ref to snapshot (default: HEAD)
+    #[arg(long, value_name = "REF", default_value = "HEAD")]
+    head: String,
+
+    /// Include submodule commit states
+    #[arg(long)]
+    include_submodules: bool,
+
+    /// Include .gitignore-filtered working tree manifest hash
+    #[arg(long)]
+    include_working_tree_manifest: bool,
+
+    /// Witness created_at timestamp (default: current UTC ISO-8601)
+    #[arg(long = "created-at", alias = "timestamp")]
+    created_at: Option<String>,
+
+    /// Optional metadata source reference
+    #[arg(long)]
+    source_ref: Option<String>,
+
+    /// Optional metadata purpose
+    #[arg(long)]
+    purpose: Option<String>,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Write witness JSON projection to PATH
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+
+    /// Do not store artifact in the artifact store
+    #[arg(long)]
+    no_store: bool,
+
+    /// Output JSON summary
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct GitDiffArgs {
+    /// Repository root path (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    repo: PathBuf,
+
+    /// Base commit/ref for diff
+    #[arg(long, value_name = "REF")]
+    base: String,
+
+    /// Head commit/ref for diff (default: HEAD)
+    #[arg(long, value_name = "REF", default_value = "HEAD")]
+    head: String,
+
+    /// Witness created_at timestamp (default: current UTC ISO-8601)
+    #[arg(long = "created-at", alias = "timestamp")]
+    created_at: Option<String>,
+
+    /// Optional metadata source reference
+    #[arg(long)]
+    source_ref: Option<String>,
+
+    /// Optional metadata purpose
+    #[arg(long)]
+    purpose: Option<String>,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Write witness JSON projection to PATH
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+
+    /// Do not store artifact in the artifact store
+    #[arg(long)]
+    no_store: bool,
+
+    /// Output JSON summary
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct GitProvenanceArgs {
+    /// Repository root path (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    repo: PathBuf,
+
+    /// Logical repository identity (default: repo:<dir-name>)
+    #[arg(long)]
+    repository_id: Option<String>,
+
+    /// Optional base commit/ref for provenance range
+    #[arg(long, value_name = "REF")]
+    base: Option<String>,
+
+    /// Head commit/ref for provenance (default: HEAD)
+    #[arg(long, value_name = "REF", default_value = "HEAD")]
+    head: String,
+
+    /// JSON file with `GitArtifactBinding[]`
+    #[arg(long, value_name = "PATH")]
+    artifact_bindings_file: Option<PathBuf>,
+
+    /// JSON file with `GitRegistryBinding[]`
+    #[arg(long, value_name = "PATH")]
+    registry_bindings_file: Option<PathBuf>,
+
+    /// JSON file with `GitSignatureAttestation[]`
+    #[arg(long, value_name = "PATH")]
+    signature_attestations_file: Option<PathBuf>,
+
+    /// Auto-populate signature attestations from git verify-commit over the selected range
+    #[arg(long)]
+    signatures_from_git: bool,
+
+    /// Witness created_at timestamp (default: current UTC ISO-8601)
+    #[arg(long = "created-at", alias = "timestamp")]
+    created_at: Option<String>,
+
+    /// Optional metadata source reference
+    #[arg(long)]
+    source_ref: Option<String>,
+
+    /// Optional metadata purpose
+    #[arg(long)]
+    purpose: Option<String>,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Write witness JSON projection to PATH
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+
+    /// Do not store artifact in the artifact store
+    #[arg(long)]
+    no_store: bool,
+
+    /// Output JSON summary
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -1107,17 +1274,26 @@ fn main() {
             PlanCommands::Export(export_args) => run_plan_export(export_args, dag_trace_out),
         },
         Commands::Calc(args) => match args.command {
-            CalcCommands::Plan(plan_args) => run_calc_plan(plan_args, dag_trace_out, &mut projection),
-            CalcCommands::Execute(exec_args) => run_calc_execute(exec_args, dag_trace_out, &mut projection),
+            CalcCommands::Plan(plan_args) => {
+                run_calc_plan(plan_args, dag_trace_out, &mut projection)
+            }
+            CalcCommands::Execute(exec_args) => {
+                run_calc_execute(exec_args, dag_trace_out, &mut projection)
+            }
             CalcCommands::Describe(desc_args) => run_calc_describe(desc_args, dag_trace_out),
         },
         Commands::Ingest(args) => match args.command {
-            IngestCommands::Dir(dir_args) => {
-                run_ingest_dir(dir_args, dag_trace_out, &mut projection, cli.projection_force)
-            }
+            IngestCommands::Dir(dir_args) => run_ingest_dir(
+                dir_args,
+                dag_trace_out,
+                &mut projection,
+                cli.projection_force,
+            ),
         },
         Commands::Projection(args) => match args.command {
-            ProjectionCommands::Vacuum(vacuum_args) => run_projection_vacuum(vacuum_args, &projection),
+            ProjectionCommands::Vacuum(vacuum_args) => {
+                run_projection_vacuum(vacuum_args, &projection)
+            }
             ProjectionCommands::Retry(retry_args) => run_projection_retry(retry_args, &projection),
         },
         Commands::Court(args) => match args.command {
@@ -1128,6 +1304,7 @@ fn main() {
                 CourtFunctionCommands::Add(a) => run_court_function_add(a, &mut projection),
             },
         },
+        Commands::Git(args) => run_git(args, dag_trace_out),
     };
 
     if let Err(err) = result {
@@ -1142,18 +1319,16 @@ fn run_declare_cost(
     projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let witness_json = match args.witness_json {
-        Some(path) => Some(
-            read_file_bytes(&path)
-                .map_err(|err| format!("read witness_json: {}", err))?,
-        ),
+        Some(path) => {
+            Some(read_file_bytes(&path).map_err(|err| format!("read witness_json: {}", err))?)
+        }
         None => None,
     };
 
     let witness_cbor = match args.witness_cbor {
-        Some(path) => Some(
-            read_file_bytes(&path)
-                .map_err(|err| format!("read witness_cbor: {}", err))?,
-        ),
+        Some(path) => {
+            Some(read_file_bytes(&path).map_err(|err| format!("read witness_cbor: {}", err))?)
+        }
         None => None,
     };
 
@@ -1217,8 +1392,7 @@ fn run_declare_cost(
     }
 
     if args.json {
-        let json =
-            serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("event_id={}", event.event_id);
@@ -1243,20 +1417,21 @@ fn run_declare_cost(
     Ok(())
 }
 
-fn run_witness_verify(args: WitnessVerifyArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+fn run_witness_verify(
+    args: WitnessVerifyArgs,
+    _dag_trace_out: Option<&Path>,
+) -> Result<(), String> {
     let witness_json = match args.witness_json {
-        Some(path) => Some(
-            read_file_bytes(&path)
-                .map_err(|err| format!("read witness_json: {}", err))?,
-        ),
+        Some(path) => {
+            Some(read_file_bytes(&path).map_err(|err| format!("read witness_json: {}", err))?)
+        }
         None => None,
     };
 
     let witness_cbor = match args.witness_cbor {
-        Some(path) => Some(
-            read_file_bytes(&path)
-                .map_err(|err| format!("read witness_cbor: {}", err))?,
-        ),
+        Some(path) => {
+            Some(read_file_bytes(&path).map_err(|err| format!("read witness_cbor: {}", err))?)
+        }
         None => None,
     };
 
@@ -1287,10 +1462,7 @@ fn run_check(
     let timestamp = args
         .timestamp
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let facts_bundle_input = match (
-        args.facts_bundle,
-        std::env::var("FACTS_BUNDLE_PATH").ok(),
-    ) {
+    let facts_bundle_input = match (args.facts_bundle, std::env::var("FACTS_BUNDLE_PATH").ok()) {
         (Some(path), _) => {
             let loaded = facts_bundle::load_bundle_with_hash(&path)
                 .map_err(|err| format!("facts bundle load: {}", err))?;
@@ -1336,8 +1508,7 @@ fn run_check(
     }
 
     if args.json {
-        let json =
-            serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("event_id={}", event.event_id);
@@ -1396,8 +1567,7 @@ fn run_execute(
     }
 
     if args.json {
-        let json =
-            serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("event_id={}", event.event_id);
@@ -1430,8 +1600,11 @@ fn parse_scope_gate_mode(value: &str) -> Result<ScopeGateMode, String> {
 }
 
 fn resolve_meta_registry_path(path: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
-    path.map(|p| p.to_path_buf())
-        .or_else(|| std::env::var("ADMIT_META_REGISTRY").ok().map(std::path::PathBuf::from))
+    path.map(|p| p.to_path_buf()).or_else(|| {
+        std::env::var("ADMIT_META_REGISTRY")
+            .ok()
+            .map(std::path::PathBuf::from)
+    })
 }
 
 fn warn_missing_scope(path: Option<&std::path::Path>, scope_id: &str) -> Result<(), String> {
@@ -1442,8 +1615,7 @@ fn warn_missing_scope(path: Option<&std::path::Path>, scope_id: &str) -> Result<
     if !path.exists() {
         return Err(format!("meta registry not found: {}", path.display()));
     }
-    let bytes =
-        std::fs::read(&path).map_err(|err| format!("read meta registry: {}", err))?;
+    let bytes = std::fs::read(&path).map_err(|err| format!("read meta registry: {}", err))?;
     let registry: MetaRegistryV0 =
         serde_json::from_slice(&bytes).map_err(|err| format!("meta registry decode: {}", err))?;
     if !registry.scopes.iter().any(|entry| entry.id == scope_id) {
@@ -1458,12 +1630,11 @@ fn warn_missing_scope(path: Option<&std::path::Path>, scope_id: &str) -> Result<
 fn run_verify_ledger(args: VerifyLedgerArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
-    let report =
-        verify_ledger(&ledger_path, Some(artifacts_dir.as_path())).map_err(|err| err.to_string())?;
+    let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path()))
+        .map_err(|err| err.to_string())?;
 
     if args.json {
-        let json =
-            serde_json::to_string(&report).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&report).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("ledger={}", ledger_path.display());
@@ -1496,8 +1667,7 @@ fn run_bundle_verify(args: BundleVerifyArgs, _dag_trace_out: Option<&Path>) -> R
             "schema_id": loaded.bundle.schema_id,
             "schema_version": loaded.bundle.schema_version
         });
-        let json =
-            serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("bundle_hash={}", loaded.sha256);
@@ -1538,8 +1708,7 @@ fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), S
 
     let source_root = match args.source_root {
         Some(path) => path,
-        None => std::env::current_dir()
-            .map_err(|err| format!("current_dir: {}", err))?,
+        None => std::env::current_dir().map_err(|err| format!("current_dir: {}", err))?,
     };
 
     let bundle = facts_bundle::observe_regex(
@@ -1550,16 +1719,14 @@ fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), S
         Some(&source_root),
     )
     .map_err(|err| err.to_string())?;
-    let bundle_with_hash =
-        facts_bundle::bundle_with_hash(bundle).map_err(|err| err.to_string())?;
+    let bundle_with_hash = facts_bundle::bundle_with_hash(bundle).map_err(|err| err.to_string())?;
 
     let out_path = args
         .out
         .unwrap_or_else(|| PathBuf::from("out/facts-bundle.json"));
     if let Some(parent) = out_path.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("create out dir: {}", err))?;
+            std::fs::create_dir_all(parent).map_err(|err| format!("create out dir: {}", err))?;
         }
     }
     std::fs::write(&out_path, &bundle_with_hash.canonical_bytes)
@@ -1574,8 +1741,7 @@ fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), S
             "bundle_path": out_path.display().to_string(),
             "hash_path": hash_path.display().to_string()
         });
-        let json =
-            serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("bundle_hash={}", bundle_with_hash.sha256);
@@ -1585,7 +1751,718 @@ fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), S
     Ok(())
 }
 
-fn run_list_artifacts(args: ListArtifactsArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+fn run_git(args: GitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    match args.command {
+        GitCommands::Snapshot(snapshot_args) => run_git_snapshot(snapshot_args),
+        GitCommands::Diff(diff_args) => run_git_diff(diff_args),
+        GitCommands::Provenance(provenance_args) => run_git_provenance(provenance_args),
+    }
+}
+
+fn run_git_snapshot(args: GitSnapshotArgs) -> Result<(), String> {
+    let repo = resolve_repo_path(&args.repo)?;
+    let created_at = args
+        .created_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let metadata = build_git_metadata(args.source_ref, args.purpose);
+    let head_commit_oid = git_resolve_commit_oid(&repo, &args.head)?;
+    let is_clean = git_is_clean_worktree(&repo)?;
+    let tracked_files = git_snapshot_tracked_files(&repo, &head_commit_oid)?;
+    let submodules = if args.include_submodules {
+        git_snapshot_submodules(&repo)?
+    } else {
+        Vec::new()
+    };
+    let working_tree_manifest_sha256 = if args.include_working_tree_manifest {
+        Some(git_working_tree_manifest_sha256(&repo)?)
+    } else {
+        None
+    };
+
+    let witness = admit_core::git_snapshot(
+        admit_core::GitSnapshotInput {
+            head_commit_oid,
+            is_clean,
+            tracked_files,
+            submodules,
+            working_tree_manifest_sha256,
+        },
+        created_at,
+        metadata,
+    )
+    .map_err(|e| e.to_string())?;
+    let witness_id =
+        admit_core::compute_git_snapshot_witness_id(&witness).map_err(|e| e.to_string())?;
+
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let artifact_ref = if args.no_store {
+        None
+    } else {
+        let witness_value =
+            serde_json::to_value(&witness).map_err(|e| format!("snapshot witness json: {}", e))?;
+        Some(
+            store_value_artifact(
+                &artifacts_dir,
+                "git_snapshot_witness",
+                "git-snapshot-witness/0",
+                &witness_value,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+    };
+
+    if let Some(out_path) = args.out.as_ref() {
+        write_json_pretty(out_path, &witness)?;
+    }
+
+    if args.json {
+        let output = serde_json::json!({
+            "witness_id": witness_id,
+            "artifact_ref": artifact_ref,
+            "witness": witness
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&output).map_err(|e| format!("json encode: {}", e))?
+        );
+    } else {
+        println!("witness_id={}", witness_id);
+        println!("schema_id=git-snapshot-witness/0");
+        println!("head_commit_oid={}", witness.head_commit_oid);
+        println!("is_clean={}", witness.is_clean);
+        println!("tracked_files={}", witness.tracked_files.len());
+        if let Some(submodules) = witness.submodules.as_ref() {
+            println!("submodules={}", submodules.len());
+        }
+        if let Some(artifact_ref) = artifact_ref.as_ref() {
+            println!("artifact_sha256={}", artifact_ref.sha256);
+            println!(
+                "artifact_path={}",
+                artifact_ref.path.as_deref().unwrap_or("")
+            );
+            println!("artifacts_dir={}", artifacts_dir.display());
+        } else {
+            println!("stored=false");
+        }
+        if let Some(out_path) = args.out.as_ref() {
+            println!("out={}", out_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn run_git_diff(args: GitDiffArgs) -> Result<(), String> {
+    let repo = resolve_repo_path(&args.repo)?;
+    let created_at = args
+        .created_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let metadata = build_git_metadata(args.source_ref, args.purpose);
+    let base_commit_oid = git_resolve_commit_oid(&repo, &args.base)?;
+    let head_commit_oid = git_resolve_commit_oid(&repo, &args.head)?;
+    let changes = git_diff_changes(&repo, &base_commit_oid, &head_commit_oid)?;
+
+    let witness = admit_core::git_diff(
+        admit_core::GitDiffInput {
+            base_commit_oid,
+            head_commit_oid,
+            changes,
+        },
+        created_at,
+        metadata,
+    )
+    .map_err(|e| e.to_string())?;
+    let witness_id =
+        admit_core::compute_git_diff_witness_id(&witness).map_err(|e| e.to_string())?;
+
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let artifact_ref = if args.no_store {
+        None
+    } else {
+        let witness_value =
+            serde_json::to_value(&witness).map_err(|e| format!("diff witness json: {}", e))?;
+        Some(
+            store_value_artifact(
+                &artifacts_dir,
+                "git_diff_witness",
+                "git-diff-witness/0",
+                &witness_value,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+    };
+
+    if let Some(out_path) = args.out.as_ref() {
+        write_json_pretty(out_path, &witness)?;
+    }
+
+    if args.json {
+        let output = serde_json::json!({
+            "witness_id": witness_id,
+            "artifact_ref": artifact_ref,
+            "witness": witness
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&output).map_err(|e| format!("json encode: {}", e))?
+        );
+    } else {
+        println!("witness_id={}", witness_id);
+        println!("schema_id=git-diff-witness/0");
+        println!("base_commit_oid={}", witness.base_commit_oid);
+        println!("head_commit_oid={}", witness.head_commit_oid);
+        println!("changes={}", witness.changes.len());
+        if let Some(artifact_ref) = artifact_ref.as_ref() {
+            println!("artifact_sha256={}", artifact_ref.sha256);
+            println!(
+                "artifact_path={}",
+                artifact_ref.path.as_deref().unwrap_or("")
+            );
+            println!("artifacts_dir={}", artifacts_dir.display());
+        } else {
+            println!("stored=false");
+        }
+        if let Some(out_path) = args.out.as_ref() {
+            println!("out={}", out_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn run_git_provenance(args: GitProvenanceArgs) -> Result<(), String> {
+    let repo = resolve_repo_path(&args.repo)?;
+    let created_at = args
+        .created_at
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let metadata = build_git_metadata(args.source_ref, args.purpose);
+
+    let base_commit_oid = match args.base.as_ref() {
+        Some(base_ref) => Some(git_resolve_commit_oid(&repo, base_ref)?),
+        None => None,
+    };
+    let head_commit_oid = git_resolve_commit_oid(&repo, &args.head)?;
+    let repository_id = args
+        .repository_id
+        .unwrap_or_else(|| default_repository_id(&repo));
+
+    let artifact_bindings: Vec<admit_core::GitArtifactBinding> = match args.artifact_bindings_file {
+        Some(path) => read_json_file(&path)?,
+        None => Vec::new(),
+    };
+    let registry_bindings: Vec<admit_core::GitRegistryBinding> = match args.registry_bindings_file {
+        Some(path) => read_json_file(&path)?,
+        None => Vec::new(),
+    };
+
+    let mut signature_map: std::collections::BTreeMap<String, admit_core::GitSignatureAttestation> =
+        std::collections::BTreeMap::new();
+    if args.signatures_from_git {
+        for attestation in
+            git_collect_signature_attestations(&repo, base_commit_oid.as_deref(), &head_commit_oid)?
+        {
+            signature_map.insert(attestation.commit_oid.clone(), attestation);
+        }
+    }
+    let explicit_signatures: Vec<admit_core::GitSignatureAttestation> =
+        match args.signature_attestations_file {
+            Some(path) => read_json_file(&path)?,
+            None => Vec::new(),
+        };
+    for attestation in explicit_signatures {
+        signature_map.insert(attestation.commit_oid.clone(), attestation);
+    }
+    let signature_attestations = signature_map.into_values().collect::<Vec<_>>();
+
+    let witness = admit_core::git_provenance(
+        admit_core::GitProvenanceInput {
+            repository_id,
+            base_commit_oid,
+            head_commit_oid,
+            artifact_bindings,
+            registry_bindings,
+            signature_attestations,
+        },
+        created_at,
+        metadata,
+    )
+    .map_err(|e| e.to_string())?;
+    let witness_id =
+        admit_core::compute_git_provenance_witness_id(&witness).map_err(|e| e.to_string())?;
+
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let artifact_ref = if args.no_store {
+        None
+    } else {
+        let witness_value = serde_json::to_value(&witness)
+            .map_err(|e| format!("provenance witness json: {}", e))?;
+        Some(
+            store_value_artifact(
+                &artifacts_dir,
+                "git_provenance_witness",
+                "git-provenance-witness/0",
+                &witness_value,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+    };
+
+    if let Some(out_path) = args.out.as_ref() {
+        write_json_pretty(out_path, &witness)?;
+    }
+
+    if args.json {
+        let output = serde_json::json!({
+            "witness_id": witness_id,
+            "artifact_ref": artifact_ref,
+            "witness": witness
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&output).map_err(|e| format!("json encode: {}", e))?
+        );
+    } else {
+        println!("witness_id={}", witness_id);
+        println!("schema_id=git-provenance-witness/0");
+        println!("repository_id={}", witness.repository_id);
+        println!("head_commit_oid={}", witness.head_commit_oid);
+        println!("artifact_bindings={}", witness.artifact_bindings.len());
+        println!("registry_bindings={}", witness.registry_bindings.len());
+        println!(
+            "signature_attestations={}",
+            witness.signature_attestations.len()
+        );
+        if let Some(artifact_ref) = artifact_ref.as_ref() {
+            println!("artifact_sha256={}", artifact_ref.sha256);
+            println!(
+                "artifact_path={}",
+                artifact_ref.path.as_deref().unwrap_or("")
+            );
+            println!("artifacts_dir={}", artifacts_dir.display());
+        } else {
+            println!("stored=false");
+        }
+        if let Some(out_path) = args.out.as_ref() {
+            println!("out={}", out_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_repo_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Err(format!("repo path not found: {}", path.display()));
+    }
+    let repo = path
+        .canonicalize()
+        .map_err(|e| format!("canonicalize repo path: {}", e))?;
+    if !repo.is_dir() {
+        return Err(format!("repo path must be a directory: {}", repo.display()));
+    }
+    Ok(repo)
+}
+
+fn build_git_metadata(
+    source_ref: Option<String>,
+    purpose: Option<String>,
+) -> Option<admit_core::GitWitnessMetadata> {
+    if source_ref.is_none() && purpose.is_none() {
+        None
+    } else {
+        Some(admit_core::GitWitnessMetadata {
+            source_ref,
+            purpose,
+        })
+    }
+}
+
+fn default_repository_id(repo: &Path) -> String {
+    if let Some(name) = repo.file_name().and_then(|n| n.to_str()) {
+        format!("repo:{}", name)
+    } else {
+        format!("repo:{}", repo.display().to_string().replace('\\', "/"))
+    }
+}
+
+fn git_resolve_commit_oid(repo: &Path, reference: &str) -> Result<String, String> {
+    let oid = git_output(repo, &[String::from("rev-parse"), reference.to_string()])?;
+    let oid = oid.trim().to_string();
+    if oid.is_empty() {
+        return Err(format!("git rev-parse {} returned empty oid", reference));
+    }
+    Ok(oid)
+}
+
+fn git_is_clean_worktree(repo: &Path) -> Result<bool, String> {
+    let status = git_output(
+        repo,
+        &[String::from("status"), String::from("--porcelain=1")],
+    )?;
+    Ok(status.trim().is_empty())
+}
+
+fn git_snapshot_tracked_files(
+    repo: &Path,
+    head_commit_oid: &str,
+) -> Result<Vec<admit_core::GitSnapshotFile>, String> {
+    let tree = git_output(
+        repo,
+        &[
+            String::from("ls-tree"),
+            String::from("-r"),
+            String::from("--full-tree"),
+            head_commit_oid.to_string(),
+        ],
+    )?;
+    let mut files = Vec::new();
+    for line in tree.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (left, path) = line
+            .split_once('\t')
+            .ok_or_else(|| format!("unexpected ls-tree line: {}", line))?;
+        let mut left_parts = left.split_whitespace();
+        let _mode = left_parts.next();
+        let kind = left_parts.next();
+        let oid = left_parts.next();
+        if kind != Some("blob") {
+            continue;
+        }
+        let Some(blob_oid) = oid else {
+            return Err(format!("missing blob oid in ls-tree line: {}", line));
+        };
+        files.push(admit_core::GitSnapshotFile {
+            path: normalize_repo_path(path),
+            blob_oid: blob_oid.to_string(),
+        });
+    }
+    Ok(files)
+}
+
+fn git_snapshot_submodules(repo: &Path) -> Result<Vec<admit_core::GitSubmoduleState>, String> {
+    let output = git_command(
+        repo,
+        &[
+            String::from("submodule"),
+            String::from("status"),
+            String::from("--recursive"),
+        ],
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.contains("No submodule mapping found")
+            || stderr.contains("not initialized")
+            || stderr.contains("No url found")
+        {
+            return Ok(Vec::new());
+        }
+        return Err(format!("git submodule status failed: {}", stderr));
+    }
+    let stdout = String::from_utf8(output.stdout).map_err(|e| format!("utf8 decode: {}", e))?;
+    let mut submodules = Vec::new();
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(raw_oid) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        let commit_oid = raw_oid.trim_start_matches(['-', '+', 'U', ' ']).to_string();
+        submodules.push(admit_core::GitSubmoduleState {
+            path: normalize_repo_path(path),
+            commit_oid,
+        });
+    }
+    Ok(submodules)
+}
+
+fn git_working_tree_manifest_sha256(repo: &Path) -> Result<String, String> {
+    let output = git_command(
+        repo,
+        &[
+            String::from("ls-files"),
+            String::from("--cached"),
+            String::from("--others"),
+            String::from("--exclude-standard"),
+            String::from("-z"),
+        ],
+    )?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git ls-files manifest failed: {}", stderr));
+    }
+    let mut paths = Vec::new();
+    for entry in output
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let path = String::from_utf8(entry.to_vec()).map_err(|e| format!("utf8 decode: {}", e))?;
+        paths.push(normalize_repo_path(&path));
+    }
+    paths.sort();
+    paths.dedup();
+    let manifest_value = serde_json::Value::Array(
+        paths
+            .into_iter()
+            .map(serde_json::Value::String)
+            .collect::<Vec<_>>(),
+    );
+    let cbor = admit_core::encode_canonical_value(&manifest_value).map_err(|e| e.to_string())?;
+    Ok(hex::encode(sha2::Sha256::digest(cbor)))
+}
+
+fn git_diff_changes(
+    repo: &Path,
+    base_commit_oid: &str,
+    head_commit_oid: &str,
+) -> Result<Vec<admit_core::GitDiffFileChange>, String> {
+    let status = git_output(
+        repo,
+        &[
+            String::from("diff"),
+            String::from("--name-status"),
+            String::from("--find-renames"),
+            String::from("--find-copies"),
+            base_commit_oid.to_string(),
+            head_commit_oid.to_string(),
+        ],
+    )?;
+    let mut changes = Vec::new();
+    for line in status.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cols = line.split('\t').collect::<Vec<_>>();
+        if cols.is_empty() {
+            continue;
+        }
+        let status_code = cols[0];
+        let kind = map_git_change_kind(status_code);
+        let (old_path, new_path, path) =
+            if status_code.starts_with('R') || status_code.starts_with('C') {
+                if cols.len() < 3 {
+                    return Err(format!("unexpected rename/copy diff line: {}", line));
+                }
+                let old_path = normalize_repo_path(cols[1]);
+                let new_path = normalize_repo_path(cols[2]);
+                let path = new_path.clone();
+                (Some(old_path), Some(new_path), path)
+            } else {
+                if cols.len() < 2 {
+                    return Err(format!("unexpected diff line: {}", line));
+                }
+                let p = normalize_repo_path(cols[1]);
+                (Some(p.clone()), Some(p.clone()), p)
+            };
+
+        let old_blob_oid = match kind {
+            admit_core::GitDiffChangeKind::Added => None,
+            admit_core::GitDiffChangeKind::Renamed | admit_core::GitDiffChangeKind::Copied => {
+                if let Some(old_path) = old_path.as_ref() {
+                    git_blob_oid_at_commit(repo, base_commit_oid, old_path)?
+                } else {
+                    None
+                }
+            }
+            _ => {
+                if let Some(path_for_old) = old_path.as_ref() {
+                    git_blob_oid_at_commit(repo, base_commit_oid, path_for_old)?
+                } else {
+                    None
+                }
+            }
+        };
+
+        let new_blob_oid = match kind {
+            admit_core::GitDiffChangeKind::Deleted => None,
+            admit_core::GitDiffChangeKind::Renamed | admit_core::GitDiffChangeKind::Copied => {
+                if let Some(new_path) = new_path.as_ref() {
+                    git_blob_oid_at_commit(repo, head_commit_oid, new_path)?
+                } else {
+                    None
+                }
+            }
+            _ => {
+                if let Some(path_for_new) = new_path.as_ref() {
+                    git_blob_oid_at_commit(repo, head_commit_oid, path_for_new)?
+                } else {
+                    None
+                }
+            }
+        };
+
+        changes.push(admit_core::GitDiffFileChange {
+            path,
+            change_kind: kind,
+            old_blob_oid,
+            new_blob_oid,
+            additions: None,
+            deletions: None,
+        });
+    }
+    Ok(changes)
+}
+
+fn map_git_change_kind(status_code: &str) -> admit_core::GitDiffChangeKind {
+    if status_code.starts_with('A') {
+        admit_core::GitDiffChangeKind::Added
+    } else if status_code.starts_with('M') {
+        admit_core::GitDiffChangeKind::Modified
+    } else if status_code.starts_with('D') {
+        admit_core::GitDiffChangeKind::Deleted
+    } else if status_code.starts_with('R') {
+        admit_core::GitDiffChangeKind::Renamed
+    } else if status_code.starts_with('C') {
+        admit_core::GitDiffChangeKind::Copied
+    } else if status_code.starts_with('T') {
+        admit_core::GitDiffChangeKind::TypeChanged
+    } else if status_code.starts_with('U') {
+        admit_core::GitDiffChangeKind::Unmerged
+    } else {
+        admit_core::GitDiffChangeKind::Unknown
+    }
+}
+
+fn git_blob_oid_at_commit(
+    repo: &Path,
+    commit_oid: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let spec = format!("{}:{}", commit_oid, path);
+    let output = git_command(repo, &[String::from("rev-parse"), spec])?;
+    if output.status.success() {
+        let oid = String::from_utf8(output.stdout)
+            .map_err(|e| format!("utf8 decode: {}", e))?
+            .trim()
+            .to_string();
+        if oid.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(oid))
+        }
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+        if stderr.contains("unknown revision or path")
+            || stderr.contains("exists on disk, but not in")
+            || stderr.contains("path '")
+        {
+            Ok(None)
+        } else {
+            Err(format!("git rev-parse {} failed: {}", path, stderr.trim()))
+        }
+    }
+}
+
+fn git_collect_signature_attestations(
+    repo: &Path,
+    base_commit_oid: Option<&str>,
+    head_commit_oid: &str,
+) -> Result<Vec<admit_core::GitSignatureAttestation>, String> {
+    let rev_range = match base_commit_oid {
+        Some(base) => format!("{}..{}", base, head_commit_oid),
+        None => head_commit_oid.to_string(),
+    };
+    let commits_text = git_output(
+        repo,
+        &[
+            String::from("rev-list"),
+            String::from("--reverse"),
+            rev_range,
+        ],
+    )?;
+    let mut attestations = Vec::new();
+    for commit_oid in commits_text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+    {
+        let verify_out = git_command(
+            repo,
+            &[String::from("verify-commit"), commit_oid.to_string()],
+        )?;
+        let signer = git_output(
+            repo,
+            &[
+                String::from("show"),
+                String::from("-s"),
+                String::from("--format=%GS"),
+                commit_oid.to_string(),
+            ],
+        )
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+        let signer = if signer.is_empty() {
+            None
+        } else {
+            Some(signer)
+        };
+        let verification = if verify_out.status.success() {
+            admit_core::GitSignatureVerification::Verified
+        } else if signer.is_some() {
+            admit_core::GitSignatureVerification::Unverified
+        } else {
+            admit_core::GitSignatureVerification::Unknown
+        };
+        attestations.push(admit_core::GitSignatureAttestation {
+            commit_oid: commit_oid.to_string(),
+            verification,
+            signer,
+        });
+    }
+    Ok(attestations)
+}
+
+fn normalize_repo_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    if let Some(stripped) = path.strip_prefix("./") {
+        stripped.to_string()
+    } else {
+        path
+    }
+}
+
+fn git_output(repo: &Path, args: &[String]) -> Result<String, String> {
+    let output = git_command(repo, args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("git {} failed: {}", args.join(" "), stderr));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("utf8 decode: {}", e))
+}
+
+fn git_command(repo: &Path, args: &[String]) -> Result<std::process::Output, String> {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|e| format!("failed to execute git: {}", e))
+}
+
+fn write_json_pretty<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("create out dir: {}", e))?;
+        }
+    }
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("json encode: {}", e))?;
+    std::fs::write(path, bytes).map_err(|e| format!("write {}: {}", path.display(), e))
+}
+
+fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("decode {}: {}", path.display(), e))
+}
+
+fn run_list_artifacts(
+    args: ListArtifactsArgs,
+    _dag_trace_out: Option<&Path>,
+) -> Result<(), String> {
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
     let entries = list_artifacts(&artifacts_dir).map_err(|err| err.to_string())?;
 
@@ -1661,14 +2538,17 @@ fn run_show_artifact(args: ShowArtifactArgs, _dag_trace_out: Option<&Path>) -> R
             "size_bytes": size,
             "path": path.strip_prefix(&artifacts_dir).ok().and_then(|p| p.to_str()).unwrap_or("")
         });
-        let json =
-            serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("kind={}", args.kind);
         println!("sha256={}", args.sha256);
         println!("size_bytes={}", size);
-        let rel = path.strip_prefix(&artifacts_dir).ok().and_then(|p| p.to_str()).unwrap_or("");
+        let rel = path
+            .strip_prefix(&artifacts_dir)
+            .ok()
+            .and_then(|p| p.to_str())
+            .unwrap_or("");
         println!("path={}", rel);
     }
     Ok(())
@@ -1682,7 +2562,9 @@ fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(),
             Ok(())
         }
         RegistryCommands::Build(build_args) => {
-            let artifacts_dir = build_args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+            let artifacts_dir = build_args
+                .artifacts_dir
+                .unwrap_or_else(default_artifacts_dir);
             let reference =
                 registry_build(&build_args.input, &artifacts_dir).map_err(|err| err.to_string())?;
             println!("registry_hash={}", reference.sha256);
@@ -1691,7 +2573,9 @@ fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(),
         }
         RegistryCommands::Verify(verify_args) => {
             let ledger_path = verify_args.ledger.unwrap_or_else(default_ledger_path);
-            let artifacts_dir = verify_args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+            let artifacts_dir = verify_args
+                .artifacts_dir
+                .unwrap_or_else(default_artifacts_dir);
             let report = verify_ledger(&ledger_path, Some(artifacts_dir.as_path()))
                 .map_err(|err| err.to_string())?;
             println!("ledger={}", ledger_path.display());
@@ -1746,8 +2630,7 @@ fn run_plan_new(
     }
 
     if args.json {
-        let json =
-            serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&event).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("event_id={}", event.event_id);
@@ -1775,21 +2658,18 @@ fn run_plan_new(
 
 fn run_plan_show(args: PlanShowArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
-    let text =
-        render_plan_text(&artifacts_dir, &args.plan_id).map_err(|err| err.to_string())?;
+    let text = render_plan_text(&artifacts_dir, &args.plan_id).map_err(|err| err.to_string())?;
     print!("{}", text);
     Ok(())
 }
 
 fn run_plan_export(args: PlanExportArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
-    let md =
-        export_plan_markdown(&artifacts_dir, &args.plan_id).map_err(|err| err.to_string())?;
+    let md = export_plan_markdown(&artifacts_dir, &args.plan_id).map_err(|err| err.to_string())?;
 
     if let Some(parent) = args.out.parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|err| format!("create out dir: {}", err))?;
+            std::fs::create_dir_all(parent).map_err(|err| format!("create out dir: {}", err))?;
         }
     }
     std::fs::write(&args.out, &md).map_err(|err| format!("write export: {}", err))?;
@@ -1821,7 +2701,10 @@ fn run_scope_add(args: ScopeAddArgs) -> Result<(), String> {
 
     println!("scope_id={}", witness.scope_id);
     println!("scope_version={}", witness.scope_version);
-    println!("registry_version={} -> {}", witness.registry_version_before, witness.registry_version_after);
+    println!(
+        "registry_version={} -> {}",
+        witness.registry_version_before, witness.registry_version_after
+    );
     println!("registry_hash_before={}", witness.registry_hash_before);
     println!("registry_hash_after={}", witness.registry_hash_after);
     println!("registry={}", args.registry.display());
@@ -1831,14 +2714,20 @@ fn run_scope_add(args: ScopeAddArgs) -> Result<(), String> {
     }
 
     // Show validation results
-    let warnings: Vec<_> = witness.validations.iter()
+    let warnings: Vec<_> = witness
+        .validations
+        .iter()
         .filter(|v| !v.passed && v.severity.to_string() == "warning")
         .collect();
 
     if !warnings.is_empty() {
         eprintln!("\nWarnings:");
         for w in warnings {
-            eprintln!("  {}: {}", w.check, w.message.as_deref().unwrap_or("failed"));
+            eprintln!(
+                "  {}: {}",
+                w.check,
+                w.message.as_deref().unwrap_or("failed")
+            );
         }
     }
 
@@ -1856,8 +2745,8 @@ fn run_scope_verify(args: ScopeVerifyArgs) -> Result<(), String> {
     let validations = scope_verify(cmd_args).map_err(|err| err.to_string())?;
 
     if args.json {
-        let json = serde_json::to_string(&validations)
-            .map_err(|err| format!("json encode: {}", err))?;
+        let json =
+            serde_json::to_string(&validations).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("scope_id={}", args.scope_id);
@@ -1893,16 +2782,25 @@ fn run_scope_list(args: ScopeListArgs) -> Result<(), String> {
     let scopes = scope_list(cmd_args).map_err(|err| err.to_string())?;
 
     if args.json {
-        let json = serde_json::to_string(&scopes)
-            .map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&scopes).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("registry={}", args.registry.display());
         println!("count={}", scopes.len());
         for scope in &scopes {
-            let phase_str = scope.phase.map(|p| format!("{:?}", p)).unwrap_or_else(|| "-".to_string());
-            let role_str = scope.role.as_ref().map(|r| format!("{:?}", r)).unwrap_or_else(|| "-".to_string());
-            println!("scope id={} version={} phase={} role={}", scope.id, scope.version, phase_str, role_str);
+            let phase_str = scope
+                .phase
+                .map(|p| format!("{:?}", p))
+                .unwrap_or_else(|| "-".to_string());
+            let role_str = scope
+                .role
+                .as_ref()
+                .map(|r| format!("{:?}", r))
+                .unwrap_or_else(|| "-".to_string());
+            println!(
+                "scope id={} version={} phase={} role={}",
+                scope.id, scope.version, phase_str, role_str
+            );
         }
     }
 
@@ -1919,8 +2817,7 @@ fn run_scope_show(args: ScopeShowArgs) -> Result<(), String> {
     let scope = scope_show(cmd_args).map_err(|err| err.to_string())?;
 
     if args.json {
-        let json = serde_json::to_string(&scope)
-            .map_err(|err| format!("json encode: {}", err))?;
+        let json = serde_json::to_string(&scope).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
         println!("scope_id={}", scope.id);
@@ -2070,10 +2967,11 @@ fn run_ingest_dir(
         .clone()
         .unwrap_or_else(default_artifacts_dir);
     let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
-    let incremental_cache = args
-        .incremental_cache
-        .clone()
-        .or_else(|| std::env::var("ADMIT_INCREMENTAL_CACHE").ok().map(PathBuf::from));
+    let incremental_cache = args.incremental_cache.clone().or_else(|| {
+        std::env::var("ADMIT_INCREMENTAL_CACHE")
+            .ok()
+            .map(PathBuf::from)
+    });
     let proto = ingest_dir_protocol_with_cache(
         &args.path,
         Some(&artifacts_dir),
@@ -2201,7 +3099,10 @@ fn run_ingest_dir(
             println!("incremental_files_parsed={}", inc.files_parsed);
             println!("incremental_chunks_cached={}", inc.chunks_cached);
             println!("incremental_chunks_parsed={}", inc.chunks_parsed);
-            println!("incremental_docs_to_resolve_links={}", inc.docs_to_resolve_links.len());
+            println!(
+                "incremental_docs_to_resolve_links={}",
+                inc.docs_to_resolve_links.len()
+            );
         }
     }
 
@@ -2335,7 +3236,10 @@ fn run_projection_vacuum(
 
     let store = projection.require_store("projection vacuum")?;
     let store_ops: &dyn ProjectionStoreOps = store;
-    if !store.is_ready().map_err(|e| format!("surrealdb is-ready failed: {}", e))? {
+    if !store
+        .is_ready()
+        .map_err(|e| format!("surrealdb is-ready failed: {}", e))?
+    {
         return Err("surrealdb endpoint not ready".to_string());
     }
     store_ops
@@ -2526,7 +3430,10 @@ fn run_projection_retry(
 
     let store = projection.require_store("projection retry")?;
     let store_ops: &dyn ProjectionStoreOps = store;
-    if !store.is_ready().map_err(|e| format!("surrealdb is-ready failed: {}", e))? {
+    if !store
+        .is_ready()
+        .map_err(|e| format!("surrealdb is-ready failed: {}", e))?
+    {
         return Err("surrealdb endpoint not ready".to_string());
     }
     store_ops
@@ -2576,9 +3483,7 @@ fn run_projection_retry(
     } else {
         phase_results
             .iter()
-            .filter(|(_, r)| {
-                r.status == PhaseStatus::Failed || !r.failed_batches.is_empty()
-            })
+            .filter(|(_, r)| r.status == PhaseStatus::Failed || !r.failed_batches.is_empty())
             .map(|(k, _)| k.clone())
             .collect()
     };
@@ -2621,7 +3526,10 @@ fn run_projection_retry(
         return Ok(());
     }
 
-    let artifacts_dir = args.artifacts_dir.clone().unwrap_or_else(default_artifacts_dir);
+    let artifacts_dir = args
+        .artifacts_dir
+        .clone()
+        .unwrap_or_else(default_artifacts_dir);
 
     let mut retry_plan: Vec<(String, usize)> = Vec::new();
     for phase in &target_phases {
@@ -2691,8 +3599,8 @@ fn run_projection_retry(
         .map_err(|e| format!("load dag_trace {}: {}", trace_sha256, e))?;
     let trace_value: serde_json::Value = serde_cbor::from_slice(&trace_bytes)
         .map_err(|e| format!("decode dag_trace cbor: {}", e))?;
-    let dag: admit_dag::GovernedDag = serde_json::from_value(trace_value)
-        .map_err(|e| format!("decode dag from trace: {}", e))?;
+    let dag: admit_dag::GovernedDag =
+        serde_json::from_value(trace_value).map_err(|e| format!("decode dag from trace: {}", e))?;
 
     for phase in target_phases.iter() {
         let Some(original) = phase_results.get(phase).cloned() else {
@@ -2741,7 +3649,12 @@ fn run_projection_retry(
                         .map_err(|e| e.to_string())?
                 } else {
                     let (succeeded, still_failed) = store
-                        .retry_doc_chunks_batches(&dag, &artifacts_dir, &args.run, &selected_batches)
+                        .retry_doc_chunks_batches(
+                            &dag,
+                            &artifacts_dir,
+                            &args.run,
+                            &selected_batches,
+                        )
                         .map_err(|e| format!("retry doc_chunks: {}", e))?;
                     merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
                 }
@@ -2753,7 +3666,12 @@ fn run_projection_retry(
                         .map_err(|e| e.to_string())?
                 } else {
                     let (succeeded, still_failed) = store
-                        .retry_chunk_repr_batches(&dag, &artifacts_dir, &args.run, &selected_batches)
+                        .retry_chunk_repr_batches(
+                            &dag,
+                            &artifacts_dir,
+                            &args.run,
+                            &selected_batches,
+                        )
                         .map_err(|e| format!("retry chunk_repr: {}", e))?;
                     merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
                 }
@@ -2773,10 +3691,18 @@ fn run_projection_retry(
                         &dag_doc_paths,
                         &store.projection_config().vault_prefixes,
                     );
-                let vault_prefix_refs: Vec<&str> =
-                    effective_vault_prefixes.iter().map(|s| s.as_str()).collect();
+                let vault_prefix_refs: Vec<&str> = effective_vault_prefixes
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
                 store_ops
-                    .project_vault_links(&dag, &artifacts_dir, &vault_prefix_refs, None, Some(&args.run))
+                    .project_vault_links(
+                        &dag,
+                        &artifacts_dir,
+                        &vault_prefix_refs,
+                        None,
+                        Some(&args.run),
+                    )
                     .map_err(|e| e.to_string())?
             }
             _ => {
@@ -2872,11 +3798,13 @@ fn merge_retry_results(
     retried_failures: Vec<admit_surrealdb::projection_run::FailedBatch>,
     duration: std::time::Duration,
 ) -> admit_surrealdb::projection_run::PhaseResult {
-    let mut failed_map: std::collections::BTreeMap<String, admit_surrealdb::projection_run::FailedBatch> =
-        retried_failures
-            .into_iter()
-            .map(|b| (b.batch_hash.clone(), b))
-            .collect();
+    let mut failed_map: std::collections::BTreeMap<
+        String,
+        admit_surrealdb::projection_run::FailedBatch,
+    > = retried_failures
+        .into_iter()
+        .map(|b| (b.batch_hash.clone(), b))
+        .collect();
 
     let mut new_failed: Vec<admit_surrealdb::projection_run::FailedBatch> = Vec::new();
     let mut recovered = 0usize;
@@ -2888,7 +3816,9 @@ fn merge_retry_results(
         }
     }
 
-    original.successful_batches = original.successful_batches.saturating_add(retried_successes + recovered);
+    original.successful_batches = original
+        .successful_batches
+        .saturating_add(retried_successes + recovered);
     original.failed_batches = new_failed;
     original.duration_ms = duration.as_millis() as u64;
     if original.failed_batches.is_empty() {
@@ -2914,7 +3844,10 @@ fn merge_retry_results(
 
 fn compute_run_status(
     phases_enabled: &[String],
-    phase_results: &std::collections::BTreeMap<String, admit_surrealdb::projection_run::PhaseResult>,
+    phase_results: &std::collections::BTreeMap<
+        String,
+        admit_surrealdb::projection_run::PhaseResult,
+    >,
 ) -> admit_surrealdb::projection_run::RunStatus {
     use admit_surrealdb::projection_run::PhaseStatus;
     use admit_surrealdb::projection_run::RunStatus;
@@ -2963,9 +3896,10 @@ fn run_court_query_add(
         .unwrap_or_else(default_artifacts_dir);
     let ledger_path = args.ledger.clone().unwrap_or_else(default_ledger_path);
 
-    let source_bytes = read_file_bytes(&args.file).map_err(|e| format!("read query file: {}", e))?;
-    let source = String::from_utf8(source_bytes)
-        .map_err(|e| format!("query file must be UTF-8: {}", e))?;
+    let source_bytes =
+        read_file_bytes(&args.file).map_err(|e| format!("read query file: {}", e))?;
+    let source =
+        String::from_utf8(source_bytes).map_err(|e| format!("query file must be UTF-8: {}", e))?;
 
     let mut tags = args.tags.clone();
     tags.sort();
@@ -3204,7 +4138,12 @@ fn project_ingest_dir_projections(
         .enabled_phases
         .enabled_phase_names()
         .into_iter()
-        .filter(|p| matches!(p.as_str(), "dag_trace" | "doc_files" | "doc_chunks" | "chunk_repr" | "vault_links"))
+        .filter(|p| {
+            matches!(
+                p.as_str(),
+                "dag_trace" | "doc_files" | "doc_chunks" | "chunk_repr" | "vault_links"
+            )
+        })
         .collect();
 
     let store_ops: &dyn ProjectionStoreOps = store;
@@ -3309,8 +4248,8 @@ fn project_ingest_dir_projections(
 
     // Helper: emit to ledger and SurrealDB.
     let flush_events = |store_ops: &dyn ProjectionStoreOps,
-                            ledger_path: &Path,
-                            events: &mut Vec<admit_cli::ProjectionEvent>|
+                        ledger_path: &Path,
+                        events: &mut Vec<admit_cli::ProjectionEvent>|
      -> Result<(), String> {
         if events.is_empty() {
             return Ok(());
@@ -3362,14 +4301,17 @@ fn project_ingest_dir_projections(
         eprintln!("projection: phase {} started", phase);
 
         let phase_result = match phase.as_str() {
-            "dag_trace" => store_ops
-                .project_dag_trace(trace_sha256, trace_cbor, dag, Some(&run_id)),
+            "dag_trace" => {
+                store_ops.project_dag_trace(trace_sha256, trace_cbor, dag, Some(&run_id))
+            }
             "doc_files" => store_ops.project_doc_files(dag, artifacts_dir, Some(&run_id)),
             "doc_chunks" => store_ops.project_doc_chunks(dag, artifacts_dir, &[], Some(&run_id)),
             "chunk_repr" => store_ops.project_chunk_repr(dag, artifacts_dir, Some(&run_id)),
             "vault_links" => {
-                let vault_prefix_refs: Vec<&str> =
-                    effective_vault_prefixes.iter().map(|s| s.as_str()).collect();
+                let vault_prefix_refs: Vec<&str> = effective_vault_prefixes
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect();
                 store_ops.project_vault_links(
                     dag,
                     artifacts_dir,
@@ -3398,7 +4340,10 @@ fn project_ingest_dir_projections(
                 };
 
                 run.add_phase_result(phase.clone(), result.clone());
-                eprintln!("projection: phase {} {} ({} ms)", phase, status_str, duration_ms);
+                eprintln!(
+                    "projection: phase {} {} ({} ms)",
+                    phase, status_str, duration_ms
+                );
                 if emit_metrics {
                     let db_ms = result.db_write_time_ms.unwrap_or(0);
                     let parse_ms = result
@@ -3669,12 +4614,19 @@ fn project_ollama_embeddings_for_trace(
             continue;
         };
         let abs = artifacts_dir.join(Path::new(rel_path));
-        let bytes = std::fs::read(&abs).map_err(|err| format!("read chunk {}: {}", abs.display(), err))?;
+        let bytes =
+            std::fs::read(&abs).map_err(|err| format!("read chunk {}: {}", abs.display(), err))?;
         let mut text = String::from_utf8_lossy(&bytes).to_string();
         if !doc_prefix.is_empty() {
             text = format!("{}{}", doc_prefix, text);
         }
-        chunks.push((id.to_string(), doc_path.clone(), *start_line, chunk_sha256.clone(), text));
+        chunks.push((
+            id.to_string(),
+            doc_path.clone(),
+            *start_line,
+            chunk_sha256.clone(),
+            text,
+        ));
         if args.ollama_limit > 0 && chunks.len() >= args.ollama_limit {
             break;
         }
@@ -3683,7 +4635,8 @@ fn project_ollama_embeddings_for_trace(
     // Batch embed.
     let batch_size = embedder.cfg().batch_size.max(1);
     let mut chunk_rows: Vec<DocChunkEmbeddingRow> = Vec::with_capacity(chunks.len());
-    let mut doc_sums: std::collections::BTreeMap<String, (Vec<f32>, u32)> = std::collections::BTreeMap::new();
+    let mut doc_sums: std::collections::BTreeMap<String, (Vec<f32>, u32)> =
+        std::collections::BTreeMap::new();
 
     let mut i = 0usize;
     while i < chunks.len() {
@@ -3724,7 +4677,9 @@ fn project_ollama_embeddings_for_trace(
                 emb.truncate(dim_target as usize);
             }
             let dim = emb.len();
-            let entry = doc_sums.entry(doc_path.clone()).or_insert_with(|| (vec![0.0; dim], 0));
+            let entry = doc_sums
+                .entry(doc_path.clone())
+                .or_insert_with(|| (vec![0.0; dim], 0));
             if entry.0.len() == dim {
                 for (a, b) in entry.0.iter_mut().zip(emb.iter()) {
                     *a += *b;
@@ -3798,7 +4753,9 @@ fn find_ingest_hashes(dag: &admit_dag::GovernedDag) -> (Option<String>, Option<S
             NodeKind::DirectorySnapshot { snapshot_sha256: s } => {
                 snapshot_sha256 = Some(s.clone());
             }
-            NodeKind::DirectoryParse { parse_sha256: p, .. } => {
+            NodeKind::DirectoryParse {
+                parse_sha256: p, ..
+            } => {
                 parse_sha256 = Some(p.clone());
             }
             _ => {}
@@ -3809,7 +4766,9 @@ fn find_ingest_hashes(dag: &admit_dag::GovernedDag) -> (Option<String>, Option<S
 
 fn looks_like_file_link(target: &str) -> bool {
     let lower = target.to_lowercase();
-    for ext in [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf", ".htm", ".html"] {
+    for ext in [
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".pdf", ".htm", ".html",
+    ] {
         if lower.ends_with(ext) {
             return true;
         }
@@ -3848,7 +4807,11 @@ fn project_unresolved_link_suggestions_via_ollama(
     if !docs.is_empty() {
         let mut inputs: Vec<String> = Vec::with_capacity(docs.len());
         for (_doc_path, title) in docs.iter() {
-            let t = if title.is_empty() { "untitled".to_string() } else { title.clone() };
+            let t = if title.is_empty() {
+                "untitled".to_string()
+            } else {
+                title.clone()
+            };
             inputs.push(format!("{}{}", doc_prefix, t));
         }
 
@@ -3884,7 +4847,11 @@ fn project_unresolved_link_suggestions_via_ollama(
                     doc_path,
                     title,
                     model: model.to_string(),
-                    dim_target: if dim_target > 0 { dim_target } else { emb.len() as u32 },
+                    dim_target: if dim_target > 0 {
+                        dim_target
+                    } else {
+                        emb.len() as u32
+                    },
                     embedding: emb,
                     run_id: run_id.to_string(),
                 });
@@ -3950,8 +4917,10 @@ fn project_unresolved_link_suggestions_via_ollama(
         let mut candidates: Vec<(String, f64)> = Vec::new();
         if link.resolution_kind == "ambiguous" && !link.candidates.is_empty() {
             // Rank existing candidates with embeddings.
-            let rows = surreal.search_doc_title_embeddings(&vault_prefix, model, dim_target, &q0, 500)?;
-            let mut map: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+            let rows =
+                surreal.search_doc_title_embeddings(&vault_prefix, model, dim_target, &q0, 500)?;
+            let mut map: std::collections::BTreeMap<String, f64> =
+                std::collections::BTreeMap::new();
             for (p, s) in rows {
                 map.insert(p, s);
             }
@@ -4069,7 +5038,10 @@ fn build_surreal_projection_store(cli: &Cli) -> Result<SurrealCliProjectionStore
     // Build projection configuration from CLI flags
     let projection_config = build_projection_config(cli);
 
-    Ok(SurrealCliProjectionStore::with_projection_config(config, projection_config))
+    Ok(SurrealCliProjectionStore::with_projection_config(
+        config,
+        projection_config,
+    ))
 }
 
 fn build_projection_coordinator(cli: &Cli) -> Result<ProjectionCoordinator, String> {
@@ -4137,7 +5109,10 @@ fn build_projection_config(cli: &Cli) -> ProjectionConfig {
                     eprintln!("Warning: invalid batch size '{}' in '{}'", size_str, spec);
                 }
             } else {
-                eprintln!("Warning: invalid batch size spec '{}', expected format 'phase:size'", spec);
+                eprintln!(
+                    "Warning: invalid batch size spec '{}', expected format 'phase:size'",
+                    spec
+                );
             }
         }
         if map.is_empty() {
@@ -4311,7 +5286,9 @@ fn build_trace_for_cost_declared(
     Ok(trace)
 }
 
-fn build_trace_for_ingest_dir(out: &admit_cli::IngestDirOutput) -> Result<DagTraceCollector, String> {
+fn build_trace_for_ingest_dir(
+    out: &admit_cli::IngestDirOutput,
+) -> Result<DagTraceCollector, String> {
     let scope = ScopeTag::new("scope:core.pure");
     let mut trace = DagTraceCollector::new("cli.ingest.dir");
 
@@ -4427,7 +5404,9 @@ fn build_trace_for_ingest_dir(out: &admit_cli::IngestDirOutput) -> Result<DagTra
     Ok(trace)
 }
 
-fn build_trace_for_checked(event: &admit_cli::AdmissibilityCheckedEvent) -> Result<DagTraceCollector, String> {
+fn build_trace_for_checked(
+    event: &admit_cli::AdmissibilityCheckedEvent,
+) -> Result<DagTraceCollector, String> {
     let scope = ScopeTag::new("scope:core.pure");
     let mut trace = DagTraceCollector::new("cli.check");
 
@@ -4544,7 +5523,9 @@ fn build_trace_for_checked(event: &admit_cli::AdmissibilityCheckedEvent) -> Resu
     Ok(trace)
 }
 
-fn build_trace_for_executed(event: &admit_cli::AdmissibilityExecutedEvent) -> Result<DagTraceCollector, String> {
+fn build_trace_for_executed(
+    event: &admit_cli::AdmissibilityExecutedEvent,
+) -> Result<DagTraceCollector, String> {
     let scope = ScopeTag::new("scope:core.pure");
     let mut trace = DagTraceCollector::new("cli.execute");
 
@@ -4639,7 +5620,9 @@ fn build_trace_for_executed(event: &admit_cli::AdmissibilityExecutedEvent) -> Re
     Ok(trace)
 }
 
-fn build_trace_for_plan_created(event: &admit_cli::PlanCreatedEvent) -> Result<DagTraceCollector, String> {
+fn build_trace_for_plan_created(
+    event: &admit_cli::PlanCreatedEvent,
+) -> Result<DagTraceCollector, String> {
     let scope = ScopeTag::new("scope:core.pure");
     let mut trace = DagTraceCollector::new("cli.plan.new");
 
@@ -4696,7 +5679,10 @@ fn build_trace_for_calc_plan(plan_hash: &str) -> Result<DagTraceCollector, Strin
     Ok(trace)
 }
 
-fn build_trace_for_calc_result(plan_hash: &str, witness_hash: &str) -> Result<DagTraceCollector, String> {
+fn build_trace_for_calc_result(
+    plan_hash: &str,
+    witness_hash: &str,
+) -> Result<DagTraceCollector, String> {
     let scope = ScopeTag::new("scope:core.pure");
     let mut trace = DagTraceCollector::new("cli.calc.execute");
     let plan_node = DagNode::new(

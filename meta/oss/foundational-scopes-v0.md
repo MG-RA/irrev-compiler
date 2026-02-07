@@ -165,6 +165,22 @@ Example scopes:
 - `patch.plan` ← **BOOTSTRAPPED** (`@0` contract + registry entry)
 - `patch.apply` (effectful; not foundational)
 
+### `git` (domain)
+
+Purpose: bind source-control state to deterministic, attestable witnesses.
+
+Provides:
+- repository snapshot witnesses
+- commit-to-commit change witnesses
+- deterministic path + oid normalization for reproducible policy checks
+
+Unlocks: build reproducibility gates, evidence-grade diff review, and commit-linked projections.
+
+Example scopes:
+- `git.snapshot` ← **IMPLEMENTED** (`@0`, `git-snapshot-witness/0`)
+- `git.diff` ← **IMPLEMENTED** (`@0`, `git-diff-witness/0`)
+- `git.provenance` ← **IMPLEMENTED** (`@0`, `git-provenance-witness/0`)
+
 ### `verify` (domain)
 
 Purpose: make evidence executable instead of rhetorical.
@@ -213,3 +229,5 @@ Highest leverage options:
 - `encode.canonical` + `hash.content` + `hash.verify` ← **DONE** (`encode.canonical@0`, `hash.content@0`, `hash.verify@0`)
 - `identity.delegate` + `identity.verify` ← **BOOTSTRAPPED** (`@0` contracts + registry entries)
 - `patch.plan` ← **BOOTSTRAPPED** (`@0` contract + registry entry)
+- `git.snapshot` + `git.diff` ← **IMPLEMENTED** (`@0` contracts + registry entries)
+- `git.provenance` ← **IMPLEMENTED** (`@0` contract + registry entry)

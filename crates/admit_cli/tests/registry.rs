@@ -27,6 +27,9 @@ fn registry_init_includes_foundational_scope_bootstrap_entries() {
     let registry: MetaRegistryV0 = serde_json::from_slice(&bytes).expect("decode registry");
     for scope_id in [
         "scope:hash.verify",
+        "scope:git.snapshot",
+        "scope:git.diff",
+        "scope:git.provenance",
         "scope:identity.delegate",
         "scope:identity.verify",
         "scope:patch.plan",
@@ -38,6 +41,17 @@ fn registry_init_includes_foundational_scope_bootstrap_entries() {
                 .any(|scope| scope.id == scope_id && scope.version == 0),
             "missing {} in registry_init output",
             scope_id
+        );
+    }
+    for schema_id in [
+        "git-snapshot-witness/0",
+        "git-diff-witness/0",
+        "git-provenance-witness/0",
+    ] {
+        assert!(
+            registry.schemas.iter().any(|schema| schema.id == schema_id),
+            "missing {} in registry_init output",
+            schema_id
         );
     }
 }
@@ -237,8 +251,7 @@ fn registry_canonical_hash_is_pinned() {
     let artifact_ref = registry_build(&path, &artifacts_dir).expect("build shipped registry");
 
     assert_eq!(
-        artifact_ref.sha256,
-        "8e058953d9a156cbab091a5bd54db667f107c52af6a01058cf0727e4a061cd30",
+        artifact_ref.sha256, "8e058953d9a156cbab091a5bd54db667f107c52af6a01058cf0727e4a061cd30",
         "pinned registry hash changed — update pin or bump registry_version"
     );
 }
@@ -290,14 +303,19 @@ fn registry_schema_gate_refuses_unknown_schema() {
     write_registry(&path, shipped_registry_json());
 
     let bytes = std::fs::read(&path).expect("read registry");
-    let registry: MetaRegistryV0 =
-        serde_json::from_slice(&bytes).expect("decode registry");
+    let registry: MetaRegistryV0 = serde_json::from_slice(&bytes).expect("decode registry");
 
     // Known schemas must be present
-    assert!(registry.schemas.iter().any(|s| s.id == "admissibility-witness/1"));
+    assert!(registry
+        .schemas
+        .iter()
+        .any(|s| s.id == "admissibility-witness/1"));
     assert!(registry.schemas.iter().any(|s| s.id == "vault-snapshot/0"));
     assert!(registry.schemas.iter().any(|s| s.id == "meta-registry/0"));
 
     // Unknown schema must be absent
-    assert!(!registry.schemas.iter().any(|s| s.id == "nonexistent-schema/99"));
+    assert!(!registry
+        .schemas
+        .iter()
+        .any(|s| s.id == "nonexistent-schema/99"));
 }

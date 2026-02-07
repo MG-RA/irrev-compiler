@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use super::artifact::store_artifact;
 use super::internal::{
-    artifact_disk_path, decode_cbor_to_value, sha256_hex, META_REGISTRY_ENV,
-    META_REGISTRY_KIND, META_REGISTRY_SCHEMA_ID,
+    artifact_disk_path, decode_cbor_to_value, sha256_hex, META_REGISTRY_ENV, META_REGISTRY_KIND,
+    META_REGISTRY_SCHEMA_ID,
 };
 use super::types::{
     ArtifactRef, DeclareCostError, MetaRegistrySchema, MetaRegistryScope, MetaRegistryStdlib,
@@ -66,11 +66,13 @@ pub(crate) fn resolve_meta_registry(
         None => return Ok(None),
     };
     if !path.exists() {
-        return Err(DeclareCostError::MetaRegistryMissing(path.display().to_string()));
+        return Err(DeclareCostError::MetaRegistryMissing(
+            path.display().to_string(),
+        ));
     }
     let bytes = fs::read(&path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
-    let registry_raw: MetaRegistryV0 =
-        serde_json::from_slice(&bytes).map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
+    let registry_raw: MetaRegistryV0 = serde_json::from_slice(&bytes)
+        .map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
     if registry_raw.schema_id != META_REGISTRY_SCHEMA_ID {
         return Err(DeclareCostError::MetaRegistrySchemaMismatch {
             expected: META_REGISTRY_SCHEMA_ID.to_string(),
@@ -83,10 +85,7 @@ pub(crate) fn resolve_meta_registry(
     let cbor_bytes = admit_core::encode_canonical_value(&value)
         .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
     let hash = sha256_hex(&cbor_bytes);
-    Ok(Some(MetaRegistryResolved {
-        registry,
-        hash,
-    }))
+    Ok(Some(MetaRegistryResolved { registry, hash }))
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +192,24 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
                 canonical_encoding: "canonical-cbor".to_string(),
             },
             MetaRegistrySchema {
+                id: "git-snapshot-witness/0".to_string(),
+                schema_version: 0,
+                kind: "witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "git-diff-witness/0".to_string(),
+                schema_version: 0,
+                kind: "witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
+                id: "git-provenance-witness/0".to_string(),
+                schema_version: 0,
+                kind: "witness".to_string(),
+                canonical_encoding: "canonical-cbor".to_string(),
+            },
+            MetaRegistrySchema {
                 id: "court-query/0".to_string(),
                 schema_version: 0,
                 kind: "query_artifact".to_string(),
@@ -246,6 +263,45 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
                 contract_ref: None,
             },
             MetaRegistryScope {
+                id: "scope:git.snapshot".to_string(),
+                version: 0,
+                snapshot_schema_id: None,
+                phase: None,
+                deterministic: None,
+                foundational: None,
+                emits: None,
+                consumes: None,
+                deps: None,
+                role: None,
+                contract_ref: None,
+            },
+            MetaRegistryScope {
+                id: "scope:git.diff".to_string(),
+                version: 0,
+                snapshot_schema_id: None,
+                phase: None,
+                deterministic: None,
+                foundational: None,
+                emits: None,
+                consumes: None,
+                deps: None,
+                role: None,
+                contract_ref: None,
+            },
+            MetaRegistryScope {
+                id: "scope:git.provenance".to_string(),
+                version: 0,
+                snapshot_schema_id: None,
+                phase: None,
+                deterministic: None,
+                foundational: None,
+                emits: None,
+                consumes: None,
+                deps: None,
+                role: None,
+                contract_ref: None,
+            },
+            MetaRegistryScope {
                 id: "scope:identity.verify".to_string(),
                 version: 0,
                 snapshot_schema_id: None,
@@ -287,8 +343,8 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
         ],
     };
 
-    let json =
-        serde_json::to_string_pretty(&registry).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let json = serde_json::to_string_pretty(&registry)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
     fs::write(out_path, json).map_err(|err| DeclareCostError::Io(err.to_string()))?;
     Ok(())
 }
@@ -307,8 +363,8 @@ pub fn registry_build(
     artifacts_root: &Path,
 ) -> Result<ArtifactRef, DeclareCostError> {
     let bytes = fs::read(input_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
-    let registry_raw: MetaRegistryV0 =
-        serde_json::from_slice(&bytes).map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
+    let registry_raw: MetaRegistryV0 = serde_json::from_slice(&bytes)
+        .map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
     if registry_raw.schema_id != META_REGISTRY_SCHEMA_ID {
         return Err(DeclareCostError::MetaRegistrySchemaMismatch {
             expected: META_REGISTRY_SCHEMA_ID.to_string(),

@@ -8,10 +8,12 @@ mod internal;
 mod ledger;
 mod ollama_defaults;
 mod plan;
+mod project_init;
 mod registry;
 mod rust_ir_lint;
 mod scope_commands;
 mod scope_validation;
+mod status_summary;
 mod types;
 mod vault_prefix;
 mod verify;
@@ -47,6 +49,7 @@ pub use plan::{
     append_plan_created_event, create_plan, diagnostic_prompts, export_plan_markdown,
     parse_plan_answers_markdown, render_plan_prompt_template, render_plan_text,
 };
+pub use project_init::{init_project, InitProjectInput, InitProjectOutput};
 
 // Scope validation and commands
 pub use scope_commands::{
@@ -54,6 +57,7 @@ pub use scope_commands::{
     ScopeVerifyArgs,
 };
 pub use scope_validation::{parse_scope_spec, ScopeValidationLevel, ScopeValidator};
+pub use status_summary::{summarize_ledger, StatusEventSummary, StatusSummary};
 
 // Directory ingestion (snapshot + parse)
 pub use ingest_dir::{

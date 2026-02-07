@@ -1,0 +1,50 @@
+[
+  {
+    "prompt_id": "action_definition",
+    "answer": "Refactor compiler UX and architecture so the default experience is install -> init -> ingest -> status -> iterate, while enforcing a hard separation between substrate-agnostic compiler core and optional vault/obsidian adapters."
+  },
+  {
+    "prompt_id": "boundary_declaration",
+    "answer": "In scope: `admit_cli` UX commands/config flow, `admit_core` boundary hardening, optional scope-pack wiring, and docs/templates for initialization. Out of scope: changing core DSL semantics unrelated to this flow, and forcing SurrealDB as a mandatory runtime dependency."
+  },
+  {
+    "prompt_id": "persistence_analysis",
+    "answer": "Persistent changes include command surface additions (`init`, `status`, lint flow), `admit.toml` conventions, scope-pack boundaries, and new enforcement checks for core/adapter coupling. These will affect CI, user workflows, and long-term plugin compatibility."
+  },
+  {
+    "prompt_id": "erasure_cost",
+    "answer": "Grade 2: reversing this would require undoing command UX contracts, config expectations, scope/package boundaries, and governance checks. Existing artifacts and ledger history produced by the new flow remain part of project evidence."
+  },
+  {
+    "prompt_id": "displacement_ownership",
+    "answer": "Primary ownership is compiler maintainers (core boundary + CLI UX). Secondary ownership is adapter/scope-pack maintainers (obsidian/vault integration). CI owners absorb enforcement burden for boundary checks and rollout gating."
+  },
+  {
+    "prompt_id": "preconditions",
+    "answer": "Need: stable command spec for `init/ingest/status/lint`, agreed core-vs-adapter boundaries per crate, baseline tests for deterministic outputs, and migration notes for existing local configs. Must have a clear definition for optional projection modes (`off|auto|on`) before rollout."
+  },
+  {
+    "prompt_id": "execution_constraints",
+    "answer": "Must preserve deterministic witness/ledger behavior. Must not introduce obsidian-specific coupling into `admit_core` and generic backends. Must keep court-only execution viable without SurrealDB. Roll out in phases: UX baseline, boundary extraction, scope-pack pluginization, enforcement."
+  },
+  {
+    "prompt_id": "postconditions",
+    "answer": "After completion, a fresh user can run `admit init`, then `admit ingest .`, then `admit status` with minimal setup. Core crates are substrate-agnostic, optional adapter scopes are explicit, and CI enforces boundary rules with deterministic tests."
+  },
+  {
+    "prompt_id": "accountability",
+    "answer": "Acting entity is the compiler maintainers through repository-controlled CLI/CI workflows. Accountability anchors are commit SHA, plan witness hash, and ledger event IDs for refactor milestones and enforcement changes."
+  },
+  {
+    "prompt_id": "acceptance_criteria",
+    "answer": "Accepted when: (1) `init -> ingest -> status` works out of the box, (2) core/adapter split is structurally enforced, (3) optional scope packs work without contaminating core crates, (4) projection remains optional, and (5) all relevant tests and ledger verification pass."
+  },
+  {
+    "prompt_id": "refusal_conditions",
+    "answer": "Do not proceed if boundaries are not explicitly defined, if deterministic tests are missing, if adapter-specific behavior cannot be isolated, or if rollout would break existing users without migration guidance."
+  },
+  {
+    "prompt_id": "final_check",
+    "answer": "Yes: irreversible effects are bounded to explicit UX contracts and architecture boundaries; erasure cost is declared and accepted; ownership is explicit; and a future reader can reconstruct rationale from plan witness, code boundaries, and CI policy artifacts."
+  }
+]

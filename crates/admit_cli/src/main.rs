@@ -18,14 +18,15 @@ use admit_cli::{
     append_ingest_event, append_plan_created_event, append_projection_event,
     append_rust_ir_lint_event, build_court_event, build_projection_event, check_cost_declared,
     create_plan, declare_cost, default_artifacts_dir, default_ledger_path, execute_checked,
-    export_plan_markdown, ingest_dir_protocol_with_cache, list_artifacts, load_meta_registry,
-    parse_plan_answers_markdown, read_artifact_projection, read_file_bytes,
+    export_plan_markdown, ingest_dir_protocol_with_cache, init_project, list_artifacts,
+    load_meta_registry, parse_plan_answers_markdown, read_artifact_projection, read_file_bytes,
     register_function_artifact, register_query_artifact, registry_build, registry_init,
     render_plan_prompt_template, render_plan_text, run_rust_ir_lint, scope_add, scope_list,
-    scope_show, scope_verify, store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
-    DeclareCostInput, MetaRegistryV0, PlanNewInput, RustIrLintInput,
-    ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
-    ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
+    scope_show, scope_verify, store_value_artifact, summarize_ledger, verify_ledger,
+    verify_witness, ArtifactInput, DeclareCostInput, InitProjectInput, MetaRegistryV0,
+    PlanNewInput, RustIrLintInput, ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode,
+    ScopeListArgs as ScopeListArgsLib, ScopeShowArgs as ScopeShowArgsLib,
+    ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -276,6 +277,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    Init(InitArgs),
+    Status(StatusArgs),
     DeclareCost(DeclareCostArgs),
     WitnessVerify(WitnessVerifyArgs),
     Check(CheckArgs),
@@ -293,6 +296,28 @@ enum Commands {
     Court(CourtArgs),
     Lint(LintArgs),
     Git(GitArgs),
+}
+
+#[derive(Parser)]
+struct InitArgs {
+    /// Root directory to initialize (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct StatusArgs {
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -1388,6 +1413,8 @@ fn main() {
     };
 
     let result = match cli.command {
+        Commands::Init(args) => run_init(args, dag_trace_out),
+        Commands::Status(args) => run_status(args, dag_trace_out),
         Commands::DeclareCost(args) => run_declare_cost(args, dag_trace_out, &mut projection),
         Commands::WitnessVerify(args) => run_witness_verify(args, dag_trace_out),
         Commands::Check(args) => run_check(args, dag_trace_out, &mut projection),
@@ -1450,6 +1477,96 @@ fn main() {
         eprintln!("{}", err);
         std::process::exit(1);
     }
+}
+
+fn run_init(args: InitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    let out = init_project(InitProjectInput {
+        root: args.path.clone(),
+    })
+    .map_err(|err| err.to_string())?;
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&serde_json::json!({
+            "root": out.root,
+            "created": out.created,
+            "existing": out.existing,
+            "next": ["admit ingest .", "admit status", "admit lint vault"]
+        }))
+        .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("init_root={}", out.root.display());
+        println!("created={}", out.created.len());
+        for item in &out.created {
+            println!("created_item={}", item);
+        }
+        println!("existing={}", out.existing.len());
+        for item in &out.existing {
+            println!("existing_item={}", item);
+        }
+        println!();
+        println!("Next:");
+        println!("  admit ingest .");
+        println!("  admit status");
+        println!("  admit lint vault");
+    }
+
+    Ok(())
+}
+
+fn run_status(args: StatusArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    let ledger = args.ledger.unwrap_or_else(default_ledger_path);
+    let summary = summarize_ledger(&ledger).map_err(|err| err.to_string())?;
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&summary)
+            .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+        return Ok(());
+    }
+
+    println!("ledger={}", summary.ledger_path.display());
+    println!("events_total={}", summary.events_total);
+    if let Some(event_type) = summary.latest_event_type.as_ref() {
+        println!("latest_event_type={}", event_type);
+    }
+    if let Some(event_id) = summary.latest_event_id.as_ref() {
+        println!("latest_event_id={}", event_id);
+    }
+
+    if let Some(ingest) = summary.latest_ingest.as_ref() {
+        println!(
+            "latest_ingest={} run_id={} status={}",
+            ingest.timestamp,
+            ingest.run_id.as_deref().unwrap_or("-"),
+            ingest.status.as_deref().unwrap_or("-")
+        );
+    }
+    if let Some(proj) = summary.latest_projection.as_ref() {
+        println!(
+            "latest_projection={} run_id={} status={}",
+            proj.timestamp,
+            proj.run_id.as_deref().unwrap_or("-"),
+            proj.status.as_deref().unwrap_or("-")
+        );
+    }
+    if let Some(plan) = summary.latest_plan.as_ref() {
+        println!("latest_plan={} event_id={}", plan.timestamp, plan.event_id);
+    }
+    if let Some(lint) = summary.latest_rust_lint.as_ref() {
+        println!(
+            "latest_rust_lint={} passed={} violations={}",
+            lint.timestamp,
+            lint.passed
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            lint.violations
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string())
+        );
+    }
+
+    Ok(())
 }
 
 fn run_declare_cost(

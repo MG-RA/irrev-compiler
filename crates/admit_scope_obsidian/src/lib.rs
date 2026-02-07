@@ -13,6 +13,8 @@
 //! - Asset/file link resolution
 //! - Heading validation
 
+pub mod projection;
+
 use admit_dag::GovernedDag;
 use admit_dag::NodeKind;
 use std::collections::{BTreeMap, BTreeSet};

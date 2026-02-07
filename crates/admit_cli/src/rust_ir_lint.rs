@@ -494,9 +494,7 @@ fn ir_rs_13_protected_path(path_lower: &str) -> bool {
 }
 
 fn ir_rs_13_allowed_adapter_path(path_lower: &str) -> bool {
-    path_lower == "crates/admit_surrealdb/src/lib.rs"
-        || path_lower == "crates/admit_surrealdb/src/link_resolver.rs"
-        || path_lower == "crates/admit_cli/src/main.rs"
+    path_lower == "crates/admit_cli/src/main.rs"
         || path_lower == "crates/admit_cli/src/obsidian_adapter.rs"
         || path_lower == "crates/admit_cli/src/ingest_dir.rs"
         || path_lower == "crates/admit_cli/src/vault_prefix.rs"

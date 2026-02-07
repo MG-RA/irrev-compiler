@@ -68,8 +68,11 @@ dependencies = [
 name = "admit_scope_obsidian"
 version = "0.1.0"
 dependencies = [
+ "admit_core",
  "admit_dag",
  "hex",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 
@@ -79,7 +82,6 @@ version = "0.1.0"
 dependencies = [
  "admit_core",
  "admit_dag",
- "admit_scope_obsidian",
  "chrono",
  "clap",
  "hex",

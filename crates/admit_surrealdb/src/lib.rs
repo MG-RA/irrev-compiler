@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -23,14 +23,9 @@ pub mod ingest_run;
 // Projection store trait and implementations
 pub mod projection_store;
 
-// Pure link resolution logic (no database dependencies)
-pub mod link_resolver;
-mod obsidian_projection;
-
 // Re-export key types for convenience
 pub use ingest_events::IngestEventRow;
 pub use ingest_run::IngestRunRow;
-pub use link_resolver::{AssetResolution, ObsidianLink, ResolutionResult, VaultLinkResolver};
 pub use projection_events::ProjectionEventRow;
 pub use projection_store::{NullStore, ProjectionError, ProjectionResult, ProjectionStoreOps};
 
@@ -64,7 +59,7 @@ impl Default for SurrealCliConfig {
 #[derive(Debug, Clone)]
 pub struct SurrealCliProjectionStore {
     config: SurrealCliConfig,
-    projection_config: projection_config::ProjectionConfig,
+    pub projection_config: projection_config::ProjectionConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -276,7 +271,7 @@ impl SurrealCliProjectionStore {
         })
     }
 
-    fn run_sql(&self, sql: &str) -> Result<(), String> {
+    pub fn run_sql(&self, sql: &str) -> Result<(), String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
             format!(
@@ -287,7 +282,7 @@ impl SurrealCliProjectionStore {
         Ok(())
     }
 
-    fn run_sql_allow_already_exists(&self, sql: &str) -> Result<(), String> {
+    pub fn run_sql_allow_already_exists(&self, sql: &str) -> Result<(), String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream_allow_already_exists(&output.values).map_err(|msg| {
             format!(
@@ -1104,10 +1099,6 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
         Ok(())
     }
 
-    pub fn ensure_vault_link_schema(&self) -> Result<(), String> {
-        obsidian_projection::ensure_vault_link_schema(self)
-    }
-
     pub fn project_embed_run(&self, run: &EmbedRunRow) -> Result<(), String> {
         self.ensure_doc_file_schema()?;
         let sql = format!(
@@ -1310,49 +1301,7 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
         Ok(())
     }
 
-    pub fn select_unresolved_links(
-        &self,
-        prefixes: &[&str],
-        kinds: &[&str],
-        limit: usize,
-        projection_run_id: Option<&str>,
-    ) -> Result<Vec<UnresolvedLinkRow>, String> {
-        obsidian_projection::select_unresolved_links(
-            self,
-            prefixes,
-            kinds,
-            limit,
-            projection_run_id,
-        )
-    }
-
-    pub fn search_doc_title_embeddings(
-        &self,
-        obsidian_vault_prefix: &str,
-        model: &str,
-        dim_target: u32,
-        query_embedding: &[f32],
-        limit: usize,
-    ) -> Result<Vec<(String, f64)>, String> {
-        obsidian_projection::search_doc_title_embeddings(
-            self,
-            obsidian_vault_prefix,
-            model,
-            dim_target,
-            query_embedding,
-            limit,
-        )
-    }
-
-    pub fn project_unresolved_link_suggestions(
-        &self,
-        run_id: &str,
-        rows: &[UnresolvedLinkSuggestionRow],
-    ) -> Result<(), String> {
-        obsidian_projection::project_unresolved_link_suggestions(self, run_id, rows)
-    }
-
-    fn select_rows_from_single_select(&self, sql: &str) -> Result<Vec<serde_json::Value>, String> {
+    pub fn select_rows_from_single_select(&self, sql: &str) -> Result<Vec<serde_json::Value>, String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
             format!(
@@ -1445,41 +1394,6 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
         Ok(())
     }
 
-    pub fn project_obsidian_vault_links_from_artifacts(
-        &self,
-        dag: &GovernedDag,
-        artifacts_root: &Path,
-        obsidian_vault_prefixes: &[&str],
-        doc_filter: Option<&BTreeSet<String>>,
-        run_id: Option<&str>,
-    ) -> Result<crate::projection_run::PhaseResult, String> {
-        obsidian_projection::project_obsidian_vault_links_from_artifacts(
-            self,
-            dag,
-            artifacts_root,
-            obsidian_vault_prefixes,
-            doc_filter,
-            run_id,
-        )
-    }
-
-    /// Backward-compatible alias for the older method name.
-    pub fn project_vault_obsidian_links_from_artifacts(
-        &self,
-        dag: &GovernedDag,
-        artifacts_root: &Path,
-        obsidian_vault_prefixes: &[&str],
-        doc_filter: Option<&BTreeSet<String>>,
-        run_id: Option<&str>,
-    ) -> Result<crate::projection_run::PhaseResult, String> {
-        self.project_obsidian_vault_links_from_artifacts(
-            dag,
-            artifacts_root,
-            obsidian_vault_prefixes,
-            doc_filter,
-            run_id,
-        )
-    }
 }
 
 struct SqlRunOutput {
@@ -1488,7 +1402,7 @@ struct SqlRunOutput {
     stderr: String,
 }
 
-fn phase_result_from_batches(
+pub fn phase_result_from_batches(
     phase: &str,
     total_batches: usize,
     successful_batches: usize,
@@ -1540,7 +1454,7 @@ fn phase_result_from_batches(
     }
 }
 
-struct BatchAccumulator<'a> {
+pub struct BatchAccumulator<'a> {
     store: &'a SurrealCliProjectionStore,
     phase: &'a str,
     run_id: String,
@@ -1558,7 +1472,7 @@ struct BatchAccumulator<'a> {
 }
 
 impl<'a> BatchAccumulator<'a> {
-    fn new(
+    pub fn new(
         store: &'a SurrealCliProjectionStore,
         phase: &'a str,
         run_id: Option<&str>,
@@ -1582,7 +1496,7 @@ impl<'a> BatchAccumulator<'a> {
         }
     }
 
-    fn push_item(&mut self, item_id: String, sql_fragment: &str) {
+    pub fn push_item(&mut self, item_id: String, sql_fragment: &str) {
         self.sql.push_str(sql_fragment);
         self.item_ids.push(item_id);
         self.records_processed = self.records_processed.saturating_add(1);
@@ -1626,7 +1540,7 @@ impl<'a> BatchAccumulator<'a> {
             .saturating_add(start.elapsed().as_millis() as u64);
     }
 
-    fn finish(mut self) -> crate::projection_run::PhaseResult {
+    pub fn finish(mut self) -> crate::projection_run::PhaseResult {
         self.flush();
         phase_result_from_batches(
             self.phase,
@@ -1739,7 +1653,7 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
         self.ensure_doc_chunk_schema()?;
         self.ensure_chunk_repr_schema()?;
         self.ensure_doc_file_schema()?;
-        self.ensure_vault_link_schema()?;
+        // Note: vault link schema is now managed by admit_scope_obsidian::projection
         self.ensure_projection_run_schema()?;
         self.ensure_projection_event_schema()?;
         self.ensure_ingest_run_schema()?;
@@ -2178,24 +2092,8 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
         Ok(result)
     }
 
-    fn project_obsidian_vault_links(
-        &self,
-        dag: &GovernedDag,
-        artifacts_root: &Path,
-        obsidian_vault_prefixes: &[&str],
-        doc_filter: Option<&BTreeSet<String>>,
-        run_id: Option<&str>,
-    ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
-        // Delegate to existing implementation
-        self.project_obsidian_vault_links_from_artifacts(
-            dag,
-            artifacts_root,
-            obsidian_vault_prefixes,
-            doc_filter,
-            run_id,
-        )
-        .map_err(|e| e.into())
-    }
+    // project_obsidian_vault_links: uses default (error) impl;
+    // obsidian projection is now handled via admit_scope_obsidian::projection
 
     fn project_embeddings(
         &self,
@@ -2228,11 +2126,13 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
     fn project_unresolved_suggestions(
         &self,
-        run_id: &str,
-        rows: &[UnresolvedLinkSuggestionRow],
+        _run_id: &str,
+        _rows: &[UnresolvedLinkSuggestionRow],
     ) -> crate::projection_store::ProjectionResult<()> {
-        self.project_unresolved_link_suggestions(run_id, rows)
-            .map_err(|e| e.into())
+        // Obsidian-specific; wired via scope adapter in CLI layer
+        Err(crate::projection_store::ProjectionError::new(
+            "unresolved suggestions projection not configured; enable via obsidian scope adapter",
+        ))
     }
 
     fn project_query_artifacts(
@@ -2332,61 +2232,61 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
     fn select_unresolved_links(
         &self,
-        prefixes: &[&str],
-        kinds: &[&str],
-        limit: usize,
-        projection_run_id: Option<&str>,
+        _prefixes: &[&str],
+        _kinds: &[&str],
+        _limit: usize,
+        _projection_run_id: Option<&str>,
     ) -> crate::projection_store::ProjectionResult<Vec<UnresolvedLinkRow>> {
-        SurrealCliProjectionStore::select_unresolved_links(
-            self,
-            prefixes,
-            kinds,
-            limit,
-            projection_run_id,
-        )
-        .map_err(|e| e.into())
+        // Obsidian-specific; wired via scope adapter in CLI layer
+        Err(crate::projection_store::ProjectionError::new(
+            "unresolved links query not configured; enable via obsidian scope adapter",
+        ))
     }
 
     fn search_title_embeddings(
         &self,
-        obsidian_vault_prefix: &str,
-        model: &str,
-        dim_target: u32,
-        query_embedding: &[f32],
-        limit: usize,
+        _obsidian_vault_prefix: &str,
+        _model: &str,
+        _dim_target: u32,
+        _query_embedding: &[f32],
+        _limit: usize,
     ) -> crate::projection_store::ProjectionResult<Vec<(String, f64)>> {
-        self.search_doc_title_embeddings(
-            obsidian_vault_prefix,
-            model,
-            dim_target,
-            query_embedding,
-            limit,
-        )
-        .map_err(|e| e.into())
+        // Obsidian-specific; wired via scope adapter in CLI layer
+        Err(crate::projection_store::ProjectionError::new(
+            "title embedding search not configured; enable via obsidian scope adapter",
+        ))
     }
 }
 
-// VaultDoc, ObsidianLink, ResolutionResult, AssetResolution moved to link_resolver module
-use crate::link_resolver::VaultDoc;
-
-#[derive(Debug, Clone, Default)]
-struct DocStatsAgg {
-    out_links: u32,
-    out_file_links: u32,
-    missing_out: u32,
-    ambiguous_out: u32,
-    heading_missing_out: u32,
+/// Represents a document with metadata for projection purposes.
+#[derive(Debug, Clone)]
+pub struct VaultDoc {
+    pub doc_path: String,
+    pub doc_id: String,
+    pub file_node_id: String,
+    pub title: String,
+    pub artifact_sha256: String,
+    pub artifact_abs_path: std::path::PathBuf,
 }
 
 #[derive(Debug, Clone, Default)]
-struct DocFrontmatter {
-    raw_yaml: String,
-    json: serde_json::Value,
-    role: Option<String>,
-    doc_type: Option<String>,
-    canonical: Option<bool>,
-    status_date: Option<String>,
-    facets: Vec<String>,
+pub struct DocStatsAgg {
+    pub out_links: u32,
+    pub out_file_links: u32,
+    pub missing_out: u32,
+    pub ambiguous_out: u32,
+    pub heading_missing_out: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DocFrontmatter {
+    pub raw_yaml: String,
+    pub json: serde_json::Value,
+    pub role: Option<String>,
+    pub doc_type: Option<String>,
+    pub canonical: Option<bool>,
+    pub status_date: Option<String>,
+    pub facets: Vec<String>,
 }
 
 fn node_upsert_sql(node_id: &str, node: &DagNode) -> String {
@@ -2547,11 +2447,11 @@ fn doc_chunk_upsert_sql_with_run(
     )
 }
 
-fn doc_file_upsert_sql(doc: &VaultDoc) -> String {
+pub fn doc_file_upsert_sql(doc: &VaultDoc) -> String {
     doc_file_upsert_sql_with_run(doc, None)
 }
 
-fn doc_file_upsert_sql_with_run(doc: &VaultDoc, run_id: Option<&str>) -> String {
+pub fn doc_file_upsert_sql_with_run(doc: &VaultDoc, run_id: Option<&str>) -> String {
     let file_node_ref = thing("node", &doc.file_node_id);
     let run_id_field = if let Some(rid) = run_id {
         format!(", projection_run_id = {}", json_string(rid))
@@ -2571,7 +2471,7 @@ fn doc_file_upsert_sql_with_run(doc: &VaultDoc, run_id: Option<&str>) -> String 
     )
 }
 
-fn doc_file_update_frontmatter_sql(doc: &VaultDoc, fm: Option<&DocFrontmatter>) -> String {
+pub fn doc_file_update_frontmatter_sql(doc: &VaultDoc, fm: Option<&DocFrontmatter>) -> String {
     let Some(fm) = fm else {
         return format!(
             "UPDATE {thing_id} SET fm_present = false, fm_role = NULL, fm_type = NULL, fm_canonical = NULL, fm_status_date = NULL, fm_facets = [], frontmatter = NULL, frontmatter_raw = NULL RETURN NONE;",
@@ -2676,7 +2576,7 @@ fn split_edge_type(edge_type: &EdgeType) -> (String, String) {
     )
 }
 
-fn json_string(s: &str) -> String {
+pub fn json_string(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
@@ -2684,7 +2584,7 @@ fn json_value(v: &serde_json::Value) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
 }
 
-fn json_opt_string(s: Option<&str>) -> String {
+pub fn json_opt_string(s: Option<&str>) -> String {
     match s {
         Some(s) => json_string(s),
         None => "null".to_string(),
@@ -2698,7 +2598,7 @@ fn surreal_record_or_null(s: Option<&str>) -> String {
     }
 }
 
-fn thing(table: &str, id: &str) -> String {
+pub fn thing(table: &str, id: &str) -> String {
     // SurrealDB record IDs after `<table>:` are parsed as identifiers, not string literals.
     // Content hashes are hex and often start with digits, so we map them to a safe identifier
     // by prefixing with a letter.
@@ -2709,7 +2609,7 @@ fn thing(table: &str, id: &str) -> String {
     format!("{}:h{}", table, id)
 }
 
-fn run_scoped_id(base_id: &str, run_id: Option<&str>) -> String {
+pub fn run_scoped_id(base_id: &str, run_id: Option<&str>) -> String {
     match run_id {
         Some(rid) => sha256_hex_str(&format!("{}|{}", rid, base_id)),
         None => base_id.to_string(),
@@ -2720,15 +2620,19 @@ fn sha256_hex_str(s: &str) -> String {
     hex_lower(&sha2::Sha256::digest(s.as_bytes()))
 }
 
-fn hex_lower(bytes: &[u8]) -> String {
+pub fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn file_stem_title(path: &str) -> String {
-    crate::link_resolver::file_stem_title(path)
+    let p = std::path::Path::new(path);
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string()
 }
 
-fn extract_frontmatter(input: &str) -> Option<DocFrontmatter> {
+pub fn extract_frontmatter(input: &str) -> Option<DocFrontmatter> {
     let mut lines = input.lines();
     let first = lines.next()?.trim_end();
     if first != "---" {
@@ -2944,14 +2848,6 @@ fn has_facet_relate_sql(
         facet_name = json_string(facet),
         run_id_field = run_id_field,
     )
-}
-
-fn normalize_heading(s: &str) -> String {
-    crate::link_resolver::normalize_heading(s)
-}
-
-fn obsidian_heading_slug(s: &str) -> String {
-    crate::link_resolver::obsidian_heading_slug(s)
 }
 
 fn parse_json_stream(input: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {

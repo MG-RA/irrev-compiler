@@ -4363,15 +4363,14 @@ fn run_projection_retry(
                     .iter()
                     .map(|s| s.as_str())
                     .collect();
-                store_ops
-                    .project_obsidian_vault_links(
+                obsidian_adapter::project_obsidian_vault_links(
+                        store,
                         &dag,
                         &artifacts_dir,
                         &vault_prefix_refs,
                         None,
                         Some(&args.run),
-                    )
-                    .map_err(|e| e.to_string())?
+                    )?
             }
             _ => {
                 eprintln!("projection retry: unsupported phase '{}'", phase);
@@ -4985,13 +4984,15 @@ fn project_ingest_dir_projections(
                     .iter()
                     .map(|s| s.as_str())
                     .collect();
-                store_ops.project_obsidian_vault_links(
+                obsidian_adapter::project_obsidian_vault_links(
+                    store,
                     dag,
                     artifacts_dir,
                     &vault_prefix_refs,
                     docs_to_resolve_links,
                     Some(&run_id),
                 )
+                .map_err(|e| admit_surrealdb::projection_store::ProjectionError::new(e))
             }
             // Phases which are not yet driven by ingest_dir are treated as skipped here.
             _ => Ok(admit_surrealdb::projection_run::PhaseResult::success(
@@ -5661,17 +5662,17 @@ fn maybe_project_vault_links(
 ) -> Result<(), String> {
     projection
         .with_store("surrealdb obsidian vault link projection", |surreal| {
-            surreal
-                .project_obsidian_vault_links_from_artifacts(
-                    dag,
-                    artifacts_dir,
-                    &["irrev-vault/", "chatgpt/vault/"],
-                    None,
-                    None,
-                )
-                .map_err(|err| {
-                    format!("surrealdb obsidian vault link projection failed: {}", err)
-                })?;
+            obsidian_adapter::project_obsidian_vault_links(
+                surreal,
+                dag,
+                artifacts_dir,
+                &["irrev-vault/", "chatgpt/vault/"],
+                None,
+                None,
+            )
+            .map_err(|err| {
+                format!("surrealdb obsidian vault link projection failed: {}", err)
+            })?;
             Ok(())
         })?
         .map(|_| ());

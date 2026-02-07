@@ -1,5 +1,35 @@
 # Refactor Plan: UX + Core/Adapter Separation
 
+## 0. Current Status (2026-02-07)
+
+Overall: **in progress, on track**.
+
+- Phase 1 (UX baseline): mostly complete.
+- Phase 2 (boundary extraction): **complete** — `admit_surrealdb` no longer depends on `admit_scope_obsidian`.
+- Phase 3 (scope/plugin structure): partially complete (scope gating + registry wiring landed).
+- Phase 4 (governance hardening): **advanced** — IR-RS-13 enforced, CI gate workflow added.
+
+Recent landed checkpoints:
+
+- `d234d2c` Phase 2: obsidian alias path and vault UX rename
+- `1a8bd6a` Phase 2: extracted Obsidian link resolver into `admit_scope_obsidian`
+- `365b6de` Phase 2: IR-RS-13 coupling lint + naming cleanup
+- `b7f5874`/`8234500`/`a8eff29`/`cd4a4d9` Phase 3: scope enablement and adapter boundary wiring
+- `00733ab`/`7226dad`/`7dcd1f4`/`82ac913` Phase 2 continuation: extracted Obsidian projection orchestration/helpers/schema ops and exported fixed-point plan artifacts
+
+Phase 2 completion (uncommitted):
+
+- Extracted `obsidian_projection.rs` (~1370 lines) from `admit_surrealdb` into `admit_scope_obsidian::projection`
+- Defined `ObsidianProjectionBackend` trait for DB-agnostic obsidian projection
+- Removed `admit_scope_obsidian` dependency from `admit_surrealdb/Cargo.toml`
+- Deleted `obsidian_projection.rs` and `link_resolver.rs` from `admit_surrealdb`
+- CLI adapter (`obsidian_adapter.rs`) implements `ObsidianProjectionBackend` via newtype wrapper
+- Updated IR-RS-13 allowed paths (removed surrealdb entries)
+- Removed backward-compat `project_vault_links` alias
+- Added `.github/workflows/ci.yml` for CI gate
+
+---
+
 ## 1. Objective
 
 Make the compiler usable with a clear default flow:
@@ -136,26 +166,31 @@ enabled = ["rust.ir_lint", "markdown.chunk", "obsidian.links", "vault.ir_lint"]
 
 ### Phase 1: UX baseline
 
+- Status: **mostly complete**
 - implement/finish `admit init`
 - unify config loading from `admit.toml`
 - make `ingest -> status` the default first-time path
 
 ### Phase 2: Boundary extraction
 
+- Status: **complete**
 - move obsidian-specific logic behind scope interfaces
 - keep generic markdown logic in non-obsidian scope pack
 - remove direct obsidian coupling from core crates
+- `admit_surrealdb` has zero dependency on `admit_scope_obsidian`
 
 ### Phase 3: Pluginized scope packs
 
+- Status: **in progress**
 - register built-in generic scopes
 - allow optional scope pack loading at runtime/build time
 - keep personal adapters separate from compiler core
 
 ### Phase 4: Governance hardening
 
+- Status: **in progress (advanced)**
 - add compiler self-lint for architecture coupling (IR-RS-13)
-- gate CI on boundary rules
+- gate CI on boundary rules — `.github/workflows/ci.yml` added
 
 ---
 
@@ -214,7 +249,14 @@ Mitigations:
 
 ## 12. Immediate Next Actions
 
-1. Add/verify `admit init` scaffolding behavior and tests.
-2. Create a coupling-audit checklist per crate.
-3. Land IR-RS-13 lint and enable in CI as warn first, then error.
-4. Split current obsidian-specific code paths into an adapter scope module.
+1. ~~Finish extracting remaining Obsidian-specific paths from `admit_surrealdb` into adapter-scoped modules/functions.~~ **Done.**
+2. ~~Tighten CLI terminology and flags around Obsidian adapters while preserving compatibility aliases.~~ **Done** (backward-compat alias removed; vacuum SQL kept for data safety).
+3. ~~Add/confirm CI gate for `admit lint rust .` so IR-RS-13 is enforced on merges.~~ **Done** (`.github/workflows/ci.yml`).
+4. Add a fixed-point reproducibility check path (`admit(check(admit))`) as a tracked governance milestone.
+
+### Remaining work
+
+- Rename `VaultDoc` to `DocFile` in `admit_surrealdb` (terminology cleanup, low priority)
+- Move obsidian-specific vacuum SQL from `admit_surrealdb` to obsidian scope adapter
+- `admit_core` still has `ObsidianVaultRule` variant in IR — extract to scope predicate
+- Add `admit_scope_markdown` and `admit_scope_fs` crates (Phase 3)

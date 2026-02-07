@@ -1,8 +1,16 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use admit_dag::{GovernedDag, NodeKind};
 use admit_embed::OllamaEmbedder;
-use admit_surrealdb::{
-    DocTitleEmbeddingRow, SurrealCliProjectionStore, UnresolvedLinkSuggestionRow,
+use admit_scope_obsidian::projection::{
+    self, ObsidianProjectionBackend, UnresolvedLinkSuggestionRow,
 };
+use admit_surrealdb::projection_run::{
+    FailedBatch as SurrealFailedBatch, PhaseResult as SurrealPhaseResult,
+    PhaseStatus as SurrealPhaseStatus,
+};
+use admit_surrealdb::{DocTitleEmbeddingRow, SurrealCliProjectionStore};
 use sha2::Digest;
 
 pub use admit_scope_obsidian::{
@@ -61,6 +69,106 @@ fn vault_prefix_for_doc_path(from_doc_path: &str, vault_prefixes: &[String]) -> 
 
 fn sha256_hex(input: &str) -> String {
     hex::encode(sha2::Sha256::digest(input.as_bytes()))
+}
+
+// ---------------------------------------------------------------------------
+// ObsidianProjectionBackend impl via newtype wrapper (orphan rule)
+// ---------------------------------------------------------------------------
+
+/// Newtype wrapper enabling `ObsidianProjectionBackend` for the SurrealDB store.
+pub struct SurrealObsidianBackend<'a>(pub &'a SurrealCliProjectionStore);
+
+impl ObsidianProjectionBackend for SurrealObsidianBackend<'_> {
+    fn run_sql(&self, sql: &str) -> Result<(), String> {
+        self.0.run_sql(sql)
+    }
+
+    fn run_sql_allow_already_exists(&self, sql: &str) -> Result<(), String> {
+        self.0.run_sql_allow_already_exists(sql)
+    }
+
+    fn select_rows(&self, sql: &str) -> Result<Vec<serde_json::Value>, String> {
+        self.0.select_rows_from_single_select(sql)
+    }
+
+    fn batch_config(&self) -> projection::BatchConfig {
+        let bs = &self.0.projection_config.batch_sizes;
+        projection::BatchConfig {
+            doc_files: bs.doc_files,
+            headings: bs.headings,
+            links: bs.links,
+            stats: bs.stats,
+            max_sql_bytes: bs.max_sql_bytes,
+        }
+    }
+
+    fn ensure_doc_file_schema(&self) -> Result<(), String> {
+        self.0.ensure_doc_file_schema()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PhaseResult conversion: obsidian → surrealdb
+// ---------------------------------------------------------------------------
+
+fn convert_phase_result(r: projection::PhaseResult) -> SurrealPhaseResult {
+    let status = if r.failed_batches.is_empty() {
+        SurrealPhaseStatus::Complete
+    } else if r.successful_batches == 0 {
+        SurrealPhaseStatus::Failed
+    } else {
+        SurrealPhaseStatus::Partial
+    };
+    SurrealPhaseResult {
+        phase: r.phase,
+        status,
+        total_batches: r.total_batches,
+        successful_batches: r.successful_batches,
+        failed_batches: r
+            .failed_batches
+            .into_iter()
+            .map(|fb| SurrealFailedBatch {
+                batch_hash: String::new(),
+                batch_index: fb.batch_index,
+                item_ids: fb.item_ids,
+                error: fb.error,
+                attempt_count: 0,
+            })
+            .collect(),
+        duration_ms: r.duration_ms,
+        records_processed: r.records_processed,
+        batches_executed: r.total_batches as u64,
+        bytes_written: r.bytes_written,
+        files_read: r.files_read,
+        parse_time_ms: r.parse_time_ms,
+        db_write_time_ms: Some(r.db_write_time_ms),
+        errors: Vec::new(),
+        error: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Obsidian vault link projection (delegates to admit_scope_obsidian)
+// ---------------------------------------------------------------------------
+
+pub fn project_obsidian_vault_links(
+    surreal: &SurrealCliProjectionStore,
+    dag: &GovernedDag,
+    artifacts_root: &Path,
+    obsidian_vault_prefixes: &[&str],
+    doc_filter: Option<&BTreeSet<String>>,
+    run_id: Option<&str>,
+) -> Result<SurrealPhaseResult, String> {
+    let backend = SurrealObsidianBackend(surreal);
+    let r = projection::project_obsidian_vault_links_from_artifacts(
+        &backend,
+        dag,
+        artifacts_root,
+        obsidian_vault_prefixes,
+        doc_filter,
+        run_id,
+    )?;
+    Ok(convert_phase_result(r))
 }
 
 pub fn project_unresolved_link_suggestions_via_ollama(
@@ -143,7 +251,9 @@ pub fn project_unresolved_link_suggestions_via_ollama(
         surreal.project_doc_title_embeddings(&title_rows)?;
     }
 
-    let unresolved = surreal.select_unresolved_links(
+    let backend = SurrealObsidianBackend(surreal);
+    let unresolved = projection::select_unresolved_links(
+        &backend,
         doc_prefix_refs.as_slice(),
         &["missing", "heading_missing", "ambiguous"],
         10_000,
@@ -199,8 +309,14 @@ pub fn project_unresolved_link_suggestions_via_ollama(
         let mut candidates: Vec<(String, f64)> = Vec::new();
         if link.resolution_kind == "ambiguous" && !link.candidates.is_empty() {
             // Rank existing candidates with embeddings.
-            let rows =
-                surreal.search_doc_title_embeddings(&vault_prefix, model, dim_target, &q0, 500)?;
+            let rows = projection::search_doc_title_embeddings(
+                &backend,
+                &vault_prefix,
+                model,
+                dim_target,
+                &q0,
+                500,
+            )?;
             let mut map: std::collections::BTreeMap<String, f64> =
                 std::collections::BTreeMap::new();
             for (p, s) in rows {
@@ -211,7 +327,8 @@ pub fn project_unresolved_link_suggestions_via_ollama(
             }
             candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         } else {
-            candidates = surreal.search_doc_title_embeddings(
+            candidates = projection::search_doc_title_embeddings(
+                &backend,
                 &vault_prefix,
                 model,
                 dim_target,
@@ -239,7 +356,7 @@ pub fn project_unresolved_link_suggestions_via_ollama(
         });
     }
 
-    surreal.project_unresolved_link_suggestions(run_id, &suggestions)?;
+    projection::project_unresolved_link_suggestions(&backend, run_id, &suggestions)?;
     eprintln!(
         "ollama_suggest: projected suggestions={}",
         suggestions.len()

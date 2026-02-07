@@ -189,31 +189,17 @@ pub trait ProjectionStoreOps {
     ) -> ProjectionResult<PhaseResult>;
 
     /// Project Obsidian-vault links from DAG artifacts.
+    ///
+    /// Default implementation returns an error; enable via the obsidian scope adapter.
     fn project_obsidian_vault_links(
         &self,
-        dag: &GovernedDag,
-        artifacts_root: &Path,
-        obsidian_vault_prefixes: &[&str],
-        doc_filter: Option<&BTreeSet<String>>,
-        run_id: Option<&str>,
-    ) -> ProjectionResult<PhaseResult>;
-
-    /// Backward-compatible alias.
-    fn project_vault_links(
-        &self,
-        dag: &GovernedDag,
-        artifacts_root: &Path,
-        obsidian_vault_prefixes: &[&str],
-        doc_filter: Option<&BTreeSet<String>>,
-        run_id: Option<&str>,
+        _dag: &GovernedDag,
+        _artifacts_root: &Path,
+        _obsidian_vault_prefixes: &[&str],
+        _doc_filter: Option<&BTreeSet<String>>,
+        _run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult> {
-        self.project_obsidian_vault_links(
-            dag,
-            artifacts_root,
-            obsidian_vault_prefixes,
-            doc_filter,
-            run_id,
-        )
+        Err(ProjectionError::new("obsidian vault links projection not configured; enable via scope adapter"))
     }
 
     // =========================================================================

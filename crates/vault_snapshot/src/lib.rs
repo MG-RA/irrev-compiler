@@ -137,4 +137,3 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
 }
-

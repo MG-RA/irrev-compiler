@@ -39,11 +39,12 @@ fn observe_regex_matches_fixture() {
         regex: r"\bshould\b|\bmust\b".to_string(),
         unit: Some("count".to_string()),
     }];
-    let bundle = observe_regex(&[input], &patterns, true, None, Some(&root))
-        .expect("observe regex");
-    let expected: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(fixture_path("facts-bundle.json")).expect("read fixture"))
-            .expect("parse fixture");
+    let bundle =
+        observe_regex(&[input], &patterns, true, None, Some(&root)).expect("observe regex");
+    let expected: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(fixture_path("facts-bundle.json")).expect("read fixture"),
+    )
+    .expect("parse fixture");
     let actual = serde_json::to_value(&bundle).expect("bundle to value");
     assert_eq!(actual, expected);
 }

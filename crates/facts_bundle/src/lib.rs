@@ -94,8 +94,7 @@ pub fn load_bundle_with_hash(path: &Path) -> Result<FactsBundleWithHash, FactsEr
 }
 
 pub fn bundle_with_hash(bundle: FactsBundle) -> Result<FactsBundleWithHash, FactsError> {
-    let value =
-        serde_json::to_value(&bundle).map_err(|err| FactsError::Json(err.to_string()))?;
+    let value = serde_json::to_value(&bundle).map_err(|err| FactsError::Json(err.to_string()))?;
     let canonical_bytes = canonical_json_bytes(&value)?;
     let sha256 = sha256_hex(&canonical_bytes);
     Ok(FactsBundleWithHash {
@@ -289,7 +288,11 @@ impl CompiledPattern {
     }
 }
 
-fn find_matches(text: &str, pattern: &CompiledPattern, case_insensitive: bool) -> Vec<(usize, usize)> {
+fn find_matches(
+    text: &str,
+    pattern: &CompiledPattern,
+    case_insensitive: bool,
+) -> Vec<(usize, usize)> {
     let mut matches = Vec::new();
     for term in &pattern.terms {
         match term {
@@ -323,7 +326,11 @@ fn find_term_matches(
     }
     let last = hay.len() - needle_bytes.len();
     for start in 0..=last {
-        if bytes_match(&hay[start..start + needle_bytes.len()], needle_bytes, case_insensitive) {
+        if bytes_match(
+            &hay[start..start + needle_bytes.len()],
+            needle_bytes,
+            case_insensitive,
+        ) {
             let end = start + needle_bytes.len();
             if !word_boundary || is_word_boundary_bytes(hay, start, end) {
                 matches.push((start, end));
@@ -344,8 +351,16 @@ fn bytes_match(hay: &[u8], needle: &[u8], case_insensitive: bool) -> bool {
 }
 
 fn is_word_boundary_bytes(hay: &[u8], start: usize, end: usize) -> bool {
-    let before = if start == 0 { None } else { Some(hay[start - 1]) };
-    let after = if end >= hay.len() { None } else { Some(hay[end]) };
+    let before = if start == 0 {
+        None
+    } else {
+        Some(hay[start - 1])
+    };
+    let after = if end >= hay.len() {
+        None
+    } else {
+        Some(hay[end])
+    };
     let before_is_word = before.map(is_word_char_byte).unwrap_or(false);
     let after_is_word = after.map(is_word_char_byte).unwrap_or(false);
     !before_is_word && !after_is_word

@@ -19,8 +19,8 @@ pub fn store_value_artifact(
     schema_id: &str,
     value: &serde_json::Value,
 ) -> Result<ArtifactRef, DeclareCostError> {
-    let cbor_bytes = admit_core::encode_canonical_value(value)
-        .map_err(|err| DeclareCostError::Json(err.0))?;
+    let cbor_bytes =
+        admit_core::encode_canonical_value(value).map_err(|err| DeclareCostError::Json(err.0))?;
     let json_projection =
         serde_json::to_vec(value).map_err(|err| DeclareCostError::Json(err.to_string()))?;
     store_artifact(
@@ -88,15 +88,19 @@ pub fn list_artifacts(root: &Path) -> Result<Vec<ArtifactEntry>, DeclareCostErro
     let mut entries = Vec::new();
     for kind_entry in fs::read_dir(root).map_err(|err| DeclareCostError::Io(err.to_string()))? {
         let kind_entry = kind_entry.map_err(|err| DeclareCostError::Io(err.to_string()))?;
-        if !kind_entry.file_type().map_err(|err| DeclareCostError::Io(err.to_string()))?.is_dir() {
+        if !kind_entry
+            .file_type()
+            .map_err(|err| DeclareCostError::Io(err.to_string()))?
+            .is_dir()
+        {
             continue;
         }
         let kind = kind_entry
             .file_name()
             .into_string()
             .unwrap_or_else(|_| "unknown".to_string());
-        for file in fs::read_dir(kind_entry.path())
-            .map_err(|err| DeclareCostError::Io(err.to_string()))?
+        for file in
+            fs::read_dir(kind_entry.path()).map_err(|err| DeclareCostError::Io(err.to_string()))?
         {
             let file = file.map_err(|err| DeclareCostError::Io(err.to_string()))?;
             let path = file.path();

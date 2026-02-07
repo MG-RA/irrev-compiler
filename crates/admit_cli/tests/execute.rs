@@ -123,20 +123,19 @@ fn execute_appends_admissibility_executed_event() {
     let lines: Vec<_> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
     assert_eq!(lines.len(), 3);
 
-    let event: serde_json::Value =
-        serde_json::from_str(lines[2]).expect("parse executed event");
+    let event: serde_json::Value = serde_json::from_str(lines[2]).expect("parse executed event");
     assert_eq!(
         event.get("event_type").and_then(|v| v.as_str()),
         Some("admissibility.executed")
     );
     assert_eq!(
-        event.get("admissibility_checked_event_id")
+        event
+            .get("admissibility_checked_event_id")
             .and_then(|v| v.as_str()),
         Some(checked.event_id.as_str())
     );
     assert_eq!(
-        event.get("cost_declared_event_id")
-            .and_then(|v| v.as_str()),
+        event.get("cost_declared_event_id").and_then(|v| v.as_str()),
         Some(cost_event.event_id.as_str())
     );
 

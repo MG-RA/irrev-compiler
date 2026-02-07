@@ -38,17 +38,17 @@ impl std::fmt::Display for ScopeTag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MutationRiskClass {
-    LocalReversible,        // cache writes — lowest ceremony
-    LocalPersistent,        // exports, generated files
-    ExternalDestructive,    // DB wipes, external system mutations — highest ceremony
+    LocalReversible,     // cache writes — lowest ceremony
+    LocalPersistent,     // exports, generated files
+    ExternalDestructive, // DB wipes, external system mutations — highest ceremony
 }
 
 /// Step is scoped to a timeline, not global.
 /// Prevents awkwardness with parallel executions or merged traces.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TimelineStep {
-    pub timeline: String,   // e.g., harness execution id, or "build" for pure computation
-    pub seq: u64,           // monotonic within timeline
+    pub timeline: String, // e.g., harness execution id, or "build" for pure computation
+    pub seq: u64,         // monotonic within timeline
 }
 
 impl TimelineStep {
@@ -70,8 +70,8 @@ pub enum EdgeType {
     /// Direction: AuthorityRoot → effectful_node (\"authority authorizes this result\").
     /// Reads like provenance. Reachability checks: \"can I reach this node from an authority root?\"
     AuthorityDepends {
-        authority_id: String,       // stable identifier
-        authority_hash: String,     // content hash of the authority source
+        authority_id: String,   // stable identifier
+        authority_hash: String, // content hash of the authority source
     },
 
     MutationCommitment {
@@ -102,12 +102,7 @@ pub struct DagEdge {
 
 impl DagEdge {
     /// Construct a BuildDepends edge
-    pub fn build_depends(
-        from: NodeId,
-        to: NodeId,
-        scope: ScopeTag,
-        step: TimelineStep,
-    ) -> Self {
+    pub fn build_depends(from: NodeId, to: NodeId, scope: ScopeTag, step: TimelineStep) -> Self {
         DagEdge {
             from,
             to,
@@ -196,10 +191,7 @@ impl DagEdge {
         DagEdge {
             from,
             to,
-            edge_type: EdgeType::CostDisplacement {
-                cost,
-                displaced_to,
-            },
+            edge_type: EdgeType::CostDisplacement { cost, displaced_to },
             scope,
             step,
             witness_ref: None,

@@ -7,15 +7,14 @@ use serde::Serialize;
 
 use super::artifact::{default_artifacts_dir, store_artifact};
 use super::internal::{
-    artifact_disk_path, decode_cbor_to_value, payload_hash, sha256_hex,
-    DEFAULT_WITNESS_SCHEMA_ID,
+    artifact_disk_path, decode_cbor_to_value, payload_hash, sha256_hex, DEFAULT_WITNESS_SCHEMA_ID,
 };
 use super::ledger::{read_checked_event, read_cost_declared_event};
 use super::registry::{enforce_scope_gate, resolve_meta_registry};
 use super::types::{
-    AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactInput,
-    CheckedPayload, CompilerRef, CostDeclaredEvent, CostDeclaredPayload, DeclareCostError,
-    DeclareCostInput, ExecutedPayload, ProgramRef, VerifyWitnessInput, VerifyWitnessOutput,
+    AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactInput, CheckedPayload,
+    CompilerRef, CostDeclaredEvent, CostDeclaredPayload, DeclareCostError, DeclareCostInput,
+    ExecutedPayload, ProgramRef, VerifyWitnessInput, VerifyWitnessOutput,
 };
 
 // ---------------------------------------------------------------------------
@@ -53,11 +52,10 @@ impl WitnessInput {
             .program_scope
             .clone()
             .ok_or(DeclareCostError::MissingProgramRef)?;
-        let witness = decode_cbor_to_value(&cbor_bytes)
-            .and_then(|val| {
-                serde_json::from_value::<Witness>(val)
-                    .map_err(|err| DeclareCostError::WitnessDecode(err.to_string()))
-            })?;
+        let witness = decode_cbor_to_value(&cbor_bytes).and_then(|val| {
+            serde_json::from_value::<Witness>(val)
+                .map_err(|err| DeclareCostError::WitnessDecode(err.to_string()))
+        })?;
         let snapshot_hash = input
             .snapshot_hash
             .clone()
@@ -190,11 +188,13 @@ pub fn declare_cost(input: DeclareCostInput) -> Result<CostDeclaredEvent, Declar
     let schema_id = input
         .witness_schema_id
         .unwrap_or_else(|| DEFAULT_WITNESS_SCHEMA_ID.to_string());
-    let artifacts_root = input
-        .artifacts_root
-        .unwrap_or_else(default_artifacts_dir);
+    let artifacts_root = input.artifacts_root.unwrap_or_else(default_artifacts_dir);
     let projection = match &witness_input.witness {
-        Some(witness) => Some(witness_projection_json(witness, &schema_id, &computed_hash)?),
+        Some(witness) => Some(witness_projection_json(
+            witness,
+            &schema_id,
+            &computed_hash,
+        )?),
         None => None,
     };
     let witness_ref = store_artifact(

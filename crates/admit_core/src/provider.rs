@@ -8,4 +8,3 @@ use crate::lint::LintFinding;
 pub trait PredicateProvider {
     fn eval_vault_rule(&self, rule_id: &str) -> Result<Vec<LintFinding>, EvalError>;
 }
-

@@ -6,7 +6,10 @@
 /// `nomic-embed-text*` models, and use empty prefixes for other models (e.g. Qwen).
 pub fn default_prefixes_for_model(model: &str) -> (String, String) {
     if model.starts_with("nomic-embed-text") {
-        ("search_document: ".to_string(), "search_query: ".to_string())
+        (
+            "search_document: ".to_string(),
+            "search_query: ".to_string(),
+        )
     } else {
         ("".to_string(), "".to_string())
     }
@@ -30,4 +33,3 @@ mod tests {
         assert_eq!(q, "search_query: ");
     }
 }
-

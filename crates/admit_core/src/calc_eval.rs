@@ -63,11 +63,13 @@ impl CalcEvaluator {
                 Ok(EvalResult::new(exact_value, unit.clone()))
             }
 
-            CalcExpr::InputRef { name, .. } => {
-                self.inputs.get(name).cloned().ok_or_else(|| {
-                    format!("input '{}' not found (available: {:?})", name, self.inputs.keys())
-                })
-            }
+            CalcExpr::InputRef { name, .. } => self.inputs.get(name).cloned().ok_or_else(|| {
+                format!(
+                    "input '{}' not found (available: {:?})",
+                    name,
+                    self.inputs.keys()
+                )
+            }),
 
             CalcExpr::Add { left, right } => {
                 let l = self.eval(left)?;
@@ -77,10 +79,16 @@ impl CalcEvaluator {
                 let rq = r.to_quantity();
                 let result_qty = lq.add(&rq)?;
 
-                let result = EvalResult::new(result_qty.value.clone(), Some(result_qty.unit.clone()));
+                let result =
+                    EvalResult::new(result_qty.value.clone(), Some(result_qty.unit.clone()));
 
                 if self.trace_enabled {
-                    self.record_trace("add", vec![l.value, r.value], result.value.clone(), result.unit.clone());
+                    self.record_trace(
+                        "add",
+                        vec![l.value, r.value],
+                        result.value.clone(),
+                        result.unit.clone(),
+                    );
                 }
 
                 Ok(result)
@@ -94,10 +102,16 @@ impl CalcEvaluator {
                 let rq = r.to_quantity();
                 let result_qty = lq.subtract(&rq)?;
 
-                let result = EvalResult::new(result_qty.value.clone(), Some(result_qty.unit.clone()));
+                let result =
+                    EvalResult::new(result_qty.value.clone(), Some(result_qty.unit.clone()));
 
                 if self.trace_enabled {
-                    self.record_trace("subtract", vec![l.value, r.value], result.value.clone(), result.unit.clone());
+                    self.record_trace(
+                        "subtract",
+                        vec![l.value, r.value],
+                        result.value.clone(),
+                        result.unit.clone(),
+                    );
                 }
 
                 Ok(result)
@@ -121,7 +135,12 @@ impl CalcEvaluator {
                 );
 
                 if self.trace_enabled {
-                    self.record_trace("multiply", vec![l.value, r.value], result.value.clone(), result.unit.clone());
+                    self.record_trace(
+                        "multiply",
+                        vec![l.value, r.value],
+                        result.value.clone(),
+                        result.unit.clone(),
+                    );
                 }
 
                 Ok(result)
@@ -145,7 +164,12 @@ impl CalcEvaluator {
                 );
 
                 if self.trace_enabled {
-                    self.record_trace("divide", vec![l.value, r.value], result.value.clone(), result.unit.clone());
+                    self.record_trace(
+                        "divide",
+                        vec![l.value, r.value],
+                        result.value.clone(),
+                        result.unit.clone(),
+                    );
                 }
 
                 Ok(result)

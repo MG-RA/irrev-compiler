@@ -46,4 +46,3 @@ fn trace_can_be_projected_without_panic_when_not_executed() {
     assert_eq!(dag.node_count(), 2);
     assert_eq!(dag.edge_count(), 1);
 }
-

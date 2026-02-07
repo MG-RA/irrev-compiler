@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// Centralized configuration for all projection parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,10 +19,7 @@ impl Default for ProjectionConfig {
             batch_sizes: BatchSizes::default(),
             retry_policy: RetryPolicy::default(),
             failure_handling: FailureHandling::WarnAndContinue,
-            vault_prefixes: vec![
-                "irrev-vault/".to_string(),
-                "chatgpt/vault/".to_string(),
-            ],
+            vault_prefixes: vec!["irrev-vault/".to_string(), "chatgpt/vault/".to_string()],
         }
     }
 }
@@ -309,8 +306,7 @@ impl RetryPolicy {
         }
         let denom = self.backoff_multiplier_denom.max(1) as f64;
         let mult = (self.backoff_multiplier_numer as f64) / denom;
-        let delay = self.initial_delay_ms as f64
-            * mult.powi((attempt - 1) as i32);
+        let delay = self.initial_delay_ms as f64 * mult.powi((attempt - 1) as i32);
         delay.min(self.max_delay_ms as f64) as u64
     }
 }

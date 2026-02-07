@@ -65,4 +65,3 @@ fn court_artifact_event_verifies_cleanly() {
     let report = verify_ledger(&ledger_path, Some(&artifacts_dir)).expect("verify ledger");
     assert_eq!(report.issues.len(), 0, "ledger issues: {:?}", report.issues);
 }
-

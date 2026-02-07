@@ -185,16 +185,17 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             })
         });
 
-    let scope_stmt = just(Token::KwScope)
-        .ignore_then(ident.clone())
-        .try_map(|raw: String, span| {
-            let name = resolve_prefixed("scope", &raw)
-                .map_err(|msg| Simple::custom(span.clone(), msg))?;
-            Ok(Stmt::Scope(ScopeDecl {
-                name,
-                span: make_span(file, span, &line_index),
-            }))
-        });
+    let scope_stmt =
+        just(Token::KwScope)
+            .ignore_then(ident.clone())
+            .try_map(|raw: String, span| {
+                let name = resolve_prefixed("scope", &raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::Scope(ScopeDecl {
+                    name,
+                    span: make_span(file, span, &line_index),
+                }))
+            });
 
     let scope_mode = ident
         .clone()
@@ -237,11 +238,10 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
     let scope_change_block = just(Token::LBrace)
         .ignore_then(
             choice::<_, Simple<Token>>((
-                just(Token::KwAllow)
-                    .map_with_span(|_, span| ScopeChangeBlock {
-                        allow_span: Some(span),
-                        cost: None,
-                    }),
+                just(Token::KwAllow).map_with_span(|_, span| ScopeChangeBlock {
+                    allow_span: Some(span),
+                    cost: None,
+                }),
                 scope_change_cost.map(|cost| ScopeChangeBlock {
                     allow_span: None,
                     cost: Some(cost),
@@ -379,27 +379,29 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             }))
         });
 
-    let transform_stmt = just(Token::KwTransform)
-        .ignore_then(ident.clone())
-        .try_map(|raw: String, span| {
-            let name = resolve_prefixed("transform", &raw)
-                .map_err(|msg| Simple::custom(span.clone(), msg))?;
-            Ok(Stmt::Transform(TransformDecl {
-                name,
-                span: make_span(file, span, &line_index),
-            }))
-        });
+    let transform_stmt =
+        just(Token::KwTransform)
+            .ignore_then(ident.clone())
+            .try_map(|raw: String, span| {
+                let name = resolve_prefixed("transform", &raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::Transform(TransformDecl {
+                    name,
+                    span: make_span(file, span, &line_index),
+                }))
+            });
 
-    let bucket_stmt = just(Token::KwBucket)
-        .ignore_then(ident.clone())
-        .try_map(|raw: String, span| {
-            let name = resolve_prefixed("bucket", &raw)
-                .map_err(|msg| Simple::custom(span.clone(), msg))?;
-            Ok(Stmt::Bucket(BucketDecl {
-                name,
-                span: make_span(file, span, &line_index),
-            }))
-        });
+    let bucket_stmt =
+        just(Token::KwBucket)
+            .ignore_then(ident.clone())
+            .try_map(|raw: String, span| {
+                let name = resolve_prefixed("bucket", &raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::Bucket(BucketDecl {
+                    name,
+                    span: make_span(file, span, &line_index),
+                }))
+            });
 
     let constraint_stmt = just(Token::KwConstraint)
         .ignore_then(ident.clone())
@@ -521,11 +523,7 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             just(Token::KwWitness).to(QueryKind::Witness),
             just(Token::KwDelta).to(QueryKind::Delta),
             just(Token::KwLint)
-                .ignore_then(
-                    just(Token::KwFailOn)
-                        .ignore_then(ident.clone())
-                        .or_not(),
-                )
+                .ignore_then(just(Token::KwFailOn).ignore_then(ident.clone()).or_not())
                 .try_map(|fail_on: Option<String>, span| {
                     let raw = fail_on.unwrap_or_else(|| "error".to_string());
                     let kind = match raw.as_str() {

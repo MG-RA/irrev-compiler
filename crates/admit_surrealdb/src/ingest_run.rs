@@ -17,4 +17,3 @@ pub struct IngestRunRow {
     pub chunks: Option<u64>,
     pub total_bytes: Option<u64>,
 }
-

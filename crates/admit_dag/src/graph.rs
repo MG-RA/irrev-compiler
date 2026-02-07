@@ -197,12 +197,7 @@ mod tests {
             step1.clone(),
         ));
 
-        dag.add_edge(DagEdge::witness_of(
-            id1,
-            id2,
-            scope.clone(),
-            step2.clone(),
-        ));
+        dag.add_edge(DagEdge::witness_of(id1, id2, scope.clone(), step2.clone()));
 
         let witness_node = create_test_node("witness", "scope:test");
         let witness_id = witness_node.id;

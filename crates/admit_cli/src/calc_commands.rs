@@ -114,11 +114,8 @@ pub fn calc_execute(
         let value_str = parts[1];
 
         // Find contract for this input
-        let contract = plan
-            .inputs
-            .iter()
-            .find(|c| c.name == name)
-            .ok_or_else(|| {
+        let contract =
+            plan.inputs.iter().find(|c| c.name == name).ok_or_else(|| {
                 DeclareCostError::Io(format!("input '{}' not found in plan", name))
             })?;
 
@@ -145,12 +142,12 @@ pub fn calc_execute(
                         value_str
                     )));
                 }
-                let num = rat_parts[0].parse::<i64>().map_err(|e| {
-                    DeclareCostError::Io(format!("invalid numerator: {}", e))
-                })?;
-                let denom = rat_parts[1].parse::<i64>().map_err(|e| {
-                    DeclareCostError::Io(format!("invalid denominator: {}", e))
-                })?;
+                let num = rat_parts[0]
+                    .parse::<i64>()
+                    .map_err(|e| DeclareCostError::Io(format!("invalid numerator: {}", e)))?;
+                let denom = rat_parts[1]
+                    .parse::<i64>()
+                    .map_err(|e| DeclareCostError::Io(format!("invalid denominator: {}", e)))?;
                 ExactValue::rational(num, denom)
                     .map_err(|e| DeclareCostError::Io(format!("invalid rational: {}", e)))?
             }
@@ -186,10 +183,7 @@ pub fn calc_execute(
             input_hash,
         ));
 
-        inputs_map.insert(
-            name,
-            EvalResult::new(value, contract.expected_unit.clone()),
-        );
+        inputs_map.insert(name, EvalResult::new(value, contract.expected_unit.clone()));
     }
 
     // Verify all required inputs provided

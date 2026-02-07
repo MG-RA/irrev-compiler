@@ -1,6 +1,7 @@
 use admit_core::{
     compute_identity_witness_id, delegate_issue, encode_delegation_record, encode_identity_witness,
-    verify_delegation, DelegateIssueInput, IdentityMetadata, IdentityVerdict, VerifyDelegationInput,
+    verify_delegation, DelegateIssueInput, IdentityMetadata, IdentityVerdict,
+    VerifyDelegationInput,
 };
 
 #[test]
@@ -126,4 +127,3 @@ fn identity_witness_id_is_stable_across_metadata_changes() {
     let id_b = compute_identity_witness_id(&b).unwrap();
     assert_eq!(id_a, id_b);
 }
-

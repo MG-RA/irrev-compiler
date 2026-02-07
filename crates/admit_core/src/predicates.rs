@@ -90,7 +90,12 @@ pub fn eval_pred_with_provider(
             // CalcWitness predicate requires artifact loading support
             // This is a placeholder that will be extended with artifact resolution
             // For now, record the check and return false (will be implemented in provider)
-            let _ = (witness_hash, expected_schema_id, expected_plan_hash, expected_output);
+            let _ = (
+                witness_hash,
+                expected_schema_id,
+                expected_plan_hash,
+                expected_output,
+            );
 
             // TODO: Implement full verification:
             // 1. Load witness from artifacts by witness_hash

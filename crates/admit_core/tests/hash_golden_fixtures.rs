@@ -53,9 +53,18 @@ fn fixture_2_json_value_cbor_determinism() {
     assert_eq!(witness2.digest, witness3.digest);
 
     // All must produce the same canonical CBOR hex
-    if let HashInput::ValueCbor { canonical_cbor_hex: hex1 } = &witness1.input {
-        if let HashInput::ValueCbor { canonical_cbor_hex: hex2 } = &witness2.input {
-            if let HashInput::ValueCbor { canonical_cbor_hex: hex3 } = &witness3.input {
+    if let HashInput::ValueCbor {
+        canonical_cbor_hex: hex1,
+    } = &witness1.input
+    {
+        if let HashInput::ValueCbor {
+            canonical_cbor_hex: hex2,
+        } = &witness2.input
+        {
+            if let HashInput::ValueCbor {
+                canonical_cbor_hex: hex3,
+            } = &witness3.input
+            {
                 assert_eq!(hex1, hex2);
                 assert_eq!(hex2, hex3);
             } else {
@@ -112,8 +121,7 @@ fn fixture_4_wire_format_lock_hash_witness_id_payload() {
         algorithm: "sha256".into(),
         operation: HashOperation::HashBytes,
         input: HashInput::Bytes {
-            sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-                .into(),
+            sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
         },
         digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
         input_size_bytes: 4,
@@ -185,8 +193,7 @@ fn fixture_4_wire_format_lock_verify_operation() {
                 .into(),
         },
         input: HashInput::Bytes {
-            sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                .into(),
+            sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
         },
         digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
         input_size_bytes: 10,
@@ -291,7 +298,10 @@ fn test_witness_id_different_for_different_content() {
     let id1 = compute_witness_id(&witness1).unwrap();
     let id2 = compute_witness_id(&witness2).unwrap();
 
-    assert_ne!(id1, id2, "Different inputs must produce different witness_ids");
+    assert_ne!(
+        id1, id2,
+        "Different inputs must produce different witness_ids"
+    );
 }
 
 // ============================================================================

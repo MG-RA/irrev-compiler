@@ -167,10 +167,10 @@ fn fixture_2_map_key_ordering_determinism() {
     // Expected order: "a" (len 1), "b" (len 1), "longer_key" (len 10)
     // Within same length, lexicographic: "a" < "b"
     let expected = concat!(
-        "a3",       // Map with 3 entries
-        "616101",   // "a" (0x61 0x61) → 1 (0x01)
-        "616202",   // "b" (0x61 0x62) → 2 (0x02)
-        "6a6c6f6e6765725f6b657903" // "longer_key" → 3
+        "a3",                       // Map with 3 entries
+        "616101",                   // "a" (0x61 0x61) → 1 (0x01)
+        "616202",                   // "b" (0x61 0x62) → 2 (0x02)
+        "6a6c6f6e6765725f6b657903"  // "longer_key" → 3
     );
 
     assert_eq!(
@@ -227,11 +227,7 @@ fn fixture_3_float_rejection() {
 
     for value in floats {
         let result = encode_canonical_value(&value);
-        assert!(
-            result.is_err(),
-            "Float {:?} should be rejected",
-            value
-        );
+        assert!(result.is_err(), "Float {:?} should be rejected", value);
         if let Err(err) = result {
             assert!(
                 err.0.contains("floats not allowed"),
@@ -259,12 +255,7 @@ fn fixture_3_float_rejection() {
 
     // Test 3: Integer-like floats are allowed (1.0, 2.0, etc.)
     // These are within the FRACTION_TOLERANCE and convert to integers
-    let integer_floats = vec![
-        json!(1.0),
-        json!(0.0),
-        json!(-1.0),
-        json!(42.0),
-    ];
+    let integer_floats = vec![json!(1.0), json!(0.0), json!(-1.0), json!(42.0)];
 
     for value in integer_floats {
         let result = encode_canonical_value(&value);
@@ -371,7 +362,10 @@ fn fixture_5_edge_cases() {
 
     let mixed = json!("Test: α β γ δ 🚀");
     let cbor_mixed = encode_canonical_value(&mixed).unwrap();
-    assert!(cbor_mixed.len() > 0, "Mixed unicode should encode successfully");
+    assert!(
+        cbor_mixed.len() > 0,
+        "Mixed unicode should encode successfully"
+    );
 
     // Test 3: Large integers (u64 boundaries)
     let max_positive = json!(9007199254740991i64); // 2^53 - 1 (JSON safe integer)
@@ -389,7 +383,10 @@ fn fixture_5_edge_cases() {
         "empty_string": ""
     });
     let cbor_nested = encode_canonical_value(&nested_empty).unwrap();
-    assert!(cbor_nested.len() > 0, "Nested empty structures should encode");
+    assert!(
+        cbor_nested.len() > 0,
+        "Nested empty structures should encode"
+    );
 
     // Test 5: Array with mixed types
     let mixed_array = json!([null, true, false, 0, 1, -1, "", "test", [], {}]);
@@ -413,7 +410,7 @@ fn test_canonical_encoding_witness_identity_use_case() {
     // Simulate witness identity computation:
     // witness_id = sha256(canonical_cbor(witness_payload))
 
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     // Same payload, different key orders
     let payload1 = json!({

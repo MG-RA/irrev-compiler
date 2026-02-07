@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use admit_core::cbor::encode_canonical;
 use admit_core::{
     eval, BoolExpr, CmpOp, DisplacementMode, EvalOpts, FloatPolicy, ModuleId, Predicate, Program,
-    Query, Quantity, ScopeId, Span, Stmt, SymbolNamespace, SymbolRef, Verdict, Witness,
+    Quantity, Query, ScopeId, Span, Stmt, SymbolNamespace, SymbolRef, Verdict, Witness,
 };
 use facts_bundle::{bundle_with_hash, facts_to_commits, observe_regex, ObservationPattern};
 use sha2::{Digest, Sha256};
@@ -119,12 +119,10 @@ fn observation_witness_matches_golden() {
     let witness = witness_from_observation();
     assert_eq!(witness.verdict, Verdict::Inadmissible);
 
-    let actual_json =
-        serde_json::to_string_pretty(&witness).expect("serialize witness to JSON");
-    let expected_json = std::fs::read_to_string(golden_fixture_path(
-        "facts-prescriptive-count.json",
-    ))
-    .expect("read golden JSON");
+    let actual_json = serde_json::to_string_pretty(&witness).expect("serialize witness to JSON");
+    let expected_json =
+        std::fs::read_to_string(golden_fixture_path("facts-prescriptive-count.json"))
+            .expect("read golden JSON");
     let expected_json = expected_json.trim_end_matches(|c| c == '\n' || c == '\r');
     assert_eq!(actual_json, expected_json);
 
@@ -142,7 +140,10 @@ fn observation_witness_matches_golden() {
 fn dump_observation_goldens() {
     let bundle = observe_bundle();
     let bundle_with_hash = bundle_with_hash(bundle).expect("hash bundle");
-    println!("{}", serde_json::to_string_pretty(&bundle_with_hash.bundle).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&bundle_with_hash.bundle).unwrap()
+    );
     println!("{}", bundle_with_hash.sha256);
 
     let witness = witness_from_observation();

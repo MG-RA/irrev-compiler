@@ -126,7 +126,10 @@ struct ChunkSpec {
     ast_summary: Option<serde_json::Value>,
 }
 
-pub fn ingest_dir(root: &Path, artifacts_root: Option<&Path>) -> Result<IngestDirOutput, DeclareCostError> {
+pub fn ingest_dir(
+    root: &Path,
+    artifacts_root: Option<&Path>,
+) -> Result<IngestDirOutput, DeclareCostError> {
     ingest_dir_with_cache(root, artifacts_root, None)
 }
 
@@ -297,7 +300,9 @@ pub fn ingest_dir_with_cache(
                     }
                     if let Some(info) = incremental.as_mut() {
                         info.files_cached = info.files_cached.saturating_add(1);
-                        info.chunks_cached = info.chunks_cached.saturating_add(cached.chunks.len() as u64);
+                        info.chunks_cached = info
+                            .chunks_cached
+                            .saturating_add(cached.chunks.len() as u64);
                     }
                     continue;
                 }
@@ -378,7 +383,9 @@ pub fn ingest_dir_with_cache(
                     }
                     if let Some(info) = incremental.as_mut() {
                         info.files_cached = info.files_cached.saturating_add(1);
-                        info.chunks_cached = info.chunks_cached.saturating_add(cached.chunks.len() as u64);
+                        info.chunks_cached = info
+                            .chunks_cached
+                            .saturating_add(cached.chunks.len() as u64);
                     }
                     continue;
                 }
@@ -616,7 +623,10 @@ pub fn ingest_dir_with_cache(
                 }
                 if intersects(&cached.link_path_keys, &target_path_keys)
                     || intersects(&cached.link_title_keys, &target_title_keys)
-                    || intersects(&cached.link_title_keys_casefold, &target_title_keys_casefold)
+                    || intersects(
+                        &cached.link_title_keys_casefold,
+                        &target_title_keys_casefold,
+                    )
                 {
                     docs_to_resolve.insert(path.clone());
                 }
@@ -636,8 +646,8 @@ pub fn ingest_dir_with_cache(
     });
     let snapshot_cbor = admit_core::encode_canonical_value(&snapshot_value)
         .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
-    let snapshot_json =
-        serde_json::to_vec_pretty(&snapshot_value).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let snapshot_json = serde_json::to_vec_pretty(&snapshot_value)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
     let snapshot = store_artifact(
         artifacts_root,
         SNAPSHOT_KIND,
@@ -656,8 +666,8 @@ pub fn ingest_dir_with_cache(
     });
     let parse_cbor = admit_core::encode_canonical_value(&parse_value)
         .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
-    let parse_json =
-        serde_json::to_vec_pretty(&parse_value).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let parse_json = serde_json::to_vec_pretty(&parse_value)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
     let parse = store_artifact(
         artifacts_root,
         PARSE_KIND,
@@ -866,9 +876,9 @@ fn is_ignored_by_root_gitignore(
     if patterns.is_empty() {
         return Ok(false);
     }
-    let rel = abs.strip_prefix(root).map_err(|err| {
-        DeclareCostError::Io(format!("strip_prefix {}: {}", abs.display(), err))
-    })?;
+    let rel = abs
+        .strip_prefix(root)
+        .map_err(|err| DeclareCostError::Io(format!("strip_prefix {}: {}", abs.display(), err)))?;
     let rel_str = rel.to_string_lossy().replace('\\', "/");
     let file_name = abs.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
@@ -954,7 +964,9 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 
 fn walk_files_via_git(root: &Path) -> Result<WalkFilesOutput, DeclareCostError> {
     let (toplevel, toplevel_for_git) = git_toplevel(root)?;
-    let root_rel = root.strip_prefix(&toplevel).unwrap_or_else(|_| Path::new(""));
+    let root_rel = root
+        .strip_prefix(&toplevel)
+        .unwrap_or_else(|_| Path::new(""));
     let pathspec = if root_rel.as_os_str().is_empty() {
         ".".to_string()
     } else {
@@ -1045,12 +1057,14 @@ fn git_toplevel(root: &Path) -> Result<(PathBuf, PathBuf), DeclareCostError> {
     let s = String::from_utf8_lossy(&output.stdout);
     let p = s.trim();
     if p.is_empty() {
-        return Err(DeclareCostError::Io("git rev-parse returned empty toplevel".to_string()));
+        return Err(DeclareCostError::Io(
+            "git rev-parse returned empty toplevel".to_string(),
+        ));
     }
     let toplevel_for_git = PathBuf::from(p);
-    let toplevel = toplevel_for_git.canonicalize().map_err(|err| {
-        DeclareCostError::Io(format!("canonicalize git toplevel: {}", err))
-    })?;
+    let toplevel = toplevel_for_git
+        .canonicalize()
+        .map_err(|err| DeclareCostError::Io(format!("canonicalize git toplevel: {}", err)))?;
     Ok((toplevel, toplevel_for_git))
 }
 
@@ -1095,9 +1109,9 @@ fn should_skip_rel_path(rel: &Path) -> bool {
 }
 
 fn to_rel_path(root: &Path, path: &Path) -> Result<String, DeclareCostError> {
-    let rel = path.strip_prefix(root).map_err(|err| {
-        DeclareCostError::Io(format!("strip_prefix {}: {}", path.display(), err))
-    })?;
+    let rel = path
+        .strip_prefix(root)
+        .map_err(|err| DeclareCostError::Io(format!("strip_prefix {}: {}", path.display(), err)))?;
     let mut parts = Vec::new();
     for comp in rel.components() {
         let s = comp.as_os_str().to_str().ok_or_else(|| {
@@ -1368,7 +1382,15 @@ fn chunk_rust_specs(input: &str) -> Vec<ChunkSpec> {
 
     let mut out = Vec::new();
     if boundaries.len() <= 1 {
-        return chunk_line_windows("rs", Some("rust"), "rust_fallback_window", input, 120, 24, ast_summary);
+        return chunk_line_windows(
+            "rs",
+            Some("rust"),
+            "rust_fallback_window",
+            input,
+            120,
+            24,
+            ast_summary,
+        );
     }
     boundaries.push(lines.len());
     for i in 0..(boundaries.len() - 1) {
@@ -1398,7 +1420,12 @@ fn looks_like_python_block_start(line: &str) -> bool {
     t.starts_with("def ") || t.starts_with("async def ") || t.starts_with("class ")
 }
 
-fn chunk_python_specs(input: &str, format: &str, chunk_kind: &str, extra_meta: Option<serde_json::Value>) -> Vec<ChunkSpec> {
+fn chunk_python_specs(
+    input: &str,
+    format: &str,
+    chunk_kind: &str,
+    extra_meta: Option<serde_json::Value>,
+) -> Vec<ChunkSpec> {
     let lines = split_inclusive_lines(input);
     if lines.is_empty() {
         return Vec::new();
@@ -1419,7 +1446,15 @@ fn chunk_python_specs(input: &str, format: &str, chunk_kind: &str, extra_meta: O
     boundaries.sort_unstable();
     boundaries.dedup();
     if boundaries.len() <= 1 {
-        return chunk_line_windows(format, Some("python"), "python_fallback_window", input, 100, 20, None);
+        return chunk_line_windows(
+            format,
+            Some("python"),
+            "python_fallback_window",
+            input,
+            100,
+            20,
+            None,
+        );
     }
 
     boundaries.push(lines.len());
@@ -1443,7 +1478,13 @@ fn chunk_python_specs(input: &str, format: &str, chunk_kind: &str, extra_meta: O
     out
 }
 
-fn chunk_txt_specs(input: &str, format: &str, language: Option<&str>, chunk_kind: &str, extra_meta: Option<serde_json::Value>) -> Vec<ChunkSpec> {
+fn chunk_txt_specs(
+    input: &str,
+    format: &str,
+    language: Option<&str>,
+    chunk_kind: &str,
+    extra_meta: Option<serde_json::Value>,
+) -> Vec<ChunkSpec> {
     let lines = split_inclusive_lines(input);
     if lines.is_empty() {
         return Vec::new();
@@ -1578,12 +1619,7 @@ fn chunk_ipynb_specs(input: &str) -> Result<Vec<ChunkSpec>, String> {
                 }
                 chunks
             }
-            "code" => chunk_python_specs(
-                &source,
-                "ipynb",
-                "ipynb_code_cell",
-                base_meta.clone(),
-            ),
+            "code" => chunk_python_specs(&source, "ipynb", "ipynb_code_cell", base_meta.clone()),
             _ => chunk_txt_specs(
                 &source,
                 "ipynb",
@@ -1609,7 +1645,15 @@ fn chunk_file_by_format(rel_path: &str, ext: &str, input: &str) -> Result<Vec<Ch
 
     if chunks.is_empty() && !input.trim().is_empty() {
         // Conservative fallback for formats we thought we could parse.
-        chunks = chunk_line_windows(ext, default_language_for_format(ext).as_deref(), "fallback_window", input, 120, 24, None);
+        chunks = chunk_line_windows(
+            ext,
+            default_language_for_format(ext).as_deref(),
+            "fallback_window",
+            input,
+            120,
+            24,
+            None,
+        );
     }
 
     let mut out = Vec::new();
@@ -1714,9 +1758,10 @@ fn chunk_repr_value(rel_path: &str, chunk_sha256: &str, chunk: &ChunkSpec) -> se
     let normalized_text_sha256 = sha256_hex(normalized.as_bytes());
     let tokens = tokenize_simple(&chunk.text).join("\n");
     let token_sha256 = sha256_hex(tokens.as_bytes());
-    let ast_sha256 = chunk.ast_summary.as_ref().and_then(|v| {
-        serde_json::to_vec(v).ok().map(|b| sha256_hex(&b))
-    });
+    let ast_sha256 = chunk
+        .ast_summary
+        .as_ref()
+        .and_then(|v| serde_json::to_vec(v).ok().map(|b| sha256_hex(&b)));
     serde_json::json!({
         "schema_id": CHUNK_REPR_SCHEMA_ID,
         "schema_version": 1,

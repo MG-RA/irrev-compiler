@@ -5,8 +5,9 @@ use serde::Serialize;
 
 use super::internal::payload_hash;
 use super::types::{
-    AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, CostDeclaredEvent, DeclareCostError,
-    CourtEvent, CourtEventPayload, IngestEvent, IngestEventPayload, ProjectionEvent, ProjectionEventPayload,
+    AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, CostDeclaredEvent, CourtEvent,
+    CourtEventPayload, DeclareCostError, IngestEvent, IngestEventPayload, ProjectionEvent,
+    ProjectionEventPayload,
 };
 
 pub fn default_ledger_path() -> PathBuf {
@@ -167,8 +168,8 @@ fn append_serialized_event<T: Serialize>(
             if line.trim().is_empty() {
                 continue;
             }
-            let value: serde_json::Value =
-                serde_json::from_str(line).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+            let value: serde_json::Value = serde_json::from_str(line)
+                .map_err(|err| DeclareCostError::Json(err.to_string()))?;
             if value
                 .get("event_id")
                 .and_then(|v| v.as_str())
@@ -194,10 +195,7 @@ fn append_serialized_event<T: Serialize>(
     Ok(())
 }
 
-pub fn append_event(
-    ledger_path: &Path,
-    event: &CostDeclaredEvent,
-) -> Result<(), DeclareCostError> {
+pub fn append_event(ledger_path: &Path, event: &CostDeclaredEvent) -> Result<(), DeclareCostError> {
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 
@@ -229,10 +227,7 @@ pub fn append_ingest_event(
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 
-pub fn append_court_event(
-    ledger_path: &Path,
-    event: &CourtEvent,
-) -> Result<(), DeclareCostError> {
+pub fn append_court_event(ledger_path: &Path, event: &CourtEvent) -> Result<(), DeclareCostError> {
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 
@@ -295,7 +290,5 @@ pub fn read_checked_event(
                 .map_err(|err| DeclareCostError::Json(err.to_string()));
         }
     }
-    Err(DeclareCostError::CheckedEventNotFound(
-        event_id.to_string(),
-    ))
+    Err(DeclareCostError::CheckedEventNotFound(event_id.to_string()))
 }

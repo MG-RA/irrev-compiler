@@ -84,8 +84,14 @@ fn test_witness_id_deduplication() {
     let id2 = compute_witness_id(&witness2).unwrap();
     let id3 = compute_witness_id(&witness3).unwrap();
 
-    assert_eq!(id1, id2, "witness_id must be the same despite different timestamps");
-    assert_eq!(id1, id3, "witness_id must be the same despite different metadata");
+    assert_eq!(
+        id1, id2,
+        "witness_id must be the same despite different timestamps"
+    );
+    assert_eq!(
+        id1, id3,
+        "witness_id must be the same despite different metadata"
+    );
 
     // In the ledger, these would be deduplicated by witness_id
     // Only one artifact would be stored, but multiple events can reference it

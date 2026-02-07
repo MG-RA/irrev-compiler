@@ -5,10 +5,7 @@ use crate::provider::PredicateProvider;
 use crate::trace::Trace;
 use crate::witness::Fact;
 
-pub fn evaluate_constraints(
-    env: &Env,
-    trace: &mut Trace,
-) -> Result<bool, EvalError> {
+pub fn evaluate_constraints(env: &Env, trace: &mut Trace) -> Result<bool, EvalError> {
     evaluate_constraints_with_provider(env, trace, None)
 }
 

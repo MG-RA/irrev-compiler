@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use admit_cli::calc_commands::{calc_execute, calc_plan};
-use admit_core::exact_types::ExactValue;
 use admit_core::encode_canonical_value;
+use admit_core::exact_types::ExactValue;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -181,8 +181,7 @@ fn calc_execute_rejects_output_unit_mismatch() {
     });
     write_json(&expr_path, &expr);
 
-    calc_plan(&expr_path, vec![], Some("hours".to_string()), &plan_path)
-        .expect("create plan");
+    calc_plan(&expr_path, vec![], Some("hours".to_string()), &plan_path).expect("create plan");
 
     let err = calc_execute(&plan_path, vec![], false, &witness_path, None)
         .expect_err("should fail on output unit mismatch");

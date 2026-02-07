@@ -406,9 +406,9 @@ pub fn choose_ambiguous_target(
     let in_same_root = if in_same_root.is_empty() {
         // If the source is in one vault root but the candidates only exist in another,
         // allow deterministic resolution inside that other root.
-        let all_in_same_prefix = vault_prefixes.iter().find(|prefix| {
-            candidates.iter().all(|c| c.starts_with(*prefix))
-        });
+        let all_in_same_prefix = vault_prefixes
+            .iter()
+            .find(|prefix| candidates.iter().all(|c| c.starts_with(*prefix)));
 
         if all_in_same_prefix.is_some() {
             candidates.iter().collect::<Vec<&String>>()
@@ -714,11 +714,7 @@ mod tests {
         );
         assert_eq!(
             parse_obsidian_inner("target#heading"),
-            Some((
-                "target".to_string(),
-                None,
-                Some("heading".to_string())
-            ))
+            Some(("target".to_string(), None, Some("heading".to_string())))
         );
         assert_eq!(
             parse_obsidian_inner("target#heading|alias"),
@@ -733,7 +729,8 @@ mod tests {
 
     #[test]
     fn test_extract_obsidian_links() {
-        let text = "Some text [[target1]] and [[target2|alias]] here.\n![[embed]] and [[with#heading]]";
+        let text =
+            "Some text [[target1]] and [[target2|alias]] here.\n![[embed]] and [[with#heading]]";
         let links = extract_obsidian_links(text);
 
         assert_eq!(links.len(), 4);

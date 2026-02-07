@@ -12,16 +12,16 @@
 //! (which only handles trace projection) to provide richer operations for the
 //! full projection lifecycle.
 
-use std::path::Path;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use admit_dag::GovernedDag;
 
 use crate::projection_run::{PhaseResult, ProjectionRun, RunStatus};
 use crate::{
-    DocChunkEmbeddingRow, DocEmbeddingRow, DocTitleEmbeddingRow, EmbedRunRow,
-    IngestEventRow, IngestRunRow, ProjectionEventRow, UnresolvedLinkSuggestionRow,
-    QueryArtifactRow, FunctionArtifactRow,
+    DocChunkEmbeddingRow, DocEmbeddingRow, DocTitleEmbeddingRow, EmbedRunRow, FunctionArtifactRow,
+    IngestEventRow, IngestRunRow, ProjectionEventRow, QueryArtifactRow,
+    UnresolvedLinkSuggestionRow,
 };
 
 /// Result type for projection operations
@@ -466,7 +466,12 @@ mod tests {
         let phase_results = std::collections::BTreeMap::new();
 
         store
-            .end_run("run_123", RunStatus::Complete, "2026-02-05T12:00:00Z", &phase_results)
+            .end_run(
+                "run_123",
+                RunStatus::Complete,
+                "2026-02-05T12:00:00Z",
+                &phase_results,
+            )
             .unwrap();
     }
 
@@ -481,7 +486,10 @@ mod tests {
     fn test_null_store_queries_return_empty() {
         let store = NullStore::new();
 
-        assert!(store.select_doc_files(&["irrev-vault/"]).unwrap().is_empty());
+        assert!(store
+            .select_doc_files(&["irrev-vault/"])
+            .unwrap()
+            .is_empty());
         assert!(store
             .select_unresolved_links(&["irrev-vault/"], &["missing"], 100, None)
             .unwrap()

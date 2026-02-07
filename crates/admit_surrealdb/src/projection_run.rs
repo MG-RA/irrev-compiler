@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// Represents a single projection execution with full lineage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,13 +94,19 @@ impl ProjectionRun {
         }
 
         let total_phases = self.phases_enabled.len();
-        let completed_phases = self.phase_results.values()
+        let completed_phases = self
+            .phase_results
+            .values()
             .filter(|r| r.status == PhaseStatus::Complete)
             .count();
-        let failed_phases = self.phase_results.values()
+        let failed_phases = self
+            .phase_results
+            .values()
             .filter(|r| r.status == PhaseStatus::Failed)
             .count();
-        let partial_phases = self.phase_results.values()
+        let partial_phases = self
+            .phase_results
+            .values()
             .filter(|r| r.status == PhaseStatus::Partial)
             .count();
 
@@ -494,13 +500,7 @@ mod tests {
         assert_eq!(failed.status, PhaseStatus::Failed);
         assert!(failed.error.is_some());
 
-        let partial = PhaseResult::partial(
-            "test".to_string(),
-            10,
-            8,
-            vec![],
-            100,
-        );
+        let partial = PhaseResult::partial("test".to_string(), 10, 8, vec![], 100);
         assert_eq!(partial.status, PhaseStatus::Partial);
         assert_eq!(partial.successful_batches, 8);
     }

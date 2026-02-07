@@ -166,7 +166,10 @@ fn ingest_run_record_artifact(
     )
 }
 
-pub fn ingest_dir_protocol(root: &Path, artifacts_root: Option<&Path>) -> Result<IngestDirProtocolOutput, DeclareCostError> {
+pub fn ingest_dir_protocol(
+    root: &Path,
+    artifacts_root: Option<&Path>,
+) -> Result<IngestDirProtocolOutput, DeclareCostError> {
     ingest_dir_protocol_with_cache(root, artifacts_root, None)
 }
 

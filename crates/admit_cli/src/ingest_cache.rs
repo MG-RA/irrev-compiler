@@ -118,9 +118,8 @@ impl IngestCache {
             .map_err(|e| format!("serialize cache: {}", e))?;
         if let Some(parent) = self.cache_path.parent() {
             if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!("create cache parent {}: {}", parent.display(), e)
-                })?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("create cache parent {}: {}", parent.display(), e))?;
             }
         }
         std::fs::write(&self.cache_path, json)

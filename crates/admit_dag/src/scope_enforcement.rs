@@ -363,8 +363,7 @@ mod tests {
         assert!(build_match.matches(&EdgeType::BuildDepends));
         assert!(!build_match.matches(&EdgeType::WitnessOf));
 
-        let mutation_match =
-            EdgeTypeMatch::MutationWithMinRisk(MutationRiskClass::LocalPersistent);
+        let mutation_match = EdgeTypeMatch::MutationWithMinRisk(MutationRiskClass::LocalPersistent);
         assert!(mutation_match.matches(&EdgeType::MutationCommitment {
             harness_id: "test".to_string(),
             risk_class: MutationRiskClass::LocalPersistent,

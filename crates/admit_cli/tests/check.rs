@@ -111,15 +111,13 @@ fn check_appends_admissibility_checked_event() {
     let lines: Vec<_> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
     assert_eq!(lines.len(), 2);
 
-    let event: serde_json::Value =
-        serde_json::from_str(lines[1]).expect("parse checked event");
+    let event: serde_json::Value = serde_json::from_str(lines[1]).expect("parse checked event");
     assert_eq!(
         event.get("event_type").and_then(|v| v.as_str()),
         Some("admissibility.checked")
     );
     assert_eq!(
-        event.get("cost_declared_event_id")
-            .and_then(|v| v.as_str()),
+        event.get("cost_declared_event_id").and_then(|v| v.as_str()),
         Some(cost_event.event_id.as_str())
     );
 

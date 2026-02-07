@@ -75,8 +75,7 @@ impl DagTraceCollector {
         let mut dag = self.dag.clone();
         sort_edges(&mut dag);
 
-        let value = serde_json::to_value(&dag)
-            .map_err(|err| format!("dag to value: {}", err))?;
+        let value = serde_json::to_value(&dag).map_err(|err| format!("dag to value: {}", err))?;
         admit_core::encode_canonical_value(&value)
             .map_err(|err| format!("canonical cbor encode: {}", err.0))
     }
@@ -126,7 +125,9 @@ fn edge_type_key(edge_type: &EdgeType) -> (u8, String) {
             harness_id,
             risk_class,
         } => (3, format!("{}:{:?}", harness_id, risk_class)),
-        EdgeType::CostDisplacement { cost, displaced_to } => (4, format!("{}:{}", cost, displaced_to)),
+        EdgeType::CostDisplacement { cost, displaced_to } => {
+            (4, format!("{}:{}", cost, displaced_to))
+        }
     }
 }
 
@@ -230,4 +231,3 @@ mod tests {
         assert_eq!(bytes_a, bytes_b, "encoding must be stable");
     }
 }
-

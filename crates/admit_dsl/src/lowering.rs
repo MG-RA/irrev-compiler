@@ -132,7 +132,10 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     continue;
                 };
 
-                if pending_constraint_tags.iter().any(|(k, _, _)| k == &stmt.key) {
+                if pending_constraint_tags
+                    .iter()
+                    .any(|(k, _, _)| k == &stmt.key)
+                {
                     errors.push(format!(
                         "duplicate tag key for constraint {}: {}",
                         cur, stmt.key
@@ -214,9 +217,8 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                 });
                 if let Some(constraint_id) = id.as_ref() {
                     // Emit tags deterministically (key,value ordering) so the program hash is stable.
-                    pending_constraint_tags.sort_by(|(ak, av, _), (bk, bv, _)| {
-                        (ak, av).cmp(&(bk, bv))
-                    });
+                    pending_constraint_tags
+                        .sort_by(|(ak, av, _), (bk, bv, _)| (ak, av).cmp(&(bk, bv)));
                     for (key, value, tag_span) in pending_constraint_tags.drain(..) {
                         rest.push(admit_core::Stmt::ConstraintMeta {
                             id: constraint_id.clone(),

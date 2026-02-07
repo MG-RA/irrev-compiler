@@ -18,4 +18,3 @@ pub struct LintFinding {
     pub message: String,
     pub evidence: Option<Value>,
 }
-

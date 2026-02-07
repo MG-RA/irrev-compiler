@@ -40,8 +40,8 @@ impl NodeId {
 
         let mut bytes = [0u8; 32];
         for i in 0..32 {
-            bytes[i] = u8::from_str_radix(&s[i*2..i*2+2], 16)
-                .map_err(|e| format!("invalid hex at position {}: {}", i*2, e))?;
+            bytes[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
+                .map_err(|e| format!("invalid hex at position {}: {}", i * 2, e))?;
         }
 
         Ok(NodeId(bytes))
@@ -96,10 +96,10 @@ impl<'de> Deserialize<'de> for NodeId {
 /// }))
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeIdPayload {
-    pub tag: &'static str,       // "admit_dag_node_v1" — domain separator + version
+    pub tag: &'static str, // "admit_dag_node_v1" — domain separator + version
     pub kind: NodeKind,
-    pub inputs: Vec<NodeId>,     // sorted by raw [u8;32] bytes (lexicographic), NOT by hex string
-    pub params_cbor: Vec<u8>,    // canonical CBOR of kind-specific params (storage form)
+    pub inputs: Vec<NodeId>, // sorted by raw [u8;32] bytes (lexicographic), NOT by hex string
+    pub params_cbor: Vec<u8>, // canonical CBOR of kind-specific params (storage form)
 }
 
 impl NodeIdPayload {
@@ -108,13 +108,14 @@ impl NodeIdPayload {
         // Create a deterministic map representation
         let mut map = BTreeMap::new();
         map.insert("tag", serde_json::json!(self.tag));
-        map.insert("kind", serde_json::to_value(&self.kind)
-            .map_err(|e| format!("failed to serialize kind: {}", e))?);
+        map.insert(
+            "kind",
+            serde_json::to_value(&self.kind)
+                .map_err(|e| format!("failed to serialize kind: {}", e))?,
+        );
 
         // Serialize inputs as hex strings (already sorted by raw bytes)
-        let inputs_hex: Vec<String> = self.inputs.iter()
-            .map(|id| id.to_string())
-            .collect();
+        let inputs_hex: Vec<String> = self.inputs.iter().map(|id| id.to_string()).collect();
         map.insert("inputs", serde_json::json!(inputs_hex));
 
         // params_cbor is already in CBOR form - we hex-encode it for the JSON intermediate
@@ -122,9 +123,10 @@ impl NodeIdPayload {
         map.insert("params", serde_json::json!(params_hex));
 
         // Use admit_core's canonical encoding
-        admit_core::encode_canonical_value(&serde_json::to_value(map)
-            .map_err(|e| format!("failed to create map: {}", e))?)
-            .map_err(|e| format!("canonical encoding failed: {}", e))
+        admit_core::encode_canonical_value(
+            &serde_json::to_value(map).map_err(|e| format!("failed to create map: {}", e))?,
+        )
+        .map_err(|e| format!("canonical encoding failed: {}", e))
     }
 }
 
@@ -147,21 +149,48 @@ pub enum NodeCategory {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum NodeKind {
     // Source — identity via content hash, not path/location
-    RulesetSource { content_hash: String },
-    RegistrySource { content_hash: String },
-    DirectorySnapshot { snapshot_sha256: String },
-    FileAtPath { path: String, content_sha256: String },
+    RulesetSource {
+        content_hash: String,
+    },
+    RegistrySource {
+        content_hash: String,
+    },
+    DirectorySnapshot {
+        snapshot_sha256: String,
+    },
+    FileAtPath {
+        path: String,
+        content_sha256: String,
+    },
 
     // Derived — identity via input content, not module names
-    ParsedIr { content_hash: String },
-    DependencyGraph { content_hash: String },
-    RegistryTable { schema_id: String },
-    SnapshotExport { snapshot_hash: String },
-    LintReport { content_hash: String },
-    FactsBundle { bundle_hash: String },
-    CalcPlan { plan_hash: String },
-    CalcResult { witness_hash: String },
-    DirectoryParse { parse_sha256: String },
+    ParsedIr {
+        content_hash: String,
+    },
+    DependencyGraph {
+        content_hash: String,
+    },
+    RegistryTable {
+        schema_id: String,
+    },
+    SnapshotExport {
+        snapshot_hash: String,
+    },
+    LintReport {
+        content_hash: String,
+    },
+    FactsBundle {
+        bundle_hash: String,
+    },
+    CalcPlan {
+        plan_hash: String,
+    },
+    CalcResult {
+        witness_hash: String,
+    },
+    DirectoryParse {
+        parse_sha256: String,
+    },
     TextChunk {
         chunk_sha256: String,
         doc_path: String,
@@ -170,16 +199,36 @@ pub enum NodeKind {
     },
 
     // Governance — event_id is fine only if already content-addressed
-    PlanArtifact { plan_hash: String, template_id: String },
-    Approval { plan_hash: String, approver_hash: String },
-    ExecutionLog { log_hash: String },
-    Witness { witness_sha256: String, schema_id: String },
-    CostDeclaration { content_hash: String },
-    AdmissibilityCheck { content_hash: String },
-    AdmissibilityExecution { content_hash: String },
+    PlanArtifact {
+        plan_hash: String,
+        template_id: String,
+    },
+    Approval {
+        plan_hash: String,
+        approver_hash: String,
+    },
+    ExecutionLog {
+        log_hash: String,
+    },
+    Witness {
+        witness_sha256: String,
+        schema_id: String,
+    },
+    CostDeclaration {
+        content_hash: String,
+    },
+    AdmissibilityCheck {
+        content_hash: String,
+    },
+    AdmissibilityExecution {
+        content_hash: String,
+    },
 
     // Explicit authority root — see "Authority source nodes"
-    AuthorityRoot { authority_id: String, authority_hash: String },
+    AuthorityRoot {
+        authority_id: String,
+        authority_hash: String,
+    },
 }
 
 impl NodeKind {
@@ -189,9 +238,7 @@ impl NodeKind {
             NodeKind::RulesetSource { .. }
             | NodeKind::RegistrySource { .. }
             | NodeKind::DirectorySnapshot { .. }
-            | NodeKind::FileAtPath { .. } => {
-                NodeCategory::Source
-            }
+            | NodeKind::FileAtPath { .. } => NodeCategory::Source,
             NodeKind::ParsedIr { .. }
             | NodeKind::DependencyGraph { .. }
             | NodeKind::RegistryTable { .. }
@@ -220,9 +267,9 @@ pub struct DagNode {
     pub id: NodeId,
     pub category: NodeCategory,
     pub kind: NodeKind,
-    pub scope: ScopeTag,                        // metadata, not part of identity
+    pub scope: ScopeTag, // metadata, not part of identity
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub artifact_ref: Option<ArtifactRef>,      // reuses existing type from admit_core
+    pub artifact_ref: Option<ArtifactRef>, // reuses existing type from admit_core
 
     /// Extension point for experimental kinds. Hashed into identity if present.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,9 +323,7 @@ impl DagNode {
 // Temporary hex encoding utility (replace with hex crate in production)
 mod hex {
     pub fn encode(bytes: &[u8]) -> String {
-        bytes.iter()
-            .map(|b| format!("{:02x}", b))
-            .collect()
+        bytes.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
 

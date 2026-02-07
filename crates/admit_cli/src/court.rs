@@ -52,7 +52,10 @@ pub fn register_query_artifact(
         COURT_QUERY_SCHEMA_ID,
         &cbor,
         "cbor",
-        Some(serde_json::to_vec_pretty(&projection).map_err(|err| DeclareCostError::Json(err.to_string()))?),
+        Some(
+            serde_json::to_vec_pretty(&projection)
+                .map_err(|err| DeclareCostError::Json(err.to_string()))?,
+        ),
         registry,
     )
 }
@@ -91,7 +94,10 @@ pub fn register_function_artifact(
         COURT_FUNCTION_SCHEMA_ID,
         &cbor,
         "cbor",
-        Some(serde_json::to_vec_pretty(&projection).map_err(|err| DeclareCostError::Json(err.to_string()))?),
+        Some(
+            serde_json::to_vec_pretty(&projection)
+                .map_err(|err| DeclareCostError::Json(err.to_string()))?,
+        ),
         registry,
     )
 }

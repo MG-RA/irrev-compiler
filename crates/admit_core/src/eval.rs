@@ -72,7 +72,8 @@ pub fn eval_with_provider(
             let boundary_triggered = evaluate_scope_changes(&env, &mut trace);
             let displacement_trace =
                 build_displacement_trace(&env, &mut trace, opts.displacement_mode.clone())?;
-            let constraints_triggered = evaluate_constraints_with_provider(&env, &mut trace, provider)?;
+            let constraints_triggered =
+                evaluate_constraints_with_provider(&env, &mut trace, provider)?;
             let triggered = boundary_triggered || constraints_triggered;
             let verdict = if triggered {
                 Verdict::Inadmissible

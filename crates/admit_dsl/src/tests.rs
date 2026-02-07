@@ -30,8 +30,7 @@ mod tests {
     #[test]
     fn parse_error_scope_change_missing_mode_fixture() {
         let source = include_str!("../../../testdata/programs/scope-change-missing-mode.adm");
-        let err =
-            parse_program(source, "scope-change-missing-mode.adm").expect_err("parse errors");
+        let err = parse_program(source, "scope-change-missing-mode.adm").expect_err("parse errors");
         assert!(!err.is_empty());
     }
 
@@ -135,18 +134,9 @@ bucket boundary_loss
 scope_change main -> prod widen { allow; cost 1 "risk_points" -> boundary_loss }
 "#;
         let program = parse_program(source, "scope-change-block.adm").expect("parse program");
-        assert!(matches!(
-            program.statements[4],
-            Stmt::ScopeChange(_)
-        ));
-        assert!(matches!(
-            program.statements[5],
-            Stmt::AllowScopeChange(_)
-        ));
-        assert!(matches!(
-            program.statements[6],
-            Stmt::ScopeChangeRule(_)
-        ));
+        assert!(matches!(program.statements[4], Stmt::ScopeChange(_)));
+        assert!(matches!(program.statements[5], Stmt::AllowScopeChange(_)));
+        assert!(matches!(program.statements[6], Stmt::ScopeChangeRule(_)));
     }
 
     #[test]
@@ -158,12 +148,8 @@ scope main
 
 @inadmissible_if erase_allowed crew_fatigue
 "#;
-        let program =
-            parse_program(source, "inadmissible-attr.adm").expect("parse program");
-        assert!(matches!(
-            program.statements[3],
-            Stmt::InadmissibleIf { .. }
-        ));
+        let program = parse_program(source, "inadmissible-attr.adm").expect("parse program");
+        assert!(matches!(program.statements[3], Stmt::InadmissibleIf { .. }));
     }
 
     #[test]
@@ -176,10 +162,7 @@ scope main
 inadmissible_if displaced_total(boundary_loss) > 1 "risk_points"
 "#;
         let program = parse_program(source, "pred-call.adm").expect("parse program");
-        assert!(matches!(
-            program.statements[3],
-            Stmt::InadmissibleIf { .. }
-        ));
+        assert!(matches!(program.statements[3], Stmt::InadmissibleIf { .. }));
     }
 
     #[test]
@@ -198,10 +181,9 @@ query witness
 "#;
         let program = parse_program(source, "tags-and-lint.adm").expect("parse program");
         assert!(program.statements.iter().any(|s| matches!(s, Stmt::Tag(_))));
-        assert!(program
-            .statements
-            .iter()
-            .any(|s| matches!(s, Stmt::Query(q) if matches!(q.kind, crate::ast::QueryKind::Lint { .. }))));
+        assert!(program.statements.iter().any(
+            |s| matches!(s, Stmt::Query(q) if matches!(q.kind, crate::ast::QueryKind::Lint { .. }))
+        ));
 
         let ir = lower_to_ir(program).expect("lower to ir");
         assert!(ir
@@ -230,10 +212,7 @@ allow_scope_change main -> prod
 "#;
         let program = parse_program(source, "allow-scope-only.adm").expect("parse program");
         assert_eq!(program.statements.len(), 4);
-        assert!(matches!(
-            program.statements[3],
-            Stmt::AllowScopeChange(_)
-        ));
+        assert!(matches!(program.statements[3], Stmt::AllowScopeChange(_)));
     }
 
     #[test]

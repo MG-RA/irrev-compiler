@@ -37,8 +37,7 @@ pub fn check_authority_reachability(dag: &GovernedDag) -> Vec<AuthorityViolation
 
     // Check each node that requires authority
     for (node_id, node) in dag.iter_nodes() {
-        if requires_authority(&node.scope.as_str()) && !reachable_from_authority.contains(node_id)
-        {
+        if requires_authority(&node.scope.as_str()) && !reachable_from_authority.contains(node_id) {
             violations.push(AuthorityViolation {
                 node_id: *node_id,
                 scope: node.scope.to_string(),

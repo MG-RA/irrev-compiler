@@ -75,13 +75,7 @@ pub fn detect_cycles_in_build_order(dag: &GovernedDag) -> ValidationResult<()> {
     // Run DFS from each node
     for node_id in dag.nodes().keys() {
         if !visited.contains(node_id) {
-            detect_cycle_dfs(
-                *node_id,
-                &adj,
-                &mut visiting,
-                &mut visited,
-                &mut path,
-            )?;
+            detect_cycle_dfs(*node_id, &adj, &mut visiting, &mut visited, &mut path)?;
         }
     }
 

@@ -20,4 +20,3 @@ pub struct IngestEventRow {
     pub chunks: Option<u64>,
     pub total_bytes: Option<u64>,
 }
-

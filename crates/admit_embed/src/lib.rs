@@ -104,7 +104,12 @@ impl OllamaEmbedder {
             "prompt": self.clamp_input(input),
         });
         let body = serde_json::to_vec(&payload).map_err(|err| format!("json encode: {}", err))?;
-        let json = http_post_json(&self.cfg.endpoint, "/api/embeddings", &body, self.cfg.timeout_ms)?;
+        let json = http_post_json(
+            &self.cfg.endpoint,
+            "/api/embeddings",
+            &body,
+            self.cfg.timeout_ms,
+        )?;
         let arr = json
             .get("embedding")
             .and_then(|v| v.as_array())
@@ -135,7 +140,12 @@ fn parse_embedding_vec(arr: &[serde_json::Value]) -> Result<Vec<f32>, String> {
     Ok(out)
 }
 
-fn http_post_json(endpoint: &str, path: &str, body: &[u8], timeout_ms: u64) -> Result<serde_json::Value, String> {
+fn http_post_json(
+    endpoint: &str,
+    path: &str,
+    body: &[u8],
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
     let url = endpoint.trim_end_matches('/');
     let (host, port) = parse_http_host_port(url)?;
 
@@ -172,9 +182,9 @@ fn http_post_json(endpoint: &str, path: &str, body: &[u8], timeout_ms: u64) -> R
 
 fn parse_http_host_port(endpoint: &str) -> Result<(String, u16), String> {
     let e = endpoint.trim();
-    let e = e
-        .strip_prefix("http://")
-        .ok_or_else(|| "ollama endpoint must start with http:// (https not supported in v0)".to_string())?;
+    let e = e.strip_prefix("http://").ok_or_else(|| {
+        "ollama endpoint must start with http:// (https not supported in v0)".to_string()
+    })?;
     let e = e.trim_end_matches('/');
     if let Some((h, p)) = e.split_once(':') {
         let port: u16 = p.parse().map_err(|_| "invalid port".to_string())?;
@@ -214,7 +224,9 @@ fn read_http_response(stream: TcpStream) -> Result<(u16, Vec<u8>), String> {
     }
 
     if let Some(cl) = headers.get("content-length") {
-        let len: usize = cl.parse().map_err(|_| "invalid content-length".to_string())?;
+        let len: usize = cl
+            .parse()
+            .map_err(|_| "invalid content-length".to_string())?;
         body.resize(len, 0);
         reader
             .read_exact(&mut body)
@@ -273,7 +285,8 @@ fn parse_status_code(head: &str) -> Result<u16, String> {
     let mut parts = head.split_whitespace();
     let _http = parts.next().ok_or_else(|| "bad status line".to_string())?;
     let code = parts.next().ok_or_else(|| "bad status line".to_string())?;
-    code.parse::<u16>().map_err(|_| "bad status code".to_string())
+    code.parse::<u16>()
+        .map_err(|_| "bad status code".to_string())
 }
 
 #[cfg(test)]

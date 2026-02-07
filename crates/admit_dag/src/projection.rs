@@ -8,4 +8,3 @@ pub trait ProjectionStore {
         dag: &GovernedDag,
     ) -> Result<(), String>;
 }
-

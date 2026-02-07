@@ -4,10 +4,7 @@ use admit_cli::verify_ledger;
 
 fn testdata_path(name: &str) -> PathBuf {
     let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    base.join("..")
-        .join("..")
-        .join("testdata")
-        .join(name)
+    base.join("..").join("..").join("testdata").join(name)
 }
 
 #[test]

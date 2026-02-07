@@ -35,6 +35,15 @@ fn init_project_creates_expected_scaffold() {
             .exists(),
         "missing mini fixture readme"
     );
+    let admit_toml = fs::read_to_string(dir.join("admit.toml")).expect("read admit.toml");
+    assert!(
+        admit_toml.contains("[scopes]"),
+        "admit.toml should include [scopes] section"
+    );
+    assert!(
+        admit_toml.contains("rust.ir_lint"),
+        "admit.toml should enable rust.ir_lint by default"
+    );
 }
 
 #[test]

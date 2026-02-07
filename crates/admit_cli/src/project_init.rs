@@ -17,6 +17,9 @@ enabled = ["dag_trace", "doc_files", "doc_chunks", "obsidian_vault_links"]
 failure_mode = "warn"
 max_sql_bytes = 1000000
 
+[scopes]
+enabled = ["rust.ir_lint", "markdown.chunk"]
+
 [projection.batch_sizes]
 doc_chunks = 200
 doc_files = 500

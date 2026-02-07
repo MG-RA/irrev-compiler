@@ -36,6 +36,7 @@ pub enum DeclareCostError {
     PlanAnswersExtraPrompt(String),
     PlanAnswersDuplicatePrompt(String),
     PlanAnswersDecode(String),
+    PlanMarkdownParse(String),
     PlanWitnessMissing(String),
     MetaRegistryMissing(String),
     MetaRegistryDecode(String),
@@ -139,6 +140,9 @@ impl fmt::Display for DeclareCostError {
             }
             DeclareCostError::PlanAnswersDecode(err) => {
                 write!(f, "plan answers decode error: {}", err)
+            }
+            DeclareCostError::PlanMarkdownParse(err) => {
+                write!(f, "plan markdown parse error: {}", err)
             }
             DeclareCostError::PlanWitnessMissing(plan_id) => {
                 write!(f, "plan witness not found: {}", plan_id)

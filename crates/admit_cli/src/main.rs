@@ -18,12 +18,13 @@ use admit_cli::{
     append_ingest_event, append_plan_created_event, append_projection_event, build_court_event,
     build_projection_event, check_cost_declared, create_plan, declare_cost, default_artifacts_dir,
     default_ledger_path, execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache,
-    list_artifacts, load_meta_registry, read_artifact_projection, read_file_bytes,
-    register_function_artifact, register_query_artifact, registry_build, registry_init,
-    render_plan_text, scope_add, scope_list, scope_show, scope_verify, store_value_artifact,
-    verify_ledger, verify_witness, ArtifactInput, DeclareCostInput, MetaRegistryV0, PlanNewInput,
-    ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
-    ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
+    list_artifacts, load_meta_registry, parse_plan_answers_markdown, read_artifact_projection,
+    read_file_bytes, register_function_artifact, register_query_artifact, registry_build,
+    registry_init, render_plan_prompt_template, render_plan_text, scope_add, scope_list,
+    scope_show, scope_verify, store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
+    DeclareCostInput, MetaRegistryV0, PlanNewInput, ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode,
+    ScopeListArgs as ScopeListArgsLib, ScopeShowArgs as ScopeShowArgsLib,
+    ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -547,6 +548,8 @@ enum GitCommands {
     Snapshot(GitSnapshotArgs),
     Diff(GitDiffArgs),
     Provenance(GitProvenanceArgs),
+    VerifyCommitPlan(GitVerifyCommitPlanArgs),
+    InstallPlanHook(GitInstallPlanHookArgs),
 }
 
 #[derive(Parser)]
@@ -700,6 +703,61 @@ struct GitProvenanceArgs {
     /// Output JSON summary
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Parser)]
+struct GitVerifyCommitPlanArgs {
+    /// Repository root path (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    repo: PathBuf,
+
+    /// Commit message file to validate (used by commit-msg hook)
+    #[arg(long, value_name = "PATH", conflicts_with = "commit")]
+    message_file: Option<PathBuf>,
+
+    /// Existing commit/ref whose message will be validated (default: HEAD)
+    #[arg(
+        long,
+        value_name = "REF",
+        default_value = "HEAD",
+        conflicts_with = "message_file"
+    )]
+    commit: String,
+
+    /// Artifact store root (default: out/artifacts). Relative paths are resolved from repo root.
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Accept a plan hash in the commit message without requiring a local plan_witness artifact.
+    #[arg(long)]
+    allow_missing_artifact: bool,
+
+    /// Output JSON summary
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct GitInstallPlanHookArgs {
+    /// Repository root path (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    repo: PathBuf,
+
+    /// Artifact store root for hook validation (default: out/artifacts). Relative paths are resolved from repo root.
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+
+    /// Accept a plan hash in commit message even if matching artifact is not found.
+    #[arg(long)]
+    allow_missing_artifact: bool,
+
+    /// Binary name/path for the CLI command in the hook (default: admit-cli)
+    #[arg(long, default_value = "admit-cli")]
+    admit_cli_bin: String,
+
+    /// Overwrite an existing commit-msg hook.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Subcommand)]
@@ -1119,6 +1177,8 @@ enum PlanCommands {
     New(PlanNewArgs),
     Show(PlanShowArgs),
     Export(PlanExportArgs),
+    PromptTemplate(PlanPromptTemplateArgs),
+    AnswersFromMd(PlanAnswersFromMdArgs),
 }
 
 #[derive(Parser)]
@@ -1182,6 +1242,28 @@ struct PlanExportArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct PlanPromptTemplateArgs {
+    /// Output path (writes to stdout when omitted)
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+
+    /// Omit guidance text blocks
+    #[arg(long)]
+    no_guidance: bool,
+}
+
+#[derive(Parser)]
+struct PlanAnswersFromMdArgs {
+    /// Input Markdown path
+    #[arg(long, value_name = "PATH", required = true)]
+    input: PathBuf,
+
+    /// Output JSON path (writes to stdout when omitted)
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -1272,6 +1354,12 @@ fn main() {
             PlanCommands::New(new_args) => run_plan_new(new_args, dag_trace_out, &mut projection),
             PlanCommands::Show(show_args) => run_plan_show(show_args, dag_trace_out),
             PlanCommands::Export(export_args) => run_plan_export(export_args, dag_trace_out),
+            PlanCommands::PromptTemplate(template_args) => {
+                run_plan_prompt_template(template_args, dag_trace_out)
+            }
+            PlanCommands::AnswersFromMd(parse_args) => {
+                run_plan_answers_from_md(parse_args, dag_trace_out)
+            }
         },
         Commands::Calc(args) => match args.command {
             CalcCommands::Plan(plan_args) => {
@@ -1756,6 +1844,8 @@ fn run_git(args: GitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
         GitCommands::Snapshot(snapshot_args) => run_git_snapshot(snapshot_args),
         GitCommands::Diff(diff_args) => run_git_diff(diff_args),
         GitCommands::Provenance(provenance_args) => run_git_provenance(provenance_args),
+        GitCommands::VerifyCommitPlan(verify_args) => run_git_verify_commit_plan(verify_args),
+        GitCommands::InstallPlanHook(hook_args) => run_git_install_plan_hook(hook_args),
     }
 }
 
@@ -2048,6 +2138,244 @@ fn run_git_provenance(args: GitProvenanceArgs) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn run_git_verify_commit_plan(args: GitVerifyCommitPlanArgs) -> Result<(), String> {
+    let repo = resolve_repo_path(&args.repo)?;
+    let artifacts_dir = resolve_artifacts_dir(&repo, args.artifacts_dir);
+
+    let (source, message) = if let Some(path) = args.message_file.as_ref() {
+        let message_path = if path.is_absolute() {
+            path.clone()
+        } else {
+            repo.join(path)
+        };
+        let message = std::fs::read_to_string(&message_path)
+            .map_err(|e| format!("read {}: {}", message_path.display(), e))?;
+        (format!("message_file:{}", message_path.display()), message)
+    } else {
+        let message = read_commit_message_from_ref(&repo, &args.commit)?;
+        (format!("commit:{}", args.commit), message)
+    };
+
+    let plan_witness_hash = extract_plan_witness_hash_from_message(&message)?;
+    let artifact_present = plan_witness_artifact_exists(&artifacts_dir, &plan_witness_hash);
+    if !artifact_present && !args.allow_missing_artifact {
+        return Err(format!(
+            "plan witness artifact not found for hash {} (expected {} or {})",
+            plan_witness_hash,
+            artifacts_dir
+                .join("plan_witness")
+                .join(format!("{}.cbor", plan_witness_hash))
+                .display(),
+            artifacts_dir
+                .join("plan_witness")
+                .join(format!("{}.json", plan_witness_hash))
+                .display()
+        ));
+    }
+
+    if args.json {
+        let output = serde_json::json!({
+            "valid": true,
+            "plan_witness_hash": plan_witness_hash,
+            "artifact_present": artifact_present,
+            "source": source,
+            "artifacts_dir": artifacts_dir.display().to_string(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&output).map_err(|e| format!("json encode: {}", e))?
+        );
+    } else {
+        println!("valid=true");
+        println!("plan_witness_hash={}", plan_witness_hash);
+        println!("artifact_present={}", artifact_present);
+        println!("source={}", source);
+        println!("artifacts_dir={}", artifacts_dir.display());
+    }
+
+    Ok(())
+}
+
+fn run_git_install_plan_hook(args: GitInstallPlanHookArgs) -> Result<(), String> {
+    let repo = resolve_repo_path(&args.repo)?;
+    let artifacts_dir = resolve_artifacts_dir(&repo, args.artifacts_dir);
+    let git_dir = resolve_git_dir(&repo)?;
+    let hooks_dir = git_dir.join("hooks");
+    if !hooks_dir.exists() {
+        std::fs::create_dir_all(&hooks_dir)
+            .map_err(|e| format!("create hooks dir {}: {}", hooks_dir.display(), e))?;
+    }
+    let hook_path = hooks_dir.join("commit-msg");
+    if hook_path.exists() && !args.force {
+        return Err(format!(
+            "hook already exists at {} (use --force to overwrite)",
+            hook_path.display()
+        ));
+    }
+
+    let repo_text = repo.display().to_string().replace('\\', "/");
+    let artifacts_text = artifacts_dir.display().to_string().replace('\\', "/");
+    let mut script = String::new();
+    script.push_str("#!/bin/sh\n");
+    script.push_str("set -eu\n");
+    script.push_str(&format!(
+        "ADMIT_CLI_BIN=\"${{ADMIT_CLI_BIN:-{}}}\"\n",
+        args.admit_cli_bin
+    ));
+    script.push_str(&format!(
+        "\"$ADMIT_CLI_BIN\" git verify-commit-plan --repo {} --message-file \"$1\" --artifacts-dir {}",
+        shell_single_quote(&repo_text),
+        shell_single_quote(&artifacts_text)
+    ));
+    if args.allow_missing_artifact {
+        script.push_str(" --allow-missing-artifact");
+    }
+    script.push('\n');
+
+    std::fs::write(&hook_path, script)
+        .map_err(|e| format!("write hook {}: {}", hook_path.display(), e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&hook_path)
+            .map_err(|e| format!("metadata {}: {}", hook_path.display(), e))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&hook_path, perms)
+            .map_err(|e| format!("chmod {}: {}", hook_path.display(), e))?;
+    }
+
+    println!("hook_installed={}", hook_path.display());
+    println!("repo={}", repo.display());
+    println!("artifacts_dir={}", artifacts_dir.display());
+    if args.allow_missing_artifact {
+        println!("allow_missing_artifact=true");
+    }
+    Ok(())
+}
+
+fn read_commit_message_from_ref(repo: &Path, reference: &str) -> Result<String, String> {
+    git_output(
+        repo,
+        &[
+            String::from("show"),
+            String::from("-s"),
+            String::from("--format=%B"),
+            reference.to_string(),
+        ],
+    )
+}
+
+fn extract_plan_witness_hash_from_message(message: &str) -> Result<String, String> {
+    let mut found: Option<String> = None;
+    for (line_idx, line) in message.lines().enumerate() {
+        match parse_plan_hash_from_line(line) {
+            Ok(Some(hash)) => {
+                if let Some(existing) = found.as_ref() {
+                    if existing != &hash {
+                        return Err(format!(
+                            "multiple plan hashes found in commit message: {} and {}",
+                            existing, hash
+                        ));
+                    }
+                } else {
+                    found = Some(hash);
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                return Err(format!(
+                    "invalid plan witness hash on line {}: {}",
+                    line_idx + 1,
+                    err
+                ))
+            }
+        }
+    }
+    found.ok_or_else(|| {
+        "missing plan witness hash in commit message (add `Plan-Witness: <64-hex>`)".to_string()
+    })
+}
+
+fn parse_plan_hash_from_line(line: &str) -> Result<Option<String>, String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    for sep in [':', '='] {
+        if let Some((label, value)) = trimmed.split_once(sep) {
+            let normalized = normalize_plan_label(label);
+            if normalized != "planwitness" && normalized != "planid" && normalized != "planhash" {
+                continue;
+            }
+            let token = value
+                .trim()
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches(|ch: char| ",.;)]}".contains(ch));
+            if token.is_empty() {
+                return Err("missing hash value after plan label".to_string());
+            }
+            if !is_valid_sha256_hex(token) {
+                return Err(format!(
+                    "expected 64 hex characters after plan label, got `{}`",
+                    token
+                ));
+            }
+            return Ok(Some(token.to_ascii_lowercase()));
+        }
+    }
+    Ok(None)
+}
+
+fn normalize_plan_label(label: &str) -> String {
+    label
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect::<String>()
+}
+
+fn is_valid_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn resolve_artifacts_dir(repo: &Path, artifacts_dir: Option<PathBuf>) -> PathBuf {
+    let dir = artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    if dir.is_absolute() {
+        dir
+    } else {
+        repo.join(dir)
+    }
+}
+
+fn plan_witness_artifact_exists(artifacts_dir: &Path, plan_hash: &str) -> bool {
+    let kind_dir = artifacts_dir.join("plan_witness");
+    let cbor = kind_dir.join(format!("{}.cbor", plan_hash));
+    let json = kind_dir.join(format!("{}.json", plan_hash));
+    cbor.exists() || json.exists()
+}
+
+fn resolve_git_dir(repo: &Path) -> Result<PathBuf, String> {
+    let git_dir_text = git_output(
+        repo,
+        &[String::from("rev-parse"), String::from("--git-dir")],
+    )?;
+    let git_dir = PathBuf::from(git_dir_text.trim());
+    if git_dir.is_absolute() {
+        Ok(git_dir)
+    } else {
+        Ok(repo.join(git_dir))
+    }
+}
+
+fn shell_single_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\"'\"'");
+    format!("'{}'", escaped)
 }
 
 fn resolve_repo_path(path: &Path) -> Result<PathBuf, String> {
@@ -2674,6 +3002,52 @@ fn run_plan_export(args: PlanExportArgs, _dag_trace_out: Option<&Path>) -> Resul
     }
     std::fs::write(&args.out, &md).map_err(|err| format!("write export: {}", err))?;
     println!("exported={}", args.out.display());
+    Ok(())
+}
+
+fn run_plan_prompt_template(
+    args: PlanPromptTemplateArgs,
+    _dag_trace_out: Option<&Path>,
+) -> Result<(), String> {
+    let template = render_plan_prompt_template(!args.no_guidance);
+    if let Some(out) = args.out.as_ref() {
+        if let Some(parent) = out.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("create out dir: {}", err))?;
+            }
+        }
+        std::fs::write(out, template).map_err(|err| format!("write template: {}", err))?;
+        println!("written={}", out.display());
+    } else {
+        print!("{}", template);
+    }
+    Ok(())
+}
+
+fn run_plan_answers_from_md(
+    args: PlanAnswersFromMdArgs,
+    _dag_trace_out: Option<&Path>,
+) -> Result<(), String> {
+    let markdown = std::fs::read_to_string(&args.input)
+        .map_err(|err| format!("read {}: {}", args.input.display(), err))?;
+    let answers = parse_plan_answers_markdown(&markdown).map_err(|err| err.to_string())?;
+    let bytes =
+        serde_json::to_vec_pretty(&answers).map_err(|err| format!("json encode: {}", err))?;
+
+    if let Some(out) = args.out.as_ref() {
+        if let Some(parent) = out.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|err| format!("create out dir: {}", err))?;
+            }
+        }
+        std::fs::write(out, bytes).map_err(|err| format!("write {}: {}", out.display(), err))?;
+        println!("written={}", out.display());
+    } else {
+        let text = String::from_utf8(bytes).map_err(|err| format!("utf8 encode: {}", err))?;
+        println!("{}", text);
+    }
     Ok(())
 }
 

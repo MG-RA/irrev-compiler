@@ -42,7 +42,10 @@ pub use witness::{declare_cost, verify_witness, check_cost_declared, execute_che
 pub use verify::verify_ledger;
 
 // Plan operations
-pub use plan::{create_plan, append_plan_created_event, render_plan_text, export_plan_markdown};
+pub use plan::{
+    create_plan, append_plan_created_event, render_plan_text, export_plan_markdown,
+    diagnostic_prompts, parse_plan_answers_markdown, render_plan_prompt_template,
+};
 
 // Scope validation and commands
 pub use scope_validation::{ScopeValidator, ScopeValidationLevel, parse_scope_spec};

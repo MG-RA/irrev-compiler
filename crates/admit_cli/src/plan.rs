@@ -10,15 +10,15 @@ use super::internal::{
 };
 use super::registry::resolve_meta_registry;
 use super::types::{
-    DeclareCostError, PlanCreatedEvent, PlanCreatedPayload, PlanNewInput,
-    PlanProducerRef, PlanReproRef,
+    DeclareCostError, PlanCreatedEvent, PlanCreatedPayload, PlanNewInput, PlanProducerRef,
+    PlanReproRef,
 };
 
 // ---------------------------------------------------------------------------
 // Diagnostic prompt template
 // ---------------------------------------------------------------------------
 
-fn diagnostic_prompts() -> Vec<admit_core::PlanPrompt> {
+pub fn diagnostic_prompts() -> Vec<admit_core::PlanPrompt> {
     vec![
         admit_core::PlanPrompt {
             prompt_id: "action_definition".into(),
@@ -93,6 +93,143 @@ fn diagnostic_prompts() -> Vec<admit_core::PlanPrompt> {
             guidance: "Answer yes/no: Are all irreversible effects bounded? Is erasure cost explicitly declared and accepted? Is responsibility assigned without ambiguity? Could a future reader reconstruct why this action happened? If any answer is no, the plan is not admissible.".into(),
         },
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Public: prompt template + markdown answer parsing
+// ---------------------------------------------------------------------------
+
+pub fn render_plan_prompt_template(include_guidance: bool) -> String {
+    let prompts = diagnostic_prompts();
+    let mut out = String::new();
+    out.push_str("## Irreversibility-First Plan Design Prompt (Template)\n\n");
+    out.push_str(
+        "Fill each section, then convert to JSON with:\n\n`admit-cli plan answers-from-md --in plan.md --out answers.json`\n\n",
+    );
+
+    for prompt in prompts {
+        out.push_str(&format!("### {}. {}\n\n", prompt.section, prompt.title));
+        out.push_str(&format!("Prompt ID: `{}`\n\n", prompt.prompt_id));
+        if include_guidance {
+            out.push_str(&format!("Guidance: {}\n\n", prompt.guidance));
+        }
+        out.push_str("Answer:\n\n");
+        out.push_str("---\n\n");
+    }
+    out
+}
+
+pub fn parse_plan_answers_markdown(
+    markdown: &str,
+) -> Result<Vec<admit_core::PlanAnswer>, DeclareCostError> {
+    let prompts = diagnostic_prompts();
+    let prompts_by_section: std::collections::HashMap<u32, &admit_core::PlanPrompt> =
+        prompts.iter().map(|p| (p.section, p)).collect();
+
+    let mut current_section: Option<u32> = None;
+    let mut section_lines: std::collections::HashMap<u32, Vec<String>> =
+        std::collections::HashMap::new();
+
+    for line in markdown.lines() {
+        if let Some(section) = parse_section_heading(line) {
+            if !prompts_by_section.contains_key(&section) {
+                current_section = None;
+                continue;
+            }
+            if section_lines.contains_key(&section) {
+                return Err(DeclareCostError::PlanMarkdownParse(format!(
+                    "duplicate section heading for section {}",
+                    section
+                )));
+            }
+            section_lines.insert(section, Vec::new());
+            current_section = Some(section);
+            continue;
+        }
+        if let Some(section) = current_section {
+            section_lines
+                .entry(section)
+                .or_default()
+                .push(line.to_string());
+        }
+    }
+
+    let mut answers = Vec::with_capacity(prompts.len());
+    for prompt in prompts {
+        let lines = section_lines.get(&prompt.section).ok_or_else(|| {
+            DeclareCostError::PlanMarkdownParse(format!(
+                "missing section {} ({})",
+                prompt.section, prompt.prompt_id
+            ))
+        })?;
+        let answer = extract_section_answer(lines).ok_or_else(|| {
+            DeclareCostError::PlanMarkdownParse(format!(
+                "empty answer in section {} ({})",
+                prompt.section, prompt.prompt_id
+            ))
+        })?;
+        answers.push(admit_core::PlanAnswer {
+            prompt_id: prompt.prompt_id,
+            answer,
+        });
+    }
+
+    Ok(answers)
+}
+
+fn parse_section_heading(line: &str) -> Option<u32> {
+    let trimmed = line.trim().trim_start_matches('\u{feff}');
+    if !trimmed.starts_with("###") {
+        return None;
+    }
+    let heading = trimmed.trim_start_matches('#').trim();
+    let (num, _) = heading.split_once('.')?;
+    num.trim().parse::<u32>().ok()
+}
+
+fn extract_section_answer(lines: &[String]) -> Option<String> {
+    let mut start = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower == "answer:" || lower == "**answer:**" || lower == "answer" {
+            start = idx + 1;
+            break;
+        }
+        if lower.starts_with("answer:") {
+            let inline = trimmed[7..].trim();
+            if inline.is_empty() {
+                start = idx + 1;
+            } else {
+                return Some(inline.to_string());
+            }
+            break;
+        }
+    }
+
+    let mut filtered = Vec::new();
+    for line in &lines[start..] {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+        if trimmed == "---" {
+            break;
+        }
+        if trimmed.starts_with("<!--") && trimmed.ends_with("-->") {
+            continue;
+        }
+        if lower.starts_with("prompt id:") || lower.starts_with("guidance:") {
+            continue;
+        }
+        filtered.push(line.as_str());
+    }
+
+    let answer = filtered.join("\n").trim().to_string();
+    if answer.is_empty() {
+        None
+    } else {
+        Some(answer)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,9 +317,7 @@ fn is_word_char(b: u8) -> bool {
 
 pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostError> {
     let answers_raw = fs::read(&input.answers_path).map_err(|_| {
-        DeclareCostError::PlanAnswersFileNotFound(
-            input.answers_path.display().to_string(),
-        )
+        DeclareCostError::PlanAnswersFileNotFound(input.answers_path.display().to_string())
     })?;
     let answers_file_hash = sha256_hex(&answers_raw);
     let registry_resolved = resolve_meta_registry(input.meta_registry_path.as_deref())?;
@@ -231,9 +366,7 @@ pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostE
     for prompt in &prompts {
         let answer_text = answer_map
             .get(prompt.prompt_id.as_str())
-            .ok_or_else(|| {
-                DeclareCostError::PlanAnswersMissingPrompt(prompt.prompt_id.clone())
-            })?;
+            .ok_or_else(|| DeclareCostError::PlanAnswersMissingPrompt(prompt.prompt_id.clone()))?;
         answers.push(admit_core::PlanAnswer {
             prompt_id: prompt.prompt_id.clone(),
             answer: answer_text.to_string(),
@@ -275,8 +408,8 @@ pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostE
         },
     };
 
-    let witness_value = serde_json::to_value(&witness)
-        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    let witness_value =
+        serde_json::to_value(&witness).map_err(|err| DeclareCostError::Json(err.to_string()))?;
     let cbor_bytes = admit_core::encode_canonical_value(&witness_value)
         .map_err(|err| DeclareCostError::Json(err.0))?;
 
@@ -348,8 +481,8 @@ pub fn append_plan_created_event(
             if line.trim().is_empty() {
                 continue;
             }
-            let value: serde_json::Value =
-                serde_json::from_str(line).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+            let value: serde_json::Value = serde_json::from_str(line)
+                .map_err(|err| DeclareCostError::Json(err.to_string()))?;
             if value
                 .get("event_id")
                 .and_then(|v| v.as_str())
@@ -386,8 +519,7 @@ fn load_plan_witness(
     // Try CBOR first
     let cbor_path = artifact_disk_path(artifacts_root, "plan_witness", plan_id, "cbor");
     if cbor_path.exists() {
-        let bytes =
-            fs::read(&cbor_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        let bytes = fs::read(&cbor_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
         let value = decode_cbor_to_value(&bytes)?;
         return serde_json::from_value::<admit_core::PlanWitness>(value)
             .map_err(|err| DeclareCostError::Json(err.to_string()));
@@ -395,8 +527,7 @@ fn load_plan_witness(
     // Fall back to JSON projection
     let json_path = artifact_disk_path(artifacts_root, "plan_witness", plan_id, "json");
     if json_path.exists() {
-        let bytes =
-            fs::read(&json_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        let bytes = fs::read(&json_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
         return serde_json::from_slice::<admit_core::PlanWitness>(&bytes)
             .map_err(|err| DeclareCostError::Json(err.to_string()));
     }
@@ -407,10 +538,7 @@ fn load_plan_witness(
 // Public: render plan as key=value text
 // ---------------------------------------------------------------------------
 
-pub fn render_plan_text(
-    artifacts_root: &Path,
-    plan_id: &str,
-) -> Result<String, DeclareCostError> {
+pub fn render_plan_text(artifacts_root: &Path, plan_id: &str) -> Result<String, DeclareCostError> {
     let witness = load_plan_witness(artifacts_root, plan_id)?;
     let mut out = String::new();
 
@@ -469,9 +597,7 @@ pub fn export_plan_markdown(
     out.push_str("repro: plan_witness includes created_at; to reproduce plan_id, pass the same created_at and identical answers bytes.\n");
     out.push_str(&format!("template_id: {}\n", witness.template.template_id));
     out.push_str("source: plan_witness artifact (canonical CBOR)\n");
-    out.push_str(
-        "NOTE: This is a projection. The CBOR artifact is the source of truth.\n",
-    );
+    out.push_str("NOTE: This is a projection. The CBOR artifact is the source of truth.\n");
     out.push_str("-->\n\n");
 
     out.push_str("## Irreversibility-First Plan Design Prompt\n\n");

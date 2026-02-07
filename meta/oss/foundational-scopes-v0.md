@@ -95,7 +95,7 @@ Unlocks: proof portability ("verify anywhere, trust nowhere") and registry corre
 
 Example scopes:
 - `hash.content` (digest of bytes) ← **IMPLEMENTED** (`@0`)
-- `hash.verify` (bytes vs claimed digest)
+- `hash.verify` (bytes vs claimed digest) ← **IMPLEMENTED** (`@0`)
 - `hash.execution` (digest of an execution context; depends on other domains/scopes)
 
 ### `encode` (domain)
@@ -210,6 +210,6 @@ If yes, consider formalizing it as a scope authority.
 
 Highest leverage options:
 
-- `encode.canonical` + `hash.content` + `hash.verify` ← **DONE** (`encode.canonical@0`, `hash.content@0`)
+- `encode.canonical` + `hash.content` + `hash.verify` ← **DONE** (`encode.canonical@0`, `hash.content@0`, `hash.verify@0`)
 - `identity.delegate` + `identity.verify` (delegation + self-governing scopes)
 - `patch.plan` (unifies most mechanisms under a single change object)

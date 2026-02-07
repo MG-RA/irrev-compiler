@@ -323,6 +323,10 @@ fn compute_registry_hash() -> String {
             {
                 "id": "scope:hash.content",
                 "version": 0
+            },
+            {
+                "id": "scope:hash.verify",
+                "version": 0
             }
         ]
     });

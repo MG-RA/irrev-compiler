@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use admit_cli::{registry_build, DeclareCostError};
+use admit_cli::{registry_build, registry_init, DeclareCostError, MetaRegistryV0};
 
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -16,6 +16,19 @@ fn write_registry(path: &PathBuf, value: serde_json::Value) {
     }
     let text = serde_json::to_string(&value).expect("serialize registry");
     std::fs::write(path, text).expect("write registry");
+}
+
+#[test]
+fn registry_init_includes_hash_verify_scope() {
+    let dir = temp_dir("init-hash-verify");
+    let path = dir.join("meta-registry.json");
+    registry_init(&path).expect("registry init");
+    let bytes = std::fs::read(&path).expect("read registry");
+    let registry: MetaRegistryV0 = serde_json::from_slice(&bytes).expect("decode registry");
+    assert!(registry
+        .scopes
+        .iter()
+        .any(|scope| scope.id == "scope:hash.verify" && scope.version == 0));
 }
 
 fn base_registry_json() -> serde_json::Value {
@@ -261,8 +274,6 @@ fn registry_list_order_policy_sorts_before_hash() {
 
 #[test]
 fn registry_schema_gate_refuses_unknown_schema() {
-    use admit_cli::MetaRegistryV0;
-
     let dir = temp_dir("schema-gate");
     let path = dir.join("registry.json");
     write_registry(&path, shipped_registry_json());

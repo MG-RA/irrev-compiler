@@ -95,3 +95,115 @@ pub fn identity(x: i64) -> i64 {
     assert_eq!(output.event.violations, 0);
     assert!(output.witness.violations.is_empty());
 }
+
+#[test]
+fn rust_ir_lint_ir_rs_13_detects_adapter_coupling_in_protected_modules() {
+    let dir = temp_dir("ir-rs-13-detect");
+    let core_src = dir.join("crates").join("admit_core").join("src");
+    let artifacts_dir = dir.join("artifacts");
+    std::fs::create_dir_all(&core_src).expect("create core src");
+
+    std::fs::write(
+        core_src.join("leak.rs"),
+        r#"
+use admit_scope_obsidian::normalize_target;
+
+pub fn leak_target(input: &str) -> String {
+    normalize_target(input)
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let output = run_rust_ir_lint(RustIrLintInput {
+        root: dir,
+        timestamp: "2026-02-07T00:00:00Z".to_string(),
+        tool_version: "admit-cli test".to_string(),
+        artifacts_root: Some(artifacts_dir),
+        meta_registry_path: None,
+    })
+    .expect("run rust ir lint");
+
+    assert!(
+        output
+            .witness
+            .violations
+            .iter()
+            .any(|v| v.rule_id == "IR-RS-13"),
+        "expected IR-RS-13 violation"
+    );
+}
+
+#[test]
+fn rust_ir_lint_ir_rs_13_allows_explicit_adapter_wiring_paths() {
+    let dir = temp_dir("ir-rs-13-allow");
+    let adapter_src = dir.join("crates").join("admit_cli").join("src");
+    let artifacts_dir = dir.join("artifacts");
+    std::fs::create_dir_all(&adapter_src).expect("create cli src");
+
+    std::fs::write(
+        adapter_src.join("obsidian_adapter.rs"),
+        r#"
+use admit_scope_obsidian::normalize_target;
+
+pub fn adapter_target(input: &str) -> String {
+    normalize_target(input)
+}
+"#,
+    )
+    .expect("write fixture");
+
+    let output = run_rust_ir_lint(RustIrLintInput {
+        root: dir,
+        timestamp: "2026-02-07T00:00:00Z".to_string(),
+        tool_version: "admit-cli test".to_string(),
+        artifacts_root: Some(artifacts_dir),
+        meta_registry_path: None,
+    })
+    .expect("run rust ir lint");
+
+    assert!(
+        output
+            .witness
+            .violations
+            .iter()
+            .all(|v| v.rule_id != "IR-RS-13"),
+        "explicit adapter wiring path should not trigger IR-RS-13"
+    );
+}
+
+#[test]
+fn rust_ir_lint_ir_rs_13_ignores_comment_only_mentions() {
+    let dir = temp_dir("ir-rs-13-comments");
+    let core_src = dir.join("crates").join("admit_core").join("src");
+    let artifacts_dir = dir.join("artifacts");
+    std::fs::create_dir_all(&core_src).expect("create core src");
+
+    std::fs::write(
+        core_src.join("notes.rs"),
+        r#"
+// use admit_scope_obsidian::normalize_target;
+// obsidian_adapter::normalize_obsidian_vault_links_phase("vault_links");
+pub fn comment_only() {}
+"#,
+    )
+    .expect("write fixture");
+
+    let output = run_rust_ir_lint(RustIrLintInput {
+        root: dir,
+        timestamp: "2026-02-07T00:00:00Z".to_string(),
+        tool_version: "admit-cli test".to_string(),
+        artifacts_root: Some(artifacts_dir),
+        meta_registry_path: None,
+    })
+    .expect("run rust ir lint");
+
+    assert!(
+        output
+            .witness
+            .violations
+            .iter()
+            .all(|v| v.rule_id != "IR-RS-13"),
+        "comment-only mentions should not trigger IR-RS-13"
+    );
+}

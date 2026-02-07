@@ -15,7 +15,9 @@ use super::types::{
 const RUST_IR_LINT_WITNESS_KIND: &str = "rust_ir_lint_witness";
 const RUST_IR_LINT_SCOPE_ID: &str = "scope:rust.ir_lint";
 const RUST_IR_LINT_RULE_PACK: &str = "core";
-const RUST_IR_LINT_RULES: [&str; 5] = ["IR-RS-02", "IR-RS-03", "IR-RS-04", "IR-RS-05", "IR-RS-08"];
+const RUST_IR_LINT_RULES: [&str; 6] = [
+    "IR-RS-02", "IR-RS-03", "IR-RS-04", "IR-RS-05", "IR-RS-08", "IR-RS-13",
+];
 
 #[derive(Debug, Clone)]
 pub struct RustIrLintInput {
@@ -456,7 +458,49 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
         }
     }
 
+    // IR-RS-13: Protected modules must not couple directly to adapter crates/modules.
+    if ir_rs_13_protected_path(&path_lower) {
+        for (idx, line) in file.text.lines().enumerate() {
+            let lower = line.to_ascii_lowercase();
+            if line_is_comment(&lower) {
+                continue;
+            }
+            let adapter_ref = lower.contains("admit_scope_obsidian::")
+                || lower.contains("use admit_scope_obsidian")
+                || lower.contains("mod obsidian_adapter")
+                || lower.contains("obsidian_adapter::");
+            if adapter_ref {
+                violations.push(RustIrLintViolation {
+                    rule_id: "IR-RS-13".to_string(),
+                    severity: "error".to_string(),
+                    file: file.rel_path.clone(),
+                    line: Some((idx + 1) as u32),
+                    message: "adapter coupling in protected module; move dependency to explicit Obsidian adapter wiring".to_string(),
+                });
+            }
+        }
+    }
+
     violations
+}
+
+fn ir_rs_13_protected_path(path_lower: &str) -> bool {
+    if ir_rs_13_allowed_adapter_path(path_lower) {
+        return false;
+    }
+    path_lower.starts_with("crates/admit_core/src/")
+        || path_lower.starts_with("crates/admit_surrealdb/src/")
+        || path_lower.starts_with("crates/admit_cli/src/")
+}
+
+fn ir_rs_13_allowed_adapter_path(path_lower: &str) -> bool {
+    path_lower == "crates/admit_surrealdb/src/lib.rs"
+        || path_lower == "crates/admit_surrealdb/src/link_resolver.rs"
+        || path_lower == "crates/admit_cli/src/main.rs"
+        || path_lower == "crates/admit_cli/src/obsidian_adapter.rs"
+        || path_lower == "crates/admit_cli/src/ingest_dir.rs"
+        || path_lower == "crates/admit_cli/src/vault_prefix.rs"
+        || path_lower == "crates/admit_cli/src/rust_ir_lint.rs"
 }
 
 fn find_struct_line(text: &str, struct_name: &str) -> Option<u32> {

@@ -24,7 +24,7 @@ fn main() {
     let enabled_phases = vec![
         "dag_trace".to_string(),
         "doc_files".to_string(),
-        "vault_links".to_string(),
+        "obsidian_vault_links".to_string(),
     ];
 
     let mut batch_overrides = BTreeMap::new();
@@ -49,7 +49,10 @@ fn main() {
         custom_config.batch_sizes.nodes, custom_config.batch_sizes.doc_chunks
     );
     println!("   Failure handling: {}", custom_config.failure_handling);
-    println!("   Vault prefixes: {:?}", custom_config.vault_prefixes);
+    println!(
+        "   Obsidian vault prefixes: {:?}",
+        custom_config.obsidian_vault_prefixes
+    );
     println!();
 
     // 3. Retry policy

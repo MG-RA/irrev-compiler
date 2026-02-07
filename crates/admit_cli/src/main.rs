@@ -4303,7 +4303,7 @@ fn run_projection_retry(
                 let (effective_vault_prefixes, _did_fallback, _doc_paths) =
                     obsidian_adapter::effective_vault_prefixes_for_dag(
                         &dag,
-                        &store.projection_config().vault_prefixes,
+                        &store.projection_config().obsidian_vault_prefixes,
                     );
                 let vault_prefix_refs: Vec<&str> = effective_vault_prefixes
                     .iter()
@@ -4767,7 +4767,10 @@ fn project_ingest_dir_projections(
         .map_err(|err| format!("surrealdb ensure schemas failed: {}", err))?;
 
     let (effective_vault_prefixes, did_vault_prefix_fallback, dag_doc_paths) =
-        obsidian_adapter::effective_vault_prefixes_for_dag(dag, &projection_config.vault_prefixes);
+        obsidian_adapter::effective_vault_prefixes_for_dag(
+            dag,
+            &projection_config.obsidian_vault_prefixes,
+        );
 
     // Skip projection work if an identical complete run already exists (unless forced/benching).
     let effective_force = projection_force || emit_metrics;
@@ -4887,7 +4890,7 @@ fn project_ingest_dir_projections(
             Some(projector_version.clone()),
             Some(serde_json::json!({
                 "root": args.path.to_string_lossy().to_string(),
-                "original_prefixes": projection_config.vault_prefixes.clone(),
+                "original_prefixes": projection_config.obsidian_vault_prefixes.clone(),
                 "effective_prefixes": effective_vault_prefixes.clone(),
                 "doc_paths_sample": sample,
                 "doc_paths_total": dag_doc_paths.len(),
@@ -5331,7 +5334,7 @@ fn project_ollama_embeddings_for_trace(
     let suggest_dim_target = dim_target;
 
     if args.ollama_suggest_unresolved {
-        let vault_prefixes = surreal.projection_config().vault_prefixes.clone();
+        let vault_prefixes = surreal.projection_config().obsidian_vault_prefixes.clone();
         obsidian_adapter::project_unresolved_link_suggestions_via_ollama(
             surreal,
             &embedder,
@@ -5592,7 +5595,7 @@ fn maybe_project_vault_links(
     projection
         .with_store("surrealdb obsidian vault link projection", |surreal| {
             surreal
-                .project_vault_obsidian_links_from_artifacts(
+                .project_obsidian_vault_links_from_artifacts(
                     dag,
                     artifacts_dir,
                     &["irrev-vault/", "chatgpt/vault/"],

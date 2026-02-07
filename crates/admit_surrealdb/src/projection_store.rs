@@ -188,28 +188,32 @@ pub trait ProjectionStoreOps {
         run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult>;
 
-    /// Project vault Obsidian links from DAG artifacts
-    fn project_vault_links(
-        &self,
-        dag: &GovernedDag,
-        artifacts_root: &Path,
-        vault_prefixes: &[&str],
-        doc_filter: Option<&BTreeSet<String>>,
-        run_id: Option<&str>,
-    ) -> ProjectionResult<PhaseResult>;
-
     /// Project Obsidian-vault links from DAG artifacts.
-    ///
-    /// This is the preferred name. `project_vault_links` remains for compatibility.
     fn project_obsidian_vault_links(
         &self,
         dag: &GovernedDag,
         artifacts_root: &Path,
-        vault_prefixes: &[&str],
+        obsidian_vault_prefixes: &[&str],
+        doc_filter: Option<&BTreeSet<String>>,
+        run_id: Option<&str>,
+    ) -> ProjectionResult<PhaseResult>;
+
+    /// Backward-compatible alias.
+    fn project_vault_links(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        obsidian_vault_prefixes: &[&str],
         doc_filter: Option<&BTreeSet<String>>,
         run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult> {
-        self.project_vault_links(dag, artifacts_root, vault_prefixes, doc_filter, run_id)
+        self.project_obsidian_vault_links(
+            dag,
+            artifacts_root,
+            obsidian_vault_prefixes,
+            doc_filter,
+            run_id,
+        )
     }
 
     // =========================================================================
@@ -270,7 +274,7 @@ pub trait ProjectionStoreOps {
     /// Search doc title embeddings by vector similarity
     fn search_title_embeddings(
         &self,
-        vault_prefix: &str,
+        obsidian_vault_prefix: &str,
         model: &str,
         dim_target: u32,
         query_embedding: &[f32],
@@ -372,15 +376,19 @@ impl ProjectionStoreOps for NullStore {
         Ok(PhaseResult::success("chunk_repr".to_string(), 0, 0))
     }
 
-    fn project_vault_links(
+    fn project_obsidian_vault_links(
         &self,
         _dag: &GovernedDag,
         _artifacts_root: &Path,
-        _vault_prefixes: &[&str],
+        _obsidian_vault_prefixes: &[&str],
         _doc_filter: Option<&BTreeSet<String>>,
         _run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult> {
-        Ok(PhaseResult::success("vault_links".to_string(), 0, 0))
+        Ok(PhaseResult::success(
+            "obsidian_vault_links".to_string(),
+            0,
+            0,
+        ))
     }
 
     fn project_embeddings(
@@ -436,7 +444,7 @@ impl ProjectionStoreOps for NullStore {
 
     fn search_title_embeddings(
         &self,
-        _vault_prefix: &str,
+        _obsidian_vault_prefix: &str,
         _model: &str,
         _dim_target: u32,
         _query_embedding: &[f32],

@@ -13,7 +13,7 @@ include = ["**/*.md", "**/*.rs", "**/*.py", "**/*.ipynb"]
 exclude = ["**/target/**", "**/.git/**", "**/node_modules/**"]
 
 [projection]
-enabled = ["dag_trace", "doc_files", "doc_chunks", "vault_links"]
+enabled = ["dag_trace", "doc_files", "doc_chunks", "obsidian_vault_links"]
 failure_mode = "warn"
 max_sql_bytes = 1000000
 

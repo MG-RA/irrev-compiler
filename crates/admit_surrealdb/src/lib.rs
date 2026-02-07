@@ -1621,15 +1621,15 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         Ok(())
     }
 
-    pub fn project_vault_obsidian_links_from_artifacts(
+    pub fn project_obsidian_vault_links_from_artifacts(
         &self,
         dag: &GovernedDag,
         artifacts_root: &Path,
-        vault_prefixes: &[&str],
+        obsidian_vault_prefixes: &[&str],
         doc_filter: Option<&BTreeSet<String>>,
         run_id: Option<&str>,
     ) -> Result<crate::projection_run::PhaseResult, String> {
-        let phase = "vault_links";
+        let phase = "obsidian_vault_links";
         let phase_start = std::time::Instant::now();
         self.ensure_doc_file_schema()?;
         self.ensure_vault_link_schema()?;
@@ -1638,14 +1638,14 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         let mut vault_docs: BTreeMap<String, VaultDoc> = BTreeMap::new();
         let mut title_exact_index: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut title_casefold_index: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let heading_index = build_heading_index(dag, vault_prefixes);
-        let vault_files = build_file_index(dag, vault_prefixes);
+        let heading_index = build_heading_index(dag, obsidian_vault_prefixes);
+        let vault_files = build_file_index(dag, obsidian_vault_prefixes);
 
         for (id, node) in dag.nodes() {
             let NodeKind::FileAtPath { path, .. } = &node.kind else {
                 continue;
             };
-            if !vault_prefixes.iter().any(|p| path.starts_with(p)) {
+            if !obsidian_vault_prefixes.iter().any(|p| path.starts_with(p)) {
                 continue;
             }
             if !path.to_lowercase().ends_with(".md") {
@@ -1718,7 +1718,10 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
             else {
                 continue;
             };
-            if !vault_prefixes.iter().any(|p| doc_path.starts_with(p)) {
+            if !obsidian_vault_prefixes
+                .iter()
+                .any(|p| doc_path.starts_with(p))
+            {
                 continue;
             }
             if let Some(filter) = doc_filter {
@@ -1812,7 +1815,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                     let asset_res = resolve_obsidian_asset_target(
                         &doc.doc_path,
                         &link.target,
-                        vault_prefixes,
+                        obsidian_vault_prefixes,
                         &vault_files,
                     );
                     if let Some(asset_res) = asset_res {
@@ -1867,7 +1870,7 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
                 let mut resolution = resolve_obsidian_target(
                     &doc.doc_path,
                     &link.target,
-                    vault_prefixes,
+                    obsidian_vault_prefixes,
                     &vault_docs,
                     &title_exact_index,
                     &title_casefold_index,
@@ -2101,6 +2104,24 @@ DEFINE INDEX doc_stats_path ON TABLE doc_stats COLUMNS doc_path UNIQUE;
         result.files_read = Some(files_read);
         result.parse_time_ms = Some(total_ms.saturating_sub(db_write_ms));
         Ok(result)
+    }
+
+    /// Backward-compatible alias for the older method name.
+    pub fn project_vault_obsidian_links_from_artifacts(
+        &self,
+        dag: &GovernedDag,
+        artifacts_root: &Path,
+        obsidian_vault_prefixes: &[&str],
+        doc_filter: Option<&BTreeSet<String>>,
+        run_id: Option<&str>,
+    ) -> Result<crate::projection_run::PhaseResult, String> {
+        self.project_obsidian_vault_links_from_artifacts(
+            dag,
+            artifacts_root,
+            obsidian_vault_prefixes,
+            doc_filter,
+            run_id,
+        )
     }
 }
 
@@ -2800,19 +2821,19 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
         Ok(result)
     }
 
-    fn project_vault_links(
+    fn project_obsidian_vault_links(
         &self,
         dag: &GovernedDag,
         artifacts_root: &Path,
-        vault_prefixes: &[&str],
+        obsidian_vault_prefixes: &[&str],
         doc_filter: Option<&BTreeSet<String>>,
         run_id: Option<&str>,
     ) -> crate::projection_store::ProjectionResult<crate::projection_run::PhaseResult> {
         // Delegate to existing implementation
-        self.project_vault_obsidian_links_from_artifacts(
+        self.project_obsidian_vault_links_from_artifacts(
             dag,
             artifacts_root,
-            vault_prefixes,
+            obsidian_vault_prefixes,
             doc_filter,
             run_id,
         )
@@ -2971,14 +2992,20 @@ impl crate::projection_store::ProjectionStoreOps for SurrealCliProjectionStore {
 
     fn search_title_embeddings(
         &self,
-        vault_prefix: &str,
+        obsidian_vault_prefix: &str,
         model: &str,
         dim_target: u32,
         query_embedding: &[f32],
         limit: usize,
     ) -> crate::projection_store::ProjectionResult<Vec<(String, f64)>> {
-        self.search_doc_title_embeddings(vault_prefix, model, dim_target, query_embedding, limit)
-            .map_err(|e| e.into())
+        self.search_doc_title_embeddings(
+            obsidian_vault_prefix,
+            model,
+            dim_target,
+            query_embedding,
+            limit,
+        )
+        .map_err(|e| e.into())
     }
 }
 
@@ -3495,7 +3522,7 @@ fn file_stem_title(path: &str) -> String {
 
 fn build_heading_index(
     dag: &GovernedDag,
-    vault_prefixes: &[&str],
+    obsidian_vault_prefixes: &[&str],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (_id, node) in dag.nodes() {
@@ -3507,7 +3534,10 @@ fn build_heading_index(
         else {
             continue;
         };
-        if !vault_prefixes.iter().any(|p| doc_path.starts_with(p)) {
+        if !obsidian_vault_prefixes
+            .iter()
+            .any(|p| doc_path.starts_with(p))
+        {
             continue;
         }
         let set = out.entry(doc_path.clone()).or_default();
@@ -3525,13 +3555,16 @@ fn build_heading_index(
     out
 }
 
-fn build_file_index(dag: &GovernedDag, vault_prefixes: &[&str]) -> BTreeMap<String, String> {
+fn build_file_index(
+    dag: &GovernedDag,
+    obsidian_vault_prefixes: &[&str],
+) -> BTreeMap<String, String> {
     let mut out: BTreeMap<String, String> = BTreeMap::new();
     for (id, node) in dag.nodes() {
         let NodeKind::FileAtPath { path, .. } = &node.kind else {
             continue;
         };
-        if !vault_prefixes.iter().any(|p| path.starts_with(p)) {
+        if !obsidian_vault_prefixes.iter().any(|p| path.starts_with(p)) {
             continue;
         }
         out.insert(path.clone(), id.to_string());
@@ -3539,8 +3572,8 @@ fn build_file_index(dag: &GovernedDag, vault_prefixes: &[&str]) -> BTreeMap<Stri
     out
 }
 
-fn vault_root_for_path<'a>(path: &str, vault_prefixes: &[&'a str]) -> Option<&'a str> {
-    vault_prefixes
+fn vault_root_for_path<'a>(path: &str, obsidian_vault_prefixes: &[&'a str]) -> Option<&'a str> {
+    obsidian_vault_prefixes
         .iter()
         .copied()
         .filter(|p| path.starts_with(*p))
@@ -3790,13 +3823,13 @@ fn looks_like_asset_target(target: &str) -> bool {
 fn resolve_obsidian_asset_target(
     from_doc_path: &str,
     raw_target: &str,
-    vault_prefixes: &[&str],
+    obsidian_vault_prefixes: &[&str],
     vault_files: &BTreeMap<String, String>,
 ) -> Option<AssetResolution> {
     crate::link_resolver::resolve_obsidian_asset_target(
         from_doc_path,
         raw_target,
-        vault_prefixes,
+        obsidian_vault_prefixes,
         vault_files,
     )
 }
@@ -3816,7 +3849,7 @@ fn extract_obsidian_links(input: &str) -> Vec<ObsidianLink> {
 fn resolve_obsidian_target(
     from_doc_path: &str,
     raw_target: &str,
-    vault_prefixes: &[&str],
+    obsidian_vault_prefixes: &[&str],
     vault_docs: &BTreeMap<String, VaultDoc>,
     title_exact_index: &BTreeMap<String, BTreeSet<String>>,
     title_casefold_index: &BTreeMap<String, BTreeSet<String>>,
@@ -3866,7 +3899,7 @@ fn resolve_obsidian_target(
 
     // Path-like targets are assumed relative to the source vault root when possible.
     if norm_target.contains('/') {
-        if let Some(root) = vault_root_for_path(from_doc_path, vault_prefixes) {
+        if let Some(root) = vault_root_for_path(from_doc_path, obsidian_vault_prefixes) {
             if !with_md.starts_with(root) {
                 let candidate = format!("{}{}", root, with_md);
                 if vault_docs.contains_key(&candidate) {
@@ -3883,7 +3916,7 @@ fn resolve_obsidian_target(
         }
 
         // Fall back to other prefixes for cross-vault references, but make it explicit.
-        for prefix in vault_prefixes {
+        for prefix in obsidian_vault_prefixes {
             let candidate = format!("{}{}", prefix, with_md);
             if vault_docs.contains_key(&candidate) {
                 return ResolutionResult {

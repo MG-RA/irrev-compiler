@@ -9,7 +9,8 @@ pub struct ProjectionConfig {
     pub batch_sizes: BatchSizes,
     pub retry_policy: RetryPolicy,
     pub failure_handling: FailureHandling,
-    pub vault_prefixes: Vec<String>,
+    #[serde(alias = "vault_prefixes")]
+    pub obsidian_vault_prefixes: Vec<String>,
 }
 
 impl Default for ProjectionConfig {
@@ -19,7 +20,7 @@ impl Default for ProjectionConfig {
             batch_sizes: BatchSizes::default(),
             retry_policy: RetryPolicy::default(),
             failure_handling: FailureHandling::WarnAndContinue,
-            vault_prefixes: vec!["irrev-vault/".to_string(), "chatgpt/vault/".to_string()],
+            obsidian_vault_prefixes: vec!["irrev-vault/".to_string(), "chatgpt/vault/".to_string()],
         }
     }
 }
@@ -38,7 +39,7 @@ impl ProjectionConfig {
         batch_size_overrides: Option<BTreeMap<String, usize>>,
         max_sql_bytes: Option<usize>,
         failure_mode: Option<FailureHandling>,
-        vault_prefixes: Option<Vec<String>>,
+        obsidian_vault_prefixes: Option<Vec<String>>,
     ) -> Self {
         let mut config = Self::default();
 
@@ -62,9 +63,9 @@ impl ProjectionConfig {
             config.failure_handling = mode;
         }
 
-        // Apply vault prefixes
-        if let Some(prefixes) = vault_prefixes {
-            config.vault_prefixes = prefixes;
+        // Apply Obsidian vault prefixes
+        if let Some(prefixes) = obsidian_vault_prefixes {
+            config.obsidian_vault_prefixes = prefixes;
         }
 
         config
@@ -79,6 +80,10 @@ impl ProjectionConfig {
         admit_core::encode_canonical_value(&value)
             .expect("ProjectionConfig must be encodable as canonical CBOR")
     }
+
+    pub fn vault_prefixes(&self) -> &[String] {
+        &self.obsidian_vault_prefixes
+    }
 }
 
 /// Defines which projection phases are enabled
@@ -89,7 +94,8 @@ pub struct ProjectionPhases {
     pub doc_chunks: bool,
     pub chunk_repr: bool,
     pub headings: bool,
-    pub vault_links: bool,
+    #[serde(alias = "vault_links")]
+    pub obsidian_vault_links: bool,
     pub stats: bool,
     pub embeddings: bool,
     pub title_embeddings: bool,
@@ -104,7 +110,7 @@ impl Default for ProjectionPhases {
             doc_chunks: true,
             chunk_repr: true,
             headings: true,
-            vault_links: true,
+            obsidian_vault_links: true,
             stats: true,
             embeddings: false, // Expensive, opt-in
             title_embeddings: false,
@@ -124,7 +130,7 @@ impl ProjectionPhases {
                 "doc_chunks" => phases.doc_chunks = true,
                 "chunk_repr" => phases.chunk_repr = true,
                 "headings" => phases.headings = true,
-                "vault_links" | "obsidian_vault_links" => phases.vault_links = true,
+                "vault_links" | "obsidian_vault_links" => phases.obsidian_vault_links = true,
                 "stats" => phases.stats = true,
                 "embeddings" => phases.embeddings = true,
                 "title_embeddings" => phases.title_embeddings = true,
@@ -142,7 +148,7 @@ impl ProjectionPhases {
             doc_chunks: false,
             chunk_repr: false,
             headings: false,
-            vault_links: false,
+            obsidian_vault_links: false,
             stats: false,
             embeddings: false,
             title_embeddings: false,
@@ -168,8 +174,8 @@ impl ProjectionPhases {
         if self.headings {
             names.push("headings".to_string());
         }
-        if self.vault_links {
-            names.push("vault_links".to_string());
+        if self.obsidian_vault_links {
+            names.push("obsidian_vault_links".to_string());
         }
         if self.stats {
             names.push("stats".to_string());
@@ -406,17 +412,45 @@ mod tests {
         assert!(phases.dag_trace);
         assert!(phases.doc_chunks);
         assert!(phases.chunk_repr);
-        assert!(phases.vault_links);
+        assert!(phases.obsidian_vault_links);
+    }
+
+    #[test]
+    fn test_legacy_obsidian_aliases_deserialize() {
+        let mut phases_value =
+            serde_json::to_value(ProjectionPhases::all_disabled()).expect("serialize phases");
+        let phases_obj = phases_value
+            .as_object_mut()
+            .expect("projection phases json object");
+        phases_obj.remove("obsidian_vault_links");
+        phases_obj.insert("vault_links".to_string(), serde_json::json!(true));
+        let parsed_phases: ProjectionPhases =
+            serde_json::from_value(phases_value).expect("deserialize phases aliases");
+        assert!(parsed_phases.obsidian_vault_links);
+
+        let mut config_value =
+            serde_json::to_value(ProjectionConfig::default()).expect("serialize config");
+        let config_obj = config_value
+            .as_object_mut()
+            .expect("projection config json object");
+        config_obj.remove("obsidian_vault_prefixes");
+        config_obj.insert(
+            "vault_prefixes".to_string(),
+            serde_json::json!(["legacy-vault/"]),
+        );
+        let parsed_config: ProjectionConfig =
+            serde_json::from_value(config_value).expect("deserialize config aliases");
+        assert_eq!(parsed_config.obsidian_vault_prefixes, vec!["legacy-vault/"]);
     }
 
     #[test]
     fn test_enabled_phase_names() {
         let mut phases = ProjectionPhases::all_disabled();
         phases.dag_trace = true;
-        phases.vault_links = true;
+        phases.obsidian_vault_links = true;
 
         let names = phases.enabled_phase_names();
-        assert_eq!(names, vec!["dag_trace", "vault_links"]);
+        assert_eq!(names, vec!["dag_trace", "obsidian_vault_links"]);
     }
 
     #[test]

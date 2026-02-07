@@ -9,6 +9,7 @@ dependencies = [
  "admit_core",
  "admit_dag",
  "admit_embed",
+ "admit_scope_obsidian",
  "admit_surrealdb",
  "chrono",
  "clap",
@@ -63,11 +64,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "admit_scope_obsidian"
+version = "0.1.0"
+dependencies = [
+ "admit_dag",
+ "hex",
+ "sha2",
+]
+
+[[package]]
 name = "admit_surrealdb"
 version = "0.1.0"
 dependencies = [
  "admit_core",
  "admit_dag",
+ "admit_scope_obsidian",
  "chrono",
  "clap",
  "hex",

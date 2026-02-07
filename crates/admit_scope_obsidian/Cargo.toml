@@ -1,0 +1,9 @@
+[package]
+name = "admit_scope_obsidian"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+admit_dag = { path = "../admit_dag" }
+sha2 = "0.10"
+hex = "0.4"

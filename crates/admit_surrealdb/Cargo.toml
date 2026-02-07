@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 admit_core = { path = "../admit_core" }
 admit_dag = { path = "../admit_dag" }
+admit_scope_obsidian = { path = "../admit_scope_obsidian" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_cbor = "0.11"

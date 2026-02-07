@@ -5,7 +5,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
-use admit_surrealdb::link_resolver::{
+use admit_scope_obsidian::{
     extract_obsidian_links, file_stem_title, normalize_heading, normalize_target,
     obsidian_heading_slug,
 };

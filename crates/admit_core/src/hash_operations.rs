@@ -44,6 +44,8 @@ pub fn hash_bytes(
     let digest = hex_encode(&digest_bytes);
 
     let witness = HashWitness {
+        schema_id: None,
+        court_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::HashBytes,
         input: HashInput::Bytes {
@@ -111,6 +113,8 @@ pub fn hash_value_cbor(
     let digest = hex_encode(&digest_bytes);
 
     let witness = HashWitness {
+        schema_id: None,
+        court_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::HashValueCbor,
         input: HashInput::ValueCbor { canonical_cbor_hex },
@@ -215,6 +219,8 @@ pub fn verify(
     let _ = matches; // Explicitly ignore to show this is intentional
 
     let witness = HashWitness {
+        schema_id: None,
+        court_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::Verify {
             expected_digest: expected_digest.to_string(),
@@ -278,7 +284,9 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, EvalError> {
 }
 
 fn is_valid_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 // ============================================================================

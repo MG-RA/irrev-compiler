@@ -13,6 +13,12 @@ const MAX_CANONICAL_CBOR_HEX_LEN: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HashWitness {
+    /// Optional schema identifier for governance attribution.
+    pub schema_id: Option<String>,
+
+    /// Optional court/tool version attribution.
+    pub court_version: Option<String>,
+
     /// The hash algorithm used (e.g., "sha256")
     pub algorithm: String,
 
@@ -105,7 +111,10 @@ impl HashWitness {
         match &self.input {
             HashInput::Bytes { sha256 } => {
                 if !is_valid_sha256_hex(sha256) {
-                    return Err(EvalError(format!("invalid input.sha256 format: {}", sha256)));
+                    return Err(EvalError(format!(
+                        "invalid input.sha256 format: {}",
+                        sha256
+                    )));
                 }
 
                 // Invariant: For HashBytes and Verify, input.sha256 must match digest
@@ -136,9 +145,7 @@ impl HashWitness {
                     .chars()
                     .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
                 {
-                    return Err(EvalError(
-                        "canonical_cbor_hex must be lowercase hex".into(),
-                    ));
+                    return Err(EvalError("canonical_cbor_hex must be lowercase hex".into()));
                 }
             }
         }
@@ -157,7 +164,9 @@ impl HashWitness {
 
 /// Validates that a string is a valid SHA-256 hex digest
 fn is_valid_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 // ============================================================================
@@ -384,11 +393,12 @@ mod tests {
     #[test]
     fn test_hash_witness_validation() {
         let witness = HashWitness {
+            schema_id: None,
+            court_version: None,
             algorithm: "sha256".into(),
             operation: HashOperation::HashBytes,
             input: HashInput::Bytes {
-                sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-                    .into(),
+                sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
             },
             digest: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08".into(),
             input_size_bytes: 4,
@@ -402,11 +412,12 @@ mod tests {
     #[test]
     fn test_hash_witness_validation_digest_mismatch() {
         let witness = HashWitness {
+            schema_id: None,
+            court_version: None,
             algorithm: "sha256".into(),
             operation: HashOperation::HashBytes,
             input: HashInput::Bytes {
-                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .into(),
+                sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
             },
             digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
             input_size_bytes: 4,

@@ -8,6 +8,16 @@ use crate::trace::Trace;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Witness {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub court_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
     pub verdict: Verdict,
     pub program: WitnessProgram,
     pub reason: String,
@@ -243,6 +253,11 @@ impl WitnessBuilder {
             });
 
         Witness {
+            schema_id: None,
+            created_at: None,
+            court_version: None,
+            input_id: None,
+            config_hash: None,
             verdict: self.verdict,
             program: self.program,
             reason: self.reason,

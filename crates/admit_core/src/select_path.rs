@@ -44,6 +44,14 @@ pub struct SelectPathInput {
 pub struct SelectPathWitness {
     pub schema_id: String,
     pub schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
     pub input: SelectPathInput,
     pub output: SelectPathOutput,
 }
@@ -53,6 +61,10 @@ impl SelectPathWitness {
         SelectPathWitness {
             schema_id: "select-path-witness/0".to_string(),
             schema_version: 0,
+            created_at: None,
+            court_version: None,
+            input_id: None,
+            config_hash: None,
             input,
             output,
         }
@@ -237,7 +249,10 @@ fn parse_json_string(input: &str, start: usize) -> Result<(String, usize), Selec
     let mut i = start;
 
     while i < input.len() {
-        let ch = input[i..].chars().next().ok_or_else(SelectPathError::parse_error)?;
+        let ch = input[i..]
+            .chars()
+            .next()
+            .ok_or_else(SelectPathError::parse_error)?;
         let len = ch.len_utf8();
         match ch {
             '"' => {
@@ -249,7 +264,10 @@ fn parse_json_string(input: &str, start: usize) -> Result<(String, usize), Selec
                 if i >= input.len() {
                     return Err(SelectPathError::parse_error());
                 }
-                let esc = input[i..].chars().next().ok_or_else(SelectPathError::parse_error)?;
+                let esc = input[i..]
+                    .chars()
+                    .next()
+                    .ok_or_else(SelectPathError::parse_error)?;
                 let esc_len = esc.len_utf8();
                 match esc {
                     '"' => {

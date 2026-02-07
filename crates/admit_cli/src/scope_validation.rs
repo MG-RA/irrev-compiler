@@ -12,8 +12,8 @@ use crate::types::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScopeValidationLevel {
-    Phase1,  // Name + basic structure only
-    Phase2,  // Full contract validation
+    Phase1, // Name + basic structure only
+    Phase2, // Full contract validation
 }
 
 // ---------------------------------------------------------------------------
@@ -121,10 +121,7 @@ impl ScopeValidator {
     }
 
     // Step 4: Mechanism Family (consumes) validation
-    pub fn validate_consumes(
-        &self,
-        scope: &MetaRegistryScope,
-    ) -> Result<(), RegistryGateError> {
+    pub fn validate_consumes(&self, scope: &MetaRegistryScope) -> Result<(), RegistryGateError> {
         if let Some(consumes) = &scope.consumes {
             for schema_id in consumes {
                 if !self.registry.schemas.iter().any(|s| s.id == *schema_id) {
@@ -490,9 +487,9 @@ impl ScopeValidator {
         if let Some(neighbors) = adj_map.get(node) {
             for neighbor in neighbors {
                 if !visited.contains(neighbor) {
-                    if let Some(cycle) = self.dfs_cycle_detect(
-                        neighbor, adj_map, visited, rec_stack, path,
-                    ) {
+                    if let Some(cycle) =
+                        self.dfs_cycle_detect(neighbor, adj_map, visited, rec_stack, path)
+                    {
                         return Some(cycle);
                     }
                 } else if rec_stack.contains(neighbor) {
@@ -513,8 +510,11 @@ impl ScopeValidator {
     // Compute deterministic witness_id (excludes timestamp and messages)
     pub fn compute_witness_id(witness: &ScopeAdditionWitness) -> Result<String, RegistryGateError> {
         // Extract just check names from validations (exclude messages)
-        let validation_checks: Vec<String> =
-            witness.validations.iter().map(|v| v.check.clone()).collect();
+        let validation_checks: Vec<String> = witness
+            .validations
+            .iter()
+            .map(|v| v.check.clone())
+            .collect();
 
         let payload = ScopeAdditionWitnessIdPayload {
             scope_id: witness.scope_id.clone(),
@@ -527,10 +527,12 @@ impl ScopeValidator {
         };
 
         // Encode to canonical CBOR and hash
-        let value = serde_json::to_value(&payload)
-            .map_err(|e| RegistryGateError::Json(format!("failed to serialize witness payload: {}", e)))?;
-        let cbor_bytes = admit_core::encode_canonical_value(&value)
-            .map_err(|e| RegistryGateError::Json(format!("canonical CBOR encoding failed: {}", e)))?;
+        let value = serde_json::to_value(&payload).map_err(|e| {
+            RegistryGateError::Json(format!("failed to serialize witness payload: {}", e))
+        })?;
+        let cbor_bytes = admit_core::encode_canonical_value(&value).map_err(|e| {
+            RegistryGateError::Json(format!("canonical CBOR encoding failed: {}", e))
+        })?;
 
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -555,12 +557,12 @@ pub fn parse_scope_spec(spec: &str) -> Result<(String, u32), RegistryGateError> 
     }
 
     let id = parts[0].to_string();
-    let version = parts[1].parse::<u32>().map_err(|_| {
-        RegistryGateError::ScopeIdMalformed {
+    let version = parts[1]
+        .parse::<u32>()
+        .map_err(|_| RegistryGateError::ScopeIdMalformed {
             scope_id: spec.to_string(),
             reason: "version must be non-negative integer".to_string(),
-        }
-    })?;
+        })?;
 
     // Validate that parsed id doesn't still contain @
     if id.contains('@') {
@@ -639,7 +641,10 @@ mod tests {
         };
 
         let validations = validator.validate_scope_addition(&scope, None);
-        let id_check = validations.iter().find(|v| v.check == "scope_id_format").unwrap();
+        let id_check = validations
+            .iter()
+            .find(|v| v.check == "scope_id_format")
+            .unwrap();
         assert!(id_check.passed, "Valid scope ID should pass");
     }
 
@@ -663,7 +668,10 @@ mod tests {
         };
 
         let validations = validator.validate_scope_addition(&scope, None);
-        let id_check = validations.iter().find(|v| v.check == "scope_id_format").unwrap();
+        let id_check = validations
+            .iter()
+            .find(|v| v.check == "scope_id_format")
+            .unwrap();
         assert!(!id_check.passed, "Scope ID with @version should fail");
         assert_eq!(id_check.severity, ScopeValidationSeverity::Error);
     }
@@ -702,7 +710,10 @@ mod tests {
         };
 
         let validations = validator.validate_scope_addition(&duplicate, None);
-        let dup_check = validations.iter().find(|v| v.check == "no_duplicate_scope").unwrap();
+        let dup_check = validations
+            .iter()
+            .find(|v| v.check == "no_duplicate_scope")
+            .unwrap();
         assert!(!dup_check.passed, "Duplicate scope should fail");
         assert_eq!(dup_check.severity, ScopeValidationSeverity::Error);
     }
@@ -765,7 +776,10 @@ mod tests {
             .filter(|v| !v.passed && v.severity == ScopeValidationSeverity::Error)
             .collect();
 
-        assert!(!errors.is_empty(), "Phase 2 should detect missing dependency");
+        assert!(
+            !errors.is_empty(),
+            "Phase 2 should detect missing dependency"
+        );
         assert!(errors.iter().any(|v| v.check == "dependencies_valid"));
     }
 
@@ -806,9 +820,7 @@ mod tests {
             .collect();
 
         assert!(!errors.is_empty(), "Should detect wrong schema kind");
-        assert!(errors
-            .iter()
-            .any(|v| v.check == "snapshot_schema_exists"));
+        assert!(errors.iter().any(|v| v.check == "snapshot_schema_exists"));
     }
 
     #[test]
@@ -936,6 +948,10 @@ mod tests {
         let witness = ScopeAdditionWitness {
             schema_id: "scope-addition-witness/0".to_string(),
             schema_version: 0,
+            created_at: None,
+            court_version: None,
+            input_id: None,
+            config_hash: None,
             scope_id: "scope:meta.scope".to_string(),
             scope_version: 0,
             validation_timestamp: "2024-11-15T10:00:00Z".to_string(),
@@ -988,8 +1004,7 @@ mod tests {
         let identity_cbor_hex = hex::encode(&identity_cbor);
 
         // Compute witness_id from identity payload
-        let witness_id = ScopeValidator::compute_witness_id(&witness)
-            .expect("compute witness id");
+        let witness_id = ScopeValidator::compute_witness_id(&witness).expect("compute witness id");
 
         // GOLDEN FIXTURE: These exact bytes are the wire format for scope-addition-witness/0
         // If this assertion fails, you've changed the wire format and need a schema version bump
@@ -1005,8 +1020,7 @@ mod tests {
         //   7. "validation_checks" => ["scope_id_format", "emits_schemas_exist"]
 
         // FROZEN WIRE FORMAT - DO NOT CHANGE without bumping schema version
-        const EXPECTED_IDENTITY_CBOR_HEX: &str =
-            "a7\
+        const EXPECTED_IDENTITY_CBOR_HEX: &str = "a7\
              6873636f70655f6964\
              7073636f70653a6d6574612e73636f7065\
              6d73636f70655f76657273696f6e\
@@ -1037,8 +1051,8 @@ mod tests {
 
         // The important thing is that the CBOR bytes above are frozen
         // Let's verify witness_id is deterministic
-        let witness_id_2 = ScopeValidator::compute_witness_id(&witness)
-            .expect("compute witness id again");
+        let witness_id_2 =
+            ScopeValidator::compute_witness_id(&witness).expect("compute witness id again");
         assert_eq!(witness_id, witness_id_2, "witness_id must be deterministic");
 
         // Print for documentation (helpful when fixture needs updating)
@@ -1057,6 +1071,10 @@ mod tests {
         let witness = ScopeAdditionWitness {
             schema_id: "scope-addition-witness/0".to_string(),
             schema_version: 0,
+            created_at: None,
+            court_version: None,
+            input_id: None,
+            config_hash: None,
             scope_id: "scope:test.foo".to_string(),
             scope_version: 0,
             validation_timestamp: "2024-11-15T10:00:00Z".to_string(),
@@ -1073,17 +1091,14 @@ mod tests {
         };
 
         // Compute witness ID twice - should be identical (deterministic)
-        let id1 = ScopeValidator::compute_witness_id(&witness)
-            .expect("should compute witness id");
-        let id2 = ScopeValidator::compute_witness_id(&witness)
-            .expect("should compute witness id");
+        let id1 = ScopeValidator::compute_witness_id(&witness).expect("should compute witness id");
+        let id2 = ScopeValidator::compute_witness_id(&witness).expect("should compute witness id");
         assert_eq!(id1, id2, "Witness ID should be deterministic");
 
         // Change timestamp - ID should still be same (timestamp excluded)
         let mut witness2 = witness.clone();
         witness2.validation_timestamp = "2024-11-15T11:00:00Z".to_string();
-        let id3 = ScopeValidator::compute_witness_id(&witness2)
-            .expect("should compute witness id");
+        let id3 = ScopeValidator::compute_witness_id(&witness2).expect("should compute witness id");
         assert_eq!(
             id1, id3,
             "Timestamp should not affect witness ID (excluded from hash)"
@@ -1092,8 +1107,7 @@ mod tests {
         // Change message - ID should still be same (messages excluded)
         let mut witness3 = witness.clone();
         witness3.validations[0].message = Some("different message".to_string());
-        let id4 = ScopeValidator::compute_witness_id(&witness3)
-            .expect("should compute witness id");
+        let id4 = ScopeValidator::compute_witness_id(&witness3).expect("should compute witness id");
         assert_eq!(
             id1, id4,
             "Validation messages should not affect witness ID (excluded from hash)"
@@ -1102,8 +1116,7 @@ mod tests {
         // Change registry hash - ID should differ (included in hash)
         let mut witness4 = witness.clone();
         witness4.registry_hash_after = "xyz789".to_string();
-        let id5 = ScopeValidator::compute_witness_id(&witness4)
-            .expect("should compute witness id");
+        let id5 = ScopeValidator::compute_witness_id(&witness4).expect("should compute witness id");
         assert_ne!(
             id1, id5,
             "Registry hash changes should affect witness ID (included in hash)"

@@ -43,6 +43,12 @@ pub enum IdentityVerdict {
 pub struct IdentityWitness {
     pub schema_id: String,
     pub schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
     pub operation: IdentityOperation,
     pub record_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -201,8 +207,8 @@ pub fn compute_delegation_record_id(
         expires_at_utc: &expires_at_utc,
         constraints: &constraints,
     };
-    let value =
-        serde_json::to_value(&payload).map_err(|e| EvalError(format!("serialize payload: {}", e)))?;
+    let value = serde_json::to_value(&payload)
+        .map_err(|e| EvalError(format!("serialize payload: {}", e)))?;
     let bytes = encode_canonical_value(&value)?;
     Ok(sha256_hex(&bytes))
 }
@@ -230,8 +236,8 @@ pub fn compute_identity_witness_id(witness: &IdentityWitness) -> Result<String, 
 }
 
 pub fn encode_identity_witness(witness: &IdentityWitness) -> Result<Vec<u8>, EvalError> {
-    let value =
-        serde_json::to_value(witness).map_err(|e| EvalError(format!("serialize witness: {}", e)))?;
+    let value = serde_json::to_value(witness)
+        .map_err(|e| EvalError(format!("serialize witness: {}", e)))?;
     encode_canonical_value(&value)
 }
 
@@ -256,7 +262,9 @@ pub(crate) fn validate_utc_timestamp(ts: &str, field: &str) -> Result<(), EvalEr
 }
 
 fn is_valid_sha256_hex(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -303,6 +311,9 @@ mod tests {
         let mut witness = IdentityWitness {
             schema_id: "identity-witness/0".to_string(),
             schema_version: 0,
+            court_version: None,
+            input_id: None,
+            config_hash: None,
             operation: IdentityOperation::VerifyDelegation,
             record_id: "a".repeat(64),
             required_scope: Some("scope:test".to_string()),
@@ -321,4 +332,3 @@ mod tests {
         assert_eq!(id1, id2);
     }
 }
-

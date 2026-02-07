@@ -111,6 +111,16 @@ pub struct UnitConversionRule {
 /// The envelope contains metadata that is NOT part of the witness identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CalcWitness {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_hash: Option<String>,
     /// Core payload - content-addressed, deterministic
     #[serde(flatten)]
     pub core: CalcWitnessCore,
@@ -122,7 +132,15 @@ pub struct CalcWitness {
 
 impl CalcWitness {
     pub fn new(core: CalcWitnessCore, envelope: CalcWitnessEnvelope) -> Self {
-        CalcWitness { core, envelope }
+        CalcWitness {
+            schema_id: None,
+            created_at: None,
+            court_version: None,
+            input_id: None,
+            config_hash: None,
+            core,
+            envelope,
+        }
     }
 }
 

@@ -75,6 +75,9 @@ pub fn delegate_issue(
     let witness = IdentityWitness {
         schema_id: "identity-witness/0".to_string(),
         schema_version: 0,
+        court_version: None,
+        input_id: None,
+        config_hash: None,
         operation: IdentityOperation::DelegateIssue,
         record_id,
         required_scope: None,
@@ -101,7 +104,10 @@ pub fn verify_delegation(
     } = input;
     record.validate()?;
     if !is_valid_scope_id(&required_scope) {
-        return Err(EvalError(format!("invalid required_scope: {}", required_scope)));
+        return Err(EvalError(format!(
+            "invalid required_scope: {}",
+            required_scope
+        )));
     }
     validate_utc_timestamp(&at_utc, "at_utc")?;
 
@@ -110,7 +116,11 @@ pub fn verify_delegation(
             IdentityVerdict::Invalid {
                 reason: "delegate_id_mismatch".to_string(),
             }
-        } else if !record.scope_ids.iter().any(|scope| scope == &required_scope) {
+        } else if !record
+            .scope_ids
+            .iter()
+            .any(|scope| scope == &required_scope)
+        {
             IdentityVerdict::Invalid {
                 reason: "scope_not_delegated".to_string(),
             }
@@ -129,7 +139,11 @@ pub fn verify_delegation(
         } else {
             IdentityVerdict::Valid
         }
-    } else if !record.scope_ids.iter().any(|scope| scope == &required_scope) {
+    } else if !record
+        .scope_ids
+        .iter()
+        .any(|scope| scope == &required_scope)
+    {
         IdentityVerdict::Invalid {
             reason: "scope_not_delegated".to_string(),
         }
@@ -152,6 +166,9 @@ pub fn verify_delegation(
     let witness = IdentityWitness {
         schema_id: "identity-witness/0".to_string(),
         schema_version: 0,
+        court_version: None,
+        input_id: None,
+        config_hash: None,
         operation: IdentityOperation::VerifyDelegation,
         record_id: record.record_id.clone(),
         required_scope: Some(required_scope),
@@ -258,4 +275,3 @@ mod tests {
         );
     }
 }
-

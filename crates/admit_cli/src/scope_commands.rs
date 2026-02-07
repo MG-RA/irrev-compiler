@@ -56,9 +56,10 @@ pub struct ScopeShowArgs {
 
 pub fn scope_add(args: ScopeAddArgs) -> Result<ScopeAdditionWitness, RegistryGateError> {
     // Step 1: Load existing registry
-    let registry_bytes = fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
-    let mut registry: MetaRegistryV0 =
-        serde_json::from_slice(&registry_bytes).map_err(|e| RegistryGateError::Json(e.to_string()))?;
+    let registry_bytes =
+        fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
+    let mut registry: MetaRegistryV0 = serde_json::from_slice(&registry_bytes)
+        .map_err(|e| RegistryGateError::Json(e.to_string()))?;
 
     // Step 2: Parse scope ID from args (handle both --scope and --scope-id/--version)
     let (scope_id, scope_version) = if let Some(spec) = &args.scope {
@@ -142,8 +143,8 @@ pub fn scope_add(args: ScopeAddArgs) -> Result<ScopeAdditionWitness, RegistryGat
     registry.registry_version += 1;
 
     // Step 9: Normalize registry (sort, dedup check)
-    let normalized = normalize_meta_registry(registry)
-        .map_err(|e| RegistryGateError::Json(e.to_string()))?;
+    let normalized =
+        normalize_meta_registry(registry).map_err(|e| RegistryGateError::Json(e.to_string()))?;
 
     // Step 10: Encode canonical CBOR and hash (registry_hash_after)
     let registry_hash_after = compute_registry_hash(&normalized)?;
@@ -160,6 +161,10 @@ pub fn scope_add(args: ScopeAddArgs) -> Result<ScopeAdditionWitness, RegistryGat
     let witness = ScopeAdditionWitness {
         schema_id: "scope-addition-witness/0".to_string(),
         schema_version: 0,
+        created_at: None,
+        court_version: None,
+        input_id: None,
+        config_hash: None,
         scope_id: scope_id.clone(),
         scope_version,
         validation_timestamp: chrono::Utc::now().to_rfc3339(),
@@ -178,9 +183,10 @@ pub fn scope_add(args: ScopeAddArgs) -> Result<ScopeAdditionWitness, RegistryGat
 
 pub fn scope_verify(args: ScopeVerifyArgs) -> Result<Vec<ScopeValidation>, RegistryGateError> {
     // Load registry
-    let registry_bytes = fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
-    let registry: MetaRegistryV0 =
-        serde_json::from_slice(&registry_bytes).map_err(|e| RegistryGateError::Json(e.to_string()))?;
+    let registry_bytes =
+        fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
+    let registry: MetaRegistryV0 = serde_json::from_slice(&registry_bytes)
+        .map_err(|e| RegistryGateError::Json(e.to_string()))?;
 
     // Find scope (clone it to avoid borrow issues)
     let scope = registry
@@ -211,18 +217,17 @@ pub fn scope_verify(args: ScopeVerifyArgs) -> Result<Vec<ScopeValidation>, Regis
 
 pub fn scope_list(args: ScopeListArgs) -> Result<Vec<MetaRegistryScope>, RegistryGateError> {
     // Load registry
-    let registry_bytes = fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
-    let registry: MetaRegistryV0 =
-        serde_json::from_slice(&registry_bytes).map_err(|e| RegistryGateError::Json(e.to_string()))?;
+    let registry_bytes =
+        fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
+    let registry: MetaRegistryV0 = serde_json::from_slice(&registry_bytes)
+        .map_err(|e| RegistryGateError::Json(e.to_string()))?;
 
     let mut scopes = registry.scopes.clone();
 
     // Apply filters
     if let Some(phase_filter) = args.phase {
         scopes.retain(|s| {
-            s.phase
-                .map(|p| format!("{:?}", p).to_lowercase())
-                == Some(phase_filter.to_lowercase())
+            s.phase.map(|p| format!("{:?}", p).to_lowercase()) == Some(phase_filter.to_lowercase())
         });
     }
 
@@ -238,9 +243,10 @@ pub fn scope_list(args: ScopeListArgs) -> Result<Vec<MetaRegistryScope>, Registr
 
 pub fn scope_show(args: ScopeShowArgs) -> Result<MetaRegistryScope, RegistryGateError> {
     // Load registry
-    let registry_bytes = fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
-    let registry: MetaRegistryV0 =
-        serde_json::from_slice(&registry_bytes).map_err(|e| RegistryGateError::Json(e.to_string()))?;
+    let registry_bytes =
+        fs::read(&args.registry).map_err(|e| RegistryGateError::Io(e.to_string()))?;
+    let registry: MetaRegistryV0 = serde_json::from_slice(&registry_bytes)
+        .map_err(|e| RegistryGateError::Json(e.to_string()))?;
 
     // Find scope
     registry

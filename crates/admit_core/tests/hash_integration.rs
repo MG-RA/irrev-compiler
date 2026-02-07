@@ -7,7 +7,6 @@
 
 use admit_core::{
     compute_witness_id, encode_hash_witness, hash_bytes, hash_value_cbor, verify, HashMetadata,
-    HashWitness,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -99,7 +98,7 @@ fn test_registry_hash_binding() {
     // 2. The hash-witness/0 schema
     // 3. The meta-registry/0 governance snapshot
 
-    let witness = hash_bytes(b"test", "2026-02-02T00:00:00Z".into(), None).unwrap();
+    let _witness = hash_bytes(b"test", "2026-02-02T00:00:00Z".into(), None).unwrap();
     let registry_hash = compute_registry_hash();
 
     // Registry hash should be deterministic
@@ -107,7 +106,8 @@ fn test_registry_hash_binding() {
     assert!(registry_hash.chars().all(|c| c.is_ascii_hexdigit()));
 
     // Same registry_hash across all hash witnesses at this version
-    let witness2 = hash_value_cbor(&json!({"test": 1}), "2026-02-02T00:00:00Z".into(), None).unwrap();
+    let _witness2 =
+        hash_value_cbor(&json!({"test": 1}), "2026-02-02T00:00:00Z".into(), None).unwrap();
     let registry_hash2 = compute_registry_hash();
 
     assert_eq!(

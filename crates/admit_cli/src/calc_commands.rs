@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use admit_core::calc_ast::{CalcExpr, CalcLiteral};
+use admit_core::calc_ast::CalcExpr;
 use admit_core::calc_eval::{CalcEvaluator, EvalResult};
 use admit_core::calc_witness::{
     CalcInputContract, CalcOutput, CalcPlanArtifact, CalcResolvedInput, CalcWitness,

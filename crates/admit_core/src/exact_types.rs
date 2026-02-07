@@ -69,20 +69,6 @@ impl ExactValue {
         )
     }
 
-    // Conversion to internal representation
-    fn to_i64(&self) -> Result<i64, String> {
-        match self {
-            ExactValue::Int { value } => i64::from_str(value)
-                .map_err(|e| format!("invalid int value '{}': {}", value, e)),
-            ExactValue::Nat { value } => {
-                let n = u64::from_str(value)
-                    .map_err(|e| format!("invalid nat value '{}': {}", value, e))?;
-                i64::try_from(n).map_err(|_| format!("nat value {} too large for i64", value))
-            }
-            _ => Err(format!("cannot convert {} to i64", self.type_name())),
-        }
-    }
-
     fn to_rational(&self) -> Result<Rational64, String> {
         match self {
             ExactValue::Int { value } => {

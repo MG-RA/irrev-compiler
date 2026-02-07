@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use crate::edge::{DagEdge, EdgeType, MutationRiskClass, ScopeTag};
 use crate::graph::GovernedDag;

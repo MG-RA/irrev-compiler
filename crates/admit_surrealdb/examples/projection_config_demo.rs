@@ -1,6 +1,4 @@
-use admit_surrealdb::projection_config::{
-    ProjectionConfig, ProjectionPhases, BatchSizes, FailureHandling, RetryPolicy,
-};
+use admit_surrealdb::projection_config::{FailureHandling, ProjectionConfig, RetryPolicy};
 use std::collections::BTreeMap;
 
 fn main() {

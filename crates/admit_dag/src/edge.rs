@@ -5,11 +5,17 @@ use crate::node::NodeId;
 /// Scope tag for scope-bounded evaluation
 /// Maps directly to existing `MetaRegistryScope.id` format.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct ScopeTag(pub String); // "scope:core.pure", "scope:vault.read", "scope:fs.write", etc.
+pub struct ScopeTag(pub String); // "scope:core.pure", "scope:obsidian.vault.read", "scope:fs.write", etc.
 
 impl ScopeTag {
     pub fn new(s: impl Into<String>) -> Self {
         ScopeTag(s.into())
+    }
+
+    /// Create an Obsidian vault scope tag using the canonical namespaced form.
+    /// Example: `ScopeTag::obsidian_vault("read")` -> `scope:obsidian.vault.read`.
+    pub fn obsidian_vault(action: &str) -> Self {
+        ScopeTag(format!("scope:obsidian.vault.{}", action))
     }
 
     pub fn as_str(&self) -> &str {
@@ -256,5 +262,12 @@ mod tests {
         assert!(scope.matches_prefix("scope:core"));
         assert!(scope.matches_prefix("scope:core."));
         assert!(!scope.matches_prefix("scope:external"));
+    }
+
+    #[test]
+    fn scope_tag_obsidian_vault_namespace() {
+        let scope = ScopeTag::obsidian_vault("read");
+        assert_eq!(scope.as_str(), "scope:obsidian.vault.read");
+        assert!(scope.matches_prefix("scope:obsidian.vault"));
     }
 }

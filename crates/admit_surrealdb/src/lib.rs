@@ -3446,10 +3446,6 @@ fn extract_obsidian_links(input: &str) -> Vec<ObsidianLink> {
     crate::link_resolver::extract_obsidian_links(input)
 }
 
-fn parse_obsidian_inner(inner: &str) -> Option<(String, Option<String>, Option<String>)> {
-    crate::link_resolver::parse_obsidian_inner(inner)
-}
-
 fn resolve_obsidian_target(
     from_doc_path: &str,
     raw_target: &str,

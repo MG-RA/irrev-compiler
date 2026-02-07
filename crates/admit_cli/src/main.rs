@@ -4159,6 +4159,7 @@ fn maybe_project_trace(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn maybe_project_doc_chunks(
     projection: &mut ProjectionCoordinator,
     dag: &admit_dag::GovernedDag,
@@ -4175,6 +4176,7 @@ fn maybe_project_doc_chunks(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn maybe_project_doc_files(
     projection: &mut ProjectionCoordinator,
     dag: &admit_dag::GovernedDag,
@@ -4191,6 +4193,7 @@ fn maybe_project_doc_files(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn maybe_project_vault_links(
     projection: &mut ProjectionCoordinator,
     dag: &admit_dag::GovernedDag,

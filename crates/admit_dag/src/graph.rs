@@ -141,7 +141,7 @@ impl GovernedDag {
 mod tests {
     use super::*;
     use crate::edge::{MutationRiskClass, ScopeTag, TimelineStep};
-    use crate::node::{NodeKind, NodeIdPayload};
+    use crate::node::NodeKind;
 
     fn create_test_node(content_hash: &str, scope: &str) -> DagNode {
         DagNode::new(

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::calc_ast::{CalcCmpOp, CalcExpr, CalcLiteral};
+use crate::calc_ast::CalcExpr;
 use crate::calc_witness::CalcTraceStep;
 use crate::exact_types::{ExactQuantity, ExactValue};
 
@@ -240,6 +240,7 @@ impl CalcEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calc_ast::{CalcCmpOp, CalcLiteral};
 
     fn make_inputs(pairs: Vec<(&str, i64, Option<&str>)>) -> BTreeMap<String, EvalResult> {
         pairs

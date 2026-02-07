@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::edge::EdgeType;
 use crate::graph::GovernedDag;
 use crate::node::NodeId;
 

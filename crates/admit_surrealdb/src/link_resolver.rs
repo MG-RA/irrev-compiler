@@ -199,7 +199,7 @@ impl VaultLinkResolver {
 /// 4. Title-based resolution (exact case)
 /// 5. Title-based resolution (case-insensitive)
 pub fn resolve_obsidian_target(
-    from_doc_path: &str,
+    _from_doc_path: &str,
     raw_target: &str,
     vault_docs: &BTreeMap<String, VaultDoc>,
     title_exact_index: &BTreeMap<String, BTreeSet<String>>,

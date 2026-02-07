@@ -332,6 +332,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+#[cfg(test)]
 fn hex_decode(s: &str) -> Result<Vec<u8>, EvalError> {
     if s.len() % 2 != 0 {
         return Err(EvalError("hex string must have even length".into()));

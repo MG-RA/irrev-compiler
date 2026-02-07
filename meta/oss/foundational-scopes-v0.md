@@ -79,8 +79,8 @@ Provides:
 Unlocks: capability-carrying plans; cross-terminal collaboration without sharing access.
 
 Example scopes:
-- `identity.delegate` (issue capability)
-- `identity.verify` (verify capability/attestation)
+- `identity.delegate` (issue capability) ← **BOOTSTRAPPED** (`@0` contract + registry entry)
+- `identity.verify` (verify capability/attestation) ← **BOOTSTRAPPED** (`@0` contract + registry entry)
 
 ### `hash` (domain)
 
@@ -162,7 +162,7 @@ Provides:
 Unlocks: effects-as-patches unifying filesystem/git/vault/config changes.
 
 Example scopes:
-- `patch.plan`
+- `patch.plan` ← **BOOTSTRAPPED** (`@0` contract + registry entry)
 - `patch.apply` (effectful; not foundational)
 
 ### `verify` (domain)
@@ -211,5 +211,5 @@ If yes, consider formalizing it as a scope authority.
 Highest leverage options:
 
 - `encode.canonical` + `hash.content` + `hash.verify` ← **DONE** (`encode.canonical@0`, `hash.content@0`, `hash.verify@0`)
-- `identity.delegate` + `identity.verify` (delegation + self-governing scopes)
-- `patch.plan` (unifies most mechanisms under a single change object)
+- `identity.delegate` + `identity.verify` ← **BOOTSTRAPPED** (`@0` contracts + registry entries)
+- `patch.plan` ← **BOOTSTRAPPED** (`@0` contract + registry entry)

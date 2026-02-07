@@ -19,16 +19,27 @@ fn write_registry(path: &PathBuf, value: serde_json::Value) {
 }
 
 #[test]
-fn registry_init_includes_hash_verify_scope() {
-    let dir = temp_dir("init-hash-verify");
+fn registry_init_includes_foundational_scope_bootstrap_entries() {
+    let dir = temp_dir("init-foundational");
     let path = dir.join("meta-registry.json");
     registry_init(&path).expect("registry init");
     let bytes = std::fs::read(&path).expect("read registry");
     let registry: MetaRegistryV0 = serde_json::from_slice(&bytes).expect("decode registry");
-    assert!(registry
-        .scopes
-        .iter()
-        .any(|scope| scope.id == "scope:hash.verify" && scope.version == 0));
+    for scope_id in [
+        "scope:hash.verify",
+        "scope:identity.delegate",
+        "scope:identity.verify",
+        "scope:patch.plan",
+    ] {
+        assert!(
+            registry
+                .scopes
+                .iter()
+                .any(|scope| scope.id == scope_id && scope.version == 0),
+            "missing {} in registry_init output",
+            scope_id
+        );
+    }
 }
 
 fn base_registry_json() -> serde_json::Value {

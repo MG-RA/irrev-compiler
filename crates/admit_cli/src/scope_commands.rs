@@ -162,7 +162,7 @@ pub fn scope_add(args: ScopeAddArgs) -> Result<ScopeAdditionWitness, RegistryGat
         schema_id: "scope-addition-witness/0".to_string(),
         schema_version: 0,
         created_at: None,
-        court_version: None,
+        engine_version: None,
         input_id: None,
         config_hash: None,
         scope_id: scope_id.clone(),

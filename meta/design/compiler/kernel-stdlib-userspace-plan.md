@@ -84,7 +84,9 @@ The goal is a default set that makes the system immediately composable:
 
 In the current Rust compiler implementation, `module:irrev_std@1` is required by lowering, but the repo does not yet contain a shipped stdlib module directory (the docs mention future layouts like `adm-pack/irrev_std@1/core.adm`).
 
-So the “stdlib” currently exists as a *required name*, not yet as a concrete, governed artifact set.
+So the "stdlib" currently exists as a *required name*, not yet as a concrete, governed artifact set.
+
+**Witness gap:** `irrev_std@1` is currently a name-only dependency. Until a content-addressed stdlib artifact exists in the repo, this dependency is unwitnessed — a trust assumption rather than a provenance-anchored reference.
 
 ## Layer 3 — User space (vault, packs, plugins)
 

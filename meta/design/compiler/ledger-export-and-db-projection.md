@@ -111,9 +111,9 @@ It emits witnesses:
 
 Ingestion rules:
 
-- upsert by `event_id` (idempotent)
+- insert-if-absent by `event_id` (idempotent). If a row with the same `event_id` already exists, verify all fields match; if mismatch detected, emit `ledger-projection-drift/0` witness and halt ingestion.
 - ensure `seq` monotonicity and chain linkage matches exported stream
-- store “last ingested seq” as sink state
+- store "last ingested seq" as sink state
 
 ## Projection witnesses (schemas)
 

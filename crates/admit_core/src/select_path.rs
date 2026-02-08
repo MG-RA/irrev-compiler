@@ -46,8 +46,8 @@ pub struct SelectPathWitness {
     pub schema_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,7 +62,7 @@ impl SelectPathWitness {
             schema_id: "select-path-witness/0".to_string(),
             schema_version: 0,
             created_at: None,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             input,

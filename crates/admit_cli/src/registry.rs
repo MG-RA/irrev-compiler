@@ -222,14 +222,14 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
                 canonical_encoding: "canonical-cbor".to_string(),
             },
             MetaRegistrySchema {
-                id: "court-query/0".to_string(),
-                schema_version: 0,
+                id: "engine-query/1".to_string(),
+                schema_version: 1,
                 kind: "query_artifact".to_string(),
                 canonical_encoding: "canonical-cbor".to_string(),
             },
             MetaRegistrySchema {
-                id: "court-function/0".to_string(),
-                schema_version: 0,
+                id: "engine-function/1".to_string(),
+                schema_version: 1,
                 kind: "fn_artifact".to_string(),
                 canonical_encoding: "canonical-cbor".to_string(),
             },

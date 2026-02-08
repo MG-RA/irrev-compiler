@@ -165,11 +165,19 @@ Every governed event that changes the world references the **AuthorityState hash
 
 ### Kernel acceptance rule
 
-Kernel allows exactly one “unwitnessed” transition:
+Kernel allows exactly one "unwitnessed" transition:
 
 - from empty → genesis authority state
 
 After genesis, **all** rule/registry/authority transitions require governed ceremony.
+
+### Genesis irreversibility cost
+
+The genesis transition is irreversible. If the genesis ruleset or registry is incorrect, correction requires full re-initialization (state wipe and ledger reset).
+
+This cost is accepted because genesis is the bootstrap boundary — there is no prior governed state from which to derive a correction ceremony. The alternative (negotiated genesis with external authority) contradicts the self-governing design stance.
+
+Mitigation: genesis artifacts (registry, rulesets) undergo review discipline before first initialization. Post-genesis, all changes require witnessed ceremony.
 
 ## Runtime model: `tick(...)`
 

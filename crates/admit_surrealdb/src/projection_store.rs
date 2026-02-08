@@ -232,7 +232,7 @@ pub trait ProjectionStoreOps {
     ) -> ProjectionResult<()>;
 
     // =========================================================================
-    // Court artifacts (stored definitions)
+    // Engine artifacts (stored definitions)
     // =========================================================================
 
     /// Project stored SurrealQL queries as governed artifacts (queryable view).

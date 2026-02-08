@@ -51,7 +51,7 @@ A database scope bounds persistent state effects:
 * mechanisms: query/mutation/migration/indexing
 * packs: admissibility laws (what witnesses/approvals are required, what invariants apply)
 
-The DB becomes a self-governing authority, issuing capabilities tied to namespaces and verifying witnesses for writes.
+The DB scope provides governed access to persistent state. Write operations require witnesses verified by the admissibility engine; the DB does not issue verdicts. The DB is a governed projection scope, not an authority — it accelerates queries but cannot decide admissibility.
 
 ### Why SurrealDB
 

@@ -59,7 +59,7 @@ pub fn git_snapshot(
     let witness = GitSnapshotWitness {
         schema_id: "git-snapshot-witness/0".to_string(),
         schema_version: 0,
-        court_version: None,
+        engine_version: None,
         input_id: None,
         config_hash: None,
         head_commit_oid: input.head_commit_oid,
@@ -102,7 +102,7 @@ pub fn git_diff(
     let witness = GitDiffWitness {
         schema_id: "git-diff-witness/0".to_string(),
         schema_version: 0,
-        court_version: None,
+        engine_version: None,
         input_id: None,
         config_hash: None,
         base_commit_oid: input.base_commit_oid,
@@ -186,7 +186,7 @@ pub fn git_provenance(
     let witness = GitProvenanceWitness {
         schema_id: "git-provenance-witness/0".to_string(),
         schema_version: 0,
-        court_version: None,
+        engine_version: None,
         input_id: None,
         config_hash: None,
         repository_id: input.repository_id,

@@ -51,9 +51,9 @@ Declare paired scopes when possible:
 
 Read-only “observe” scopes produce evidence with zero side-effects; “write” scopes admit irreversibility and carry extra guard fields.
 
-C) Witness vs Authority
+C) Evidence vs Authority
 
-* Witness scopes produce evidence (hashes, diffs, timestamps).
+* Evidence scopes produce evidence artifacts (hashes, diffs, timestamps).
 * Authority scopes issue admissibility verdicts.
 
 Keep roles distinct even if both live in Rust; evidence ≠ verdict.
@@ -99,4 +99,4 @@ Define a `Scope IR` that all scopes compile to:
 * `irreversibility_grade`
 * `allowed_surfaces`
 
-Meta-scope validates Scope IR, not the raw implementation, enabling the compiler to remain the judge 📜🧾
+Meta-scope validates Scope IR, not the raw implementation, enabling the compiler to remain the judge

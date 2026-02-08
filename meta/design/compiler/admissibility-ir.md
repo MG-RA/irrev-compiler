@@ -16,9 +16,18 @@ This IR is constrained by the vault’s reasoning framework (`epistemics/vault/i
 
 Concept alignment (semantic anchors):
 
-- `[[difference]]` and `[[transformation-space]]` anchor “what can be named” and “what transformations count”.
-- `[[persistence]]`, `[[persistent-difference]]`, `[[erasure-cost]]`, `[[displacement]]`, `[[residual]]` anchor “irreversibility-native accounting”.
-- `[[constraint]]`, `[[feasible-set]]`, `[[admissibility]]` anchor “what admissibility means” (selector over the feasible set, not desirability).
+- [[difference]] — a detectable distinction between states
+- [[transformation-space]] — the set of all possible state changes
+- [[persistence]] — state that survives across boundaries or time
+- [[persistent-difference]] — differences that cannot be undone
+- [[erasure-cost]] — resources consumed to eliminate a difference
+- [[displacement]] — prior state forced out by new state
+- [[residual]] — traces left by transformation
+- [[constraint]] — rules reducing the feasible set
+- [[feasible-set]] — transformations still available after constraints
+- [[admissibility]] — the subset of feasible moves permitted by rules
+
+(Full definitions: irrev-vault/concepts/)
 
 ## Design stance
 

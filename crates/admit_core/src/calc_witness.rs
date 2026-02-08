@@ -115,8 +115,8 @@ pub struct CalcWitness {
     pub schema_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -135,7 +135,7 @@ impl CalcWitness {
         CalcWitness {
             schema_id: None,
             created_at: None,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             core,

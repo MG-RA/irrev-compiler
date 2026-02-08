@@ -75,7 +75,7 @@ pub fn delegate_issue(
     let witness = IdentityWitness {
         schema_id: "identity-witness/0".to_string(),
         schema_version: 0,
-        court_version: None,
+        engine_version: None,
         input_id: None,
         config_hash: None,
         operation: IdentityOperation::DelegateIssue,
@@ -166,7 +166,7 @@ pub fn verify_delegation(
     let witness = IdentityWitness {
         schema_id: "identity-witness/0".to_string(),
         schema_version: 0,
-        court_version: None,
+        engine_version: None,
         input_id: None,
         config_hash: None,
         operation: IdentityOperation::VerifyDelegation,

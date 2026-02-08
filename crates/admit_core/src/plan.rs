@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct PlanWitness {
     pub schema_id: String,
     pub created_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

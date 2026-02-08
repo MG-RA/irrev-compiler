@@ -398,7 +398,7 @@ pub fn create_plan(input: PlanNewInput) -> Result<PlanCreatedEvent, DeclareCostE
     let witness = admit_core::PlanWitness {
         schema_id: plan_witness_schema_id.to_string(),
         created_at: input.timestamp.clone(),
-        court_version: Some(input.tool_version.clone()),
+        engine_version: Some(input.tool_version.clone()),
         input_id: Some(answers_file_hash.clone()),
         config_hash: Some(template_hash.clone()),
         producer: admit_core::PlanProducer {

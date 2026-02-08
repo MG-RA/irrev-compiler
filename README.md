@@ -1046,7 +1046,7 @@ The `meta/` directory contains design documents, protocols, and scope contracts:
 
 ### Scope Contracts
 - [meta-scope-contract.md](meta/meta-scope-contract.md) — Meta-scope governance
-- [hash-scope-contract.md](meta/hash-scope-contract.md) — Hash witness scope
+- [hash-scope-contract.md](meta/hash-scope-contract.md) — Hash evidence scope
 - [encode-canonical-scope-contract.md](meta/encode-canonical-scope-contract.md) — Canonical encoding scope
 - [select-path-scope-contract.md](meta/select-path-scope-contract.md) — Path selection scope
 

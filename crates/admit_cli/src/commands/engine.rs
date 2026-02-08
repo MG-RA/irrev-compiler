@@ -1,16 +1,16 @@
-//! Court command implementations (query and function artifact registration)
+//! Engine command implementations (query and function artifact registration)
 
 use admit_cli::{
-    append_court_event, build_court_event, default_artifacts_dir, default_ledger_path,
+    append_engine_event, build_engine_event, default_artifacts_dir, default_ledger_path,
     load_meta_registry, read_file_bytes, register_function_artifact, register_query_artifact,
     MetaRegistryV0,
 };
 use admit_surrealdb::{FunctionArtifactRow, ProjectionStoreOps, QueryArtifactRow};
 
-use crate::{CourtFunctionAddArgs, CourtQueryAddArgs, ProjectionCoordinator};
+use crate::{EngineFunctionAddArgs, EngineQueryAddArgs, ProjectionCoordinator};
 
-pub fn run_court_query_add(
-    args: CourtQueryAddArgs,
+pub fn run_engine_query_add(
+    args: EngineQueryAddArgs,
     projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let artifacts_dir = args
@@ -45,8 +45,8 @@ pub fn run_court_query_add(
     .map_err(|e| e.to_string())?;
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let event = build_court_event(
-        "court.query.registered",
+    let event = build_engine_event(
+        "engine.query.registered",
         timestamp.clone(),
         "query",
         artifact.clone(),
@@ -57,7 +57,7 @@ pub fn run_court_query_add(
     .map_err(|e| e.to_string())?;
 
     if !args.no_ledger {
-        append_court_event(&ledger_path, &event).map_err(|e| e.to_string())?;
+        append_engine_event(&ledger_path, &event).map_err(|e| e.to_string())?;
     }
 
     projection.with_store("surrealdb project query artifact", |surreal| {
@@ -105,8 +105,8 @@ pub fn run_court_query_add(
     Ok(())
 }
 
-pub fn run_court_function_add(
-    args: CourtFunctionAddArgs,
+pub fn run_engine_function_add(
+    args: EngineFunctionAddArgs,
     projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
     let artifacts_dir = args
@@ -141,8 +141,8 @@ pub fn run_court_function_add(
     .map_err(|e| e.to_string())?;
 
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let event = build_court_event(
-        "court.function.registered",
+    let event = build_engine_event(
+        "engine.function.registered",
         timestamp.clone(),
         "function",
         artifact.clone(),
@@ -153,7 +153,7 @@ pub fn run_court_function_add(
     .map_err(|e| e.to_string())?;
 
     if !args.no_ledger {
-        append_court_event(&ledger_path, &event).map_err(|e| e.to_string())?;
+        append_engine_event(&ledger_path, &event).map_err(|e| e.to_string())?;
     }
 
     projection.with_store("surrealdb project function artifact", |surreal| {

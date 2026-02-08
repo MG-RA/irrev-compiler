@@ -116,7 +116,7 @@ packs = ["vault_lint_pack@1#<hash>"]
 fail_on = "warning"
 ```
 
-### B) Program-declared packs (flexible but risky)
+### B) Program-declared packs (flexible; risk: program can override runtime governance if pack selection is not constrained by meta-scope gates)
 
 Program states which packs govern. Prefer runtime config in v0 for clarity.
 

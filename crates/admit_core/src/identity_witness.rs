@@ -43,8 +43,8 @@ pub enum IdentityVerdict {
 pub struct IdentityWitness {
     pub schema_id: String,
     pub schema_version: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -311,7 +311,7 @@ mod tests {
         let mut witness = IdentityWitness {
             schema_id: "identity-witness/0".to_string(),
             schema_version: 0,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             operation: IdentityOperation::VerifyDelegation,

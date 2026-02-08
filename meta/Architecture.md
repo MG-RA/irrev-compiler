@@ -113,7 +113,7 @@ That includes:
 
 ### Execution chokepoint
 
-All effectful operations should eventually run through the **Harness**:
+All effectful operations run through the **Harness** (design target; see Known Non-Enforcements for current exceptions):
 
 * plan (pure)
 * validate (rulesets + invariants)
@@ -147,6 +147,21 @@ Regenerable representations of vault state:
 * should be reproducible
 * should be marked ephemeral when appropriate
 * ideally gitignored when generated
+
+---
+
+## Known Non-Enforcements
+
+The architecture defines invariants that are not yet fully enforced. This section declares exceptions explicitly rather than leaving them implicit.
+
+| Item | Status | Detail |
+| --- | --- | --- |
+| Genesis bootstrap | **Known exception** | The kernel allows exactly one unwitnessed transition: empty → genesis authority state. All post-genesis effects require ceremony. See runtime-genesis-implementation-plan.md L166-172. |
+| Ledger appends without full ceremony | **Design target** | CLI commands currently append to ledger without the full plan → witness → execute ceremony described in Compiler_Runtime_Loop.md L30. |
+| Execution chokepoint (all ops via Harness) | **Design target** | Current exceptions: direct ledger file appends, registry builds. |
+| Compiler purity | **Active invariant** | Enforced by crate isolation: admit_core has no IO dependencies. Not enforced at type level. Integration tests verify no file/network access during evaluation. |
+| Projection hash verification | **Not implemented yet** | Architecture L142-143 states projections are not authoritative unless tied to hashes. The compiler does not yet verify projection hashes at load time. Planned: emit hash_verified/hash_mismatch witness fact before using projection content. |
+| Semantics authority enforcement | **Design target** | semantics-authority.md declares Rust as sole semantic authority. Current enforcement: review discipline. Planned: CI guard rejects artifacts not produced by Rust tooling. |
 
 ---
 

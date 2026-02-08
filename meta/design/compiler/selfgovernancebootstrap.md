@@ -1,3 +1,9 @@
+---
+role: support
+type: implementation-guide
+canonical: false
+---
+
 # Self-Governance Bootstrap
 
 Invariants "enter" the moment an invariant stops being a label on rules and becomes a

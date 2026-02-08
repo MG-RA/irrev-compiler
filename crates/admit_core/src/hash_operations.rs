@@ -45,7 +45,7 @@ pub fn hash_bytes(
 
     let witness = HashWitness {
         schema_id: None,
-        court_version: None,
+        engine_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::HashBytes,
         input: HashInput::Bytes {
@@ -114,7 +114,7 @@ pub fn hash_value_cbor(
 
     let witness = HashWitness {
         schema_id: None,
-        court_version: None,
+        engine_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::HashValueCbor,
         input: HashInput::ValueCbor { canonical_cbor_hex },
@@ -220,7 +220,7 @@ pub fn verify(
 
     let witness = HashWitness {
         schema_id: None,
-        court_version: None,
+        engine_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::Verify {
             expected_digest: expected_digest.to_string(),

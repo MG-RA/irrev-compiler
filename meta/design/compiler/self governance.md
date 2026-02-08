@@ -1,3 +1,9 @@
+---
+role: support
+type: implementation-guide
+canonical: false
+---
+
 ## Threshold A: Proto self-governance (earliest possible)
 
 This happens when the system can treat *its own rules and schemas* as inputs and emit witnesses about them.

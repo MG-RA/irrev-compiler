@@ -27,8 +27,8 @@ pub struct GitWitnessMetadata {
 pub struct GitSnapshotWitness {
     pub schema_id: String,
     pub schema_version: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,8 +76,8 @@ pub struct GitDiffFileChange {
 pub struct GitDiffWitness {
     pub schema_id: String,
     pub schema_version: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -135,8 +135,8 @@ pub struct GitArtifactBinding {
 pub struct GitProvenanceWitness {
     pub schema_id: String,
     pub schema_version: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -660,7 +660,7 @@ mod tests {
         let mut witness = GitSnapshotWitness {
             schema_id: "git-snapshot-witness/0".to_string(),
             schema_version: 0,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             head_commit_oid: "a".repeat(40),
@@ -689,7 +689,7 @@ mod tests {
         let mut witness = GitDiffWitness {
             schema_id: "git-diff-witness/0".to_string(),
             schema_version: 0,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             base_commit_oid: "a".repeat(40),
@@ -720,7 +720,7 @@ mod tests {
         let mut witness = GitProvenanceWitness {
             schema_id: "git-provenance-witness/0".to_string(),
             schema_version: 0,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             repository_id: "repo:irrev-compiler".to_string(),

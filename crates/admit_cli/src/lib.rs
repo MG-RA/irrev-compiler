@@ -1,6 +1,6 @@
 mod artifact;
 pub mod calc_commands;
-mod court;
+mod engine;
 mod ingest_cache;
 mod ingest_dir;
 mod ingest_protocol;
@@ -27,8 +27,8 @@ pub use types::*;
 
 // Ledger operations
 pub use ledger::{
-    append_checked_event, append_court_event, append_event, append_executed_event,
-    append_ingest_event, append_projection_event, build_court_event, build_ingest_event,
+    append_checked_event, append_engine_event, append_event, append_executed_event,
+    append_ingest_event, append_projection_event, build_engine_event, build_ingest_event,
     build_projection_event, default_ledger_path, read_checked_event, read_cost_declared_event,
     read_file_bytes,
 };
@@ -77,8 +77,8 @@ pub use ingest_protocol::{
     ingest_dir_protocol, ingest_dir_protocol_with_cache, IngestDirProtocolOutput,
 };
 
-// Court artifacts (governed definitions)
-pub use court::{register_function_artifact, register_query_artifact};
+// Engine artifacts (governed definitions)
+pub use engine::{register_function_artifact, register_query_artifact};
 pub use rust_ir_lint::{
     append_rust_ir_lint_event, run_rust_ir_lint, RustIrLintInput, RustIrLintRunOutput,
 };

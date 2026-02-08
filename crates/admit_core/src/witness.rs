@@ -12,8 +12,8 @@ pub struct Witness {
     pub schema_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "court_version")]
+    pub engine_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -255,7 +255,7 @@ impl WitnessBuilder {
         Witness {
             schema_id: None,
             created_at: None,
-            court_version: None,
+            engine_version: None,
             input_id: None,
             config_hash: None,
             verdict: self.verdict,

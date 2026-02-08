@@ -16,8 +16,8 @@ pub struct HashWitness {
     /// Optional schema identifier for governance attribution.
     pub schema_id: Option<String>,
 
-    /// Optional court/tool version attribution.
-    pub court_version: Option<String>,
+    /// Optional engine/tool version attribution.
+    pub engine_version: Option<String>,
 
     /// The hash algorithm used (e.g., "sha256")
     pub algorithm: String,
@@ -394,7 +394,7 @@ mod tests {
     fn test_hash_witness_validation() {
         let witness = HashWitness {
             schema_id: None,
-            court_version: None,
+            engine_version: None,
             algorithm: "sha256".into(),
             operation: HashOperation::HashBytes,
             input: HashInput::Bytes {
@@ -413,7 +413,7 @@ mod tests {
     fn test_hash_witness_validation_digest_mismatch() {
         let witness = HashWitness {
             schema_id: None,
-            court_version: None,
+            engine_version: None,
             algorithm: "sha256".into(),
             operation: HashOperation::HashBytes,
             input: HashInput::Bytes {

@@ -95,7 +95,7 @@ pub fn run_rust_ir_lint(input: RustIrLintInput) -> Result<RustIrLintRunOutput, D
         schema_version: 1,
         created_at: input.timestamp.clone(),
         scope_id: RUST_IR_LINT_SCOPE_ID.to_string(),
-        court_version: input.tool_version,
+        engine_version: input.tool_version,
         input_root: normalize_path(&input.root),
         input_id,
         input_ids,
@@ -330,11 +330,12 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
         });
     }
 
-    // IR-RS-04: Court code should avoid nondeterministic primitives.
-    let is_court_context = path_lower.contains("court")
+    // IR-RS-04: Engine code should avoid nondeterministic primitives.
+    let is_engine_context = path_lower.contains("engine")
+        || path_lower.contains("court")
         || path_lower.contains("witness")
         || path_lower.contains("plan");
-    if is_court_context {
+    if is_engine_context {
         for (idx, line) in file.text.lines().enumerate() {
             let lower = line.to_ascii_lowercase();
             if lower.contains("hashmap<") || lower.contains("std::collections::hashmap") {
@@ -343,7 +344,7 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
                     severity: "error".to_string(),
                     file: file.rel_path.clone(),
                     line: Some((idx + 1) as u32),
-                    message: "HashMap usage in court context may introduce nondeterministic order"
+                    message: "HashMap usage in engine context may introduce nondeterministic order"
                         .to_string(),
                 });
             }
@@ -353,7 +354,7 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
                     severity: "error".to_string(),
                     file: file.rel_path.clone(),
                     line: Some((idx + 1) as u32),
-                    message: "randomness used in court context".to_string(),
+                    message: "randomness used in engine context".to_string(),
                 });
             }
             if lower.contains("utc::now(") {
@@ -362,7 +363,7 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
                     severity: "error".to_string(),
                     file: file.rel_path.clone(),
                     line: Some((idx + 1) as u32),
-                    message: "time source used in court context".to_string(),
+                    message: "time source used in engine context".to_string(),
                 });
             }
         }
@@ -394,7 +395,8 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
                         || name.ends_with("_created_at")
                         || name.contains("created_at_")
                 });
-                let has_court_version = field_names.contains("court_version")
+                let has_engine_version = field_names.contains("engine_version")
+                    || field_names.contains("court_version")
                     || field_names.contains("tool_version")
                     || field_names.contains("compiler")
                     || field_names.contains("producer");
@@ -412,8 +414,8 @@ fn scan_core_violations(file: &RustFileInput) -> Vec<RustIrLintViolation> {
                 if !has_created {
                     missing.push("created_at/timestamp");
                 }
-                if !has_court_version {
-                    missing.push("court_version/tool_version/compiler");
+                if !has_engine_version {
+                    missing.push("engine_version/tool_version/compiler");
                 }
                 if !has_input {
                     missing.push("input_id(s)/config_hash");

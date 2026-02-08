@@ -118,6 +118,8 @@ fn fixture_3_hash_bytes_test() {
 fn fixture_4_wire_format_lock_hash_witness_id_payload() {
     // Create a known witness
     let witness = HashWitness {
+        schema_id: None,
+        engine_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::HashBytes,
         input: HashInput::Bytes {
@@ -156,6 +158,8 @@ fn fixture_4_wire_format_lock_hash_witness_id_payload() {
 fn fixture_4_wire_format_lock_full_hash_witness() {
     // Create a known witness with metadata
     let witness = HashWitness {
+        schema_id: None,
+        engine_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::HashValueCbor,
         input: HashInput::ValueCbor {
@@ -187,6 +191,8 @@ fn fixture_4_wire_format_lock_full_hash_witness() {
 fn fixture_4_wire_format_lock_verify_operation() {
     // Test Verify operation encoding
     let witness = HashWitness {
+        schema_id: None,
+        engine_version: None,
         algorithm: "sha256".into(),
         operation: HashOperation::Verify {
             expected_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

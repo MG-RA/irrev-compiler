@@ -9,7 +9,7 @@ use super::internal::{
 use super::registry::{load_registry_cached, registry_allows_schema, registry_allows_scope};
 use super::types::{
     AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactRef, CheckedPayload,
-    CostDeclaredEvent, CourtEvent, CourtEventPayload, DeclareCostError, ExecutedPayload,
+    CostDeclaredEvent, DeclareCostError, EngineEvent, EngineEventPayload, ExecutedPayload,
     IngestEvent, IngestEventPayload, LedgerIssue, LedgerReport, PlanCreatedEvent,
     PlanCreatedPayload, ProjectionEvent, ProjectionEventPayload, RustIrLintEvent,
     RustIrLintPayload, RustIrLintWitness,
@@ -1052,10 +1052,10 @@ pub fn verify_ledger(
                     }
                 }
             }
-            Some(t) if t.starts_with("court.") => {
-                match serde_json::from_value::<CourtEvent>(value) {
+            Some(t) if t.starts_with("engine.") || t.starts_with("court.") => {
+                match serde_json::from_value::<EngineEvent>(value) {
                     Ok(event) => {
-                        let payload = CourtEventPayload {
+                        let payload = EngineEventPayload {
                             event_type: event.event_type.clone(),
                             timestamp: event.timestamp.clone(),
                             artifact_kind: event.artifact_kind.clone(),
@@ -1085,7 +1085,7 @@ pub fn verify_ledger(
                             &event_id,
                             &event_type,
                             &mut issues,
-                            "court artifact",
+                            "engine artifact",
                         );
                     }
                     Err(err) => {
@@ -1093,7 +1093,7 @@ pub fn verify_ledger(
                             line: line_no,
                             event_id: event_id.clone(),
                             event_type: event_type.clone(),
-                            message: format!("court event decode failed: {}", err),
+                            message: format!("engine event decode failed: {}", err),
                         });
                     }
                 }

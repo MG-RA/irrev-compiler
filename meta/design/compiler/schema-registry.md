@@ -5,6 +5,14 @@ Status date: 2026-01-29
 This registry tracks active and planned schema IDs. Use these IDs in artifacts
 and ledger events to keep provenance deterministic and auditable.
 
+## Naming convention
+
+**Canonical format:** `schema-name/version` (slash notation).
+
+Examples: `admissibility-witness/1`, `vault-snapshot/0`, `engine-query/1`.
+
+Planned schemas using @-notation (`VaultScan@1`, `VaultLintWitness@1`, `ProgramBundle@1`) are flagged for normalization to slash notation before activation. The @-notation is transitional only.
+
 ## Active schema IDs (in use)
 
 - `admissibility-witness/1` — compiler witness output

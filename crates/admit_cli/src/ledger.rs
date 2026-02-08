@@ -5,8 +5,8 @@ use serde::Serialize;
 
 use super::internal::payload_hash;
 use super::types::{
-    AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, CostDeclaredEvent, CourtEvent,
-    CourtEventPayload, DeclareCostError, IngestEvent, IngestEventPayload, ProjectionEvent,
+    AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, CostDeclaredEvent, DeclareCostError,
+    EngineEvent, EngineEventPayload, IngestEvent, IngestEventPayload, ProjectionEvent,
     ProjectionEventPayload,
 };
 
@@ -118,7 +118,7 @@ pub fn build_ingest_event(
     })
 }
 
-pub fn build_court_event(
+pub fn build_engine_event(
     event_type: &str,
     timestamp: String,
     artifact_kind: &str,
@@ -126,8 +126,8 @@ pub fn build_court_event(
     name: Option<String>,
     lang: Option<String>,
     tags: Option<Vec<String>>,
-) -> Result<CourtEvent, DeclareCostError> {
-    let payload = CourtEventPayload {
+) -> Result<EngineEvent, DeclareCostError> {
+    let payload = EngineEventPayload {
         event_type: event_type.to_string(),
         timestamp: timestamp.clone(),
         artifact_kind: artifact_kind.to_string(),
@@ -138,7 +138,7 @@ pub fn build_court_event(
     };
     let event_id = payload_hash(&payload)?;
 
-    Ok(CourtEvent {
+    Ok(EngineEvent {
         event_type: payload.event_type,
         event_id,
         timestamp,
@@ -227,7 +227,7 @@ pub fn append_ingest_event(
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 
-pub fn append_court_event(ledger_path: &Path, event: &CourtEvent) -> Result<(), DeclareCostError> {
+pub fn append_engine_event(ledger_path: &Path, event: &EngineEvent) -> Result<(), DeclareCostError> {
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 

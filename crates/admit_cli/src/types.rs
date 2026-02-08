@@ -379,7 +379,7 @@ pub struct IngestEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CourtEvent {
+pub struct EngineEvent {
     pub event_type: String,
     pub event_id: String,
     pub timestamp: String,
@@ -399,7 +399,8 @@ pub struct RustIrLintWitness {
     pub schema_version: u32,
     pub created_at: String,
     pub scope_id: String,
-    pub court_version: String,
+    #[serde(alias = "court_version")]
+    pub engine_version: String,
     pub input_root: String,
     pub input_id: String,
     pub input_ids: Vec<String>,
@@ -610,7 +611,8 @@ pub struct ScopeAdditionWitness {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>, // Optional canonical creation timestamp
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub court_version: Option<String>, // Optional producer/tool version
+    #[serde(alias = "court_version")]
+    pub engine_version: Option<String>, // Optional producer/tool version
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>, // Optional canonical input identity
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -799,7 +801,7 @@ pub(crate) struct IngestEventPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct CourtEventPayload {
+pub(crate) struct EngineEventPayload {
     pub event_type: String,
     pub timestamp: String,
     pub artifact_kind: String,

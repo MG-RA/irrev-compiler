@@ -152,6 +152,17 @@ Pressure is a measurement, not a truth oracle. v0 keeps four lanes:
 Ranking rule:
 - Structural pressure dominates refinement. If refinement is not responding to structural pressure, the loop is stalling.
 
+### Pressure lane concept anchoring
+
+Each pressure lane maps to existing vault concepts:
+
+- **Structural pressure:** Maps to [[constraint-load]] and [[feasible-set]] reduction (how many moves are ruled out)
+- **Hygiene pressure:** Maps to witness completeness and attribution quality (span coverage, provenance depth)
+- **Semantic pressure:** Maps to [[displacement]] accumulation and [[erasure-cost]] accounting (how much irreversibility has been committed)
+- **Quantitative pressure:** Maps to resource consumption and scaling brittleness
+
+**Reification warning:** Pressure lanes are diagnostic projections, not truth oracles. Optimizing for pressure reduction (treating pressure as the target) rather than addressing underlying structural conditions (constraints, witnesses, displacement) is a known failure mode. Use pressure measurement to identify areas needing structural attention, not as an optimization target itself.
+
 ## CLI surface (proposed)
 
 Add a new CLI group: `admit_cli loop ...`

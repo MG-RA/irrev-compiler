@@ -9,6 +9,7 @@ dependencies = [
  "admit_core",
  "admit_dag",
  "admit_embed",
+ "admit_scope_ingest",
  "admit_scope_obsidian",
  "admit_surrealdb",
  "chrono",
@@ -62,6 +63,19 @@ name = "admit_embed"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "admit_scope_ingest"
+version = "0.1.0"
+dependencies = [
+ "admit_core",
+ "admit_dag",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "syn",
 ]
 
 [[package]]

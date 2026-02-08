@@ -6,11 +6,11 @@ use crate::artifact::store_artifact;
 use crate::internal::sha256_hex;
 use crate::types::{ArtifactRef, DeclareCostError, MetaRegistryV0};
 
-const COURT_QUERY_SCHEMA_ID: &str = "court-query/0";
-const COURT_QUERY_KIND: &str = "query_artifact";
+const ENGINE_QUERY_SCHEMA_ID: &str = "engine-query/1";
+const ENGINE_QUERY_KIND: &str = "query_artifact";
 
-const COURT_FUNCTION_SCHEMA_ID: &str = "court-function/0";
-const COURT_FUNCTION_KIND: &str = "fn_artifact";
+const ENGINE_FUNCTION_SCHEMA_ID: &str = "engine-function/1";
+const ENGINE_FUNCTION_KIND: &str = "fn_artifact";
 
 fn sort_tags(mut tags: Vec<String>) -> Vec<String> {
     tags.sort();
@@ -28,7 +28,7 @@ pub fn register_query_artifact(
 ) -> Result<ArtifactRef, DeclareCostError> {
     let tags = sort_tags(tags);
     let value = json!({
-        "schema_id": COURT_QUERY_SCHEMA_ID,
+        "schema_id": ENGINE_QUERY_SCHEMA_ID,
         "schema_version": 0,
         "name": name,
         "lang": lang,
@@ -40,16 +40,16 @@ pub fn register_query_artifact(
         .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
     let sha256 = sha256_hex(&cbor);
     let projection = json!({
-        "schema_id": COURT_QUERY_SCHEMA_ID,
+        "schema_id": ENGINE_QUERY_SCHEMA_ID,
         "sha256": sha256,
-        "kind": COURT_QUERY_KIND,
+        "kind": ENGINE_QUERY_KIND,
         "query": value,
     });
 
     store_artifact(
         artifacts_root,
-        COURT_QUERY_KIND,
-        COURT_QUERY_SCHEMA_ID,
+        ENGINE_QUERY_KIND,
+        ENGINE_QUERY_SCHEMA_ID,
         &cbor,
         "cbor",
         Some(
@@ -70,7 +70,7 @@ pub fn register_function_artifact(
 ) -> Result<ArtifactRef, DeclareCostError> {
     let tags = sort_tags(tags);
     let value = json!({
-        "schema_id": COURT_FUNCTION_SCHEMA_ID,
+        "schema_id": ENGINE_FUNCTION_SCHEMA_ID,
         "schema_version": 0,
         "name": name,
         "lang": lang,
@@ -82,16 +82,16 @@ pub fn register_function_artifact(
         .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
     let sha256 = sha256_hex(&cbor);
     let projection = json!({
-        "schema_id": COURT_FUNCTION_SCHEMA_ID,
+        "schema_id": ENGINE_FUNCTION_SCHEMA_ID,
         "sha256": sha256,
-        "kind": COURT_FUNCTION_KIND,
+        "kind": ENGINE_FUNCTION_KIND,
         "function": value,
     });
 
     store_artifact(
         artifacts_root,
-        COURT_FUNCTION_KIND,
-        COURT_FUNCTION_SCHEMA_ID,
+        ENGINE_FUNCTION_KIND,
+        ENGINE_FUNCTION_SCHEMA_ID,
         &cbor,
         "cbor",
         Some(

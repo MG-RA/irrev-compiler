@@ -32,6 +32,16 @@ Status date: 2026-01-29
 - **Compatibility**: provide a temporary TOML-to-IR lowering path for parity with `epistemics/vault/meta/rulesets/*.toml`.
 - **Extensible**: designed for eventual replacement of Python constraints engine (`execution/irrev/irrev/constraints/*`).
 
+### TOML deprecation irreversibility cost
+
+Deprecating TOML rulesets is an irreversible migration:
+
+- **Preserved:** Lowering path from TOML to IR (compatibility for existing rulesets maintained)
+- **Lost:** Native TOML authoring support, TOML-specific tooling
+- **Migration ceremony:** Convert existing TOML rulesets to .adm, emit conversion witness artifacts, maintain TOML reader for legacy artifact replay
+
+This cost is accepted because .adm provides first-class support for admissibility semantics that TOML cannot express.
+
 Out of scope for v0:
 
 - Full rewrite of Python constraints predicates.
@@ -329,7 +339,7 @@ Determinism rules (v0):
 
 - Cost declaration is ledgered and immutable (cannot be retracted or replaced).
 - A `cost.declared` event is valid only if `sha256(canonical_cbor(witness_json)) == witness_sha256` and those bytes are RFC 8949 canonical, which makes the verifier rule mechanized.
-- Action is **structurally impossible** without a prior `cost.declared`.
+- The `execute` command requires a prior `cost.declared` event ID. Enforcement: the CLI gate verifies the event exists in the ledger before proceeding. Bypass path: direct ledger file write (mitigated by file permissions and CI schema validation).
 
 **Leveraging Phase 3 deliverables (improvements):**
 

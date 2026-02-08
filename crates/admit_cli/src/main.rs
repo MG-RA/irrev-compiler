@@ -301,7 +301,7 @@ enum Commands {
     Calc(CalcArgs),
     Ingest(IngestArgs),
     Projection(ProjectionArgs),
-    Court(CourtArgs),
+    Engine(EngineArgs),
     Lint(LintArgs),
     Git(GitArgs),
 }
@@ -567,9 +567,9 @@ struct ProjectionArgs {
 }
 
 #[derive(Parser)]
-struct CourtArgs {
+struct EngineArgs {
     #[command(subcommand)]
-    command: CourtCommands,
+    command: EngineCommands,
 }
 
 #[derive(Parser)]
@@ -842,35 +842,35 @@ struct GitInstallPlanHookArgs {
 }
 
 #[derive(Subcommand)]
-enum CourtCommands {
-    Query(CourtQueryArgs),
-    Function(CourtFunctionArgs),
+enum EngineCommands {
+    Query(EngineQueryArgs),
+    Function(EngineFunctionArgs),
 }
 
 #[derive(Parser)]
-struct CourtQueryArgs {
+struct EngineQueryArgs {
     #[command(subcommand)]
-    command: CourtQueryCommands,
+    command: EngineQueryCommands,
 }
 
 #[derive(Subcommand)]
-enum CourtQueryCommands {
-    Add(CourtQueryAddArgs),
+enum EngineQueryCommands {
+    Add(EngineQueryAddArgs),
 }
 
 #[derive(Parser)]
-struct CourtFunctionArgs {
+struct EngineFunctionArgs {
     #[command(subcommand)]
-    command: CourtFunctionCommands,
+    command: EngineFunctionCommands,
 }
 
 #[derive(Subcommand)]
-enum CourtFunctionCommands {
-    Add(CourtFunctionAddArgs),
+enum EngineFunctionCommands {
+    Add(EngineFunctionAddArgs),
 }
 
 #[derive(Parser)]
-struct CourtQueryAddArgs {
+struct EngineQueryAddArgs {
     /// Stable query name (human readable)
     #[arg(long)]
     name: String,
@@ -909,7 +909,7 @@ struct CourtQueryAddArgs {
 }
 
 #[derive(Parser)]
-struct CourtFunctionAddArgs {
+struct EngineFunctionAddArgs {
     /// Stable function name (human readable)
     #[arg(long)]
     name: String,
@@ -1469,12 +1469,12 @@ fn main() {
                 commands::projection::run_projection_retry(retry_args, &projection)
             }
         },
-        Commands::Court(args) => match args.command {
-            CourtCommands::Query(q) => match q.command {
-                CourtQueryCommands::Add(a) => commands::court::run_court_query_add(a, &mut projection),
+        Commands::Engine(args) => match args.command {
+            EngineCommands::Query(q) => match q.command {
+                EngineQueryCommands::Add(a) => commands::engine::run_engine_query_add(a, &mut projection),
             },
-            CourtCommands::Function(f) => match f.command {
-                CourtFunctionCommands::Add(a) => commands::court::run_court_function_add(a, &mut projection),
+            EngineCommands::Function(f) => match f.command {
+                EngineFunctionCommands::Add(a) => commands::engine::run_engine_function_add(a, &mut projection),
             },
         },
         Commands::Lint(args) => match args.command {

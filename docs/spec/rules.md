@@ -46,6 +46,17 @@ Execution model:
 3. Record `rule_evaluated` and resulting findings in witness facts.
 4. Derive verdict from `fail_on`.
 
+Reference example:
+
+- `docs/spec/ruleset-git-working-tree.example.json` demonstrates ruleset bindings for `git.working_tree` predicates (`dirty_state`, `untracked_file`).
+- `docs/spec/ruleset-text-metrics.example.json` demonstrates ruleset bindings for `text.metrics` predicates (`lines_exceed`, `line_length_exceed`, `todo_present`).
+- `docs/spec/ruleset-deps-manifest.example.json` demonstrates ruleset bindings for `deps.manifest` predicates (`git_dependency_present`, `wildcard_version_present`, `lockfile_missing`).
+
+Recommended default guardrail profile:
+
+- `docs/spec/ruleset-git-deps-guardrails.example.json` is the strict default profile for Git + dependency hygiene.
+- It blocks dirty tree + untracked files, git-sourced dependencies, wildcard dependency versions, and missing lockfiles.
+
 ## R-010 - No effect without check witness
 
 **Rule:** Any irreversible execute/apply operation MUST require evidence of a prior admissibility check bound to the same content identity.

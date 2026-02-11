@@ -1,0 +1,29 @@
+{
+  "schema_id": "ruleset/admit@1",
+  "ruleset_id": "git-working-tree-default",
+  "enabled_rules": [
+    "R-200",
+    "R-210"
+  ],
+  "bindings": [
+    {
+      "rule_id": "R-200",
+      "severity": "error",
+      "when": {
+        "scope_id": "git.working_tree",
+        "predicate": "dirty_state",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-210",
+      "severity": "error",
+      "when": {
+        "scope_id": "git.working_tree",
+        "predicate": "untracked_file",
+        "params": {}
+      }
+    }
+  ],
+  "fail_on": "error"
+}

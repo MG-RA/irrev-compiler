@@ -20,16 +20,16 @@ use admit_cli::{
     append_ingest_event, append_plan_created_event, append_projection_event,
     build_projection_event, check_cost_declared,
     create_plan, declare_cost, default_artifacts_dir, default_ledger_path, execute_checked,
-    export_plan_markdown, ingest_dir_protocol_with_cache, init_project, list_artifacts,
-    parse_plan_answers_markdown, read_artifact_projection, read_file_bytes,
+    export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
+    parse_plan_answers_markdown, read_file_bytes,
     registry_build, registry_init,
     render_plan_prompt_template, render_plan_text, resolve_scope_enablement,
     scope_add, scope_list, scope_show, scope_verify,
-    store_value_artifact, summarize_ledger, verify_ledger, verify_witness, ArtifactInput,
+    store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
     DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanNewInput,
     ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
     ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
-    VerifyWitnessInput, KNOWN_SCOPES,
+    VerifyWitnessInput,
 };
 use admit_core::provider_types::FactsBundle;
 use admit_core::{evaluate_ruleset_with_inputs, ProviderRegistry, RuleSet};
@@ -298,8 +298,9 @@ enum Commands {
     VerifyLedger(VerifyLedgerArgs),
     BundleVerify(BundleVerifyArgs),
     Observe(ObserveArgs),
-    ListArtifacts(ListArtifactsArgs),
-    ShowArtifact(ShowArtifactArgs),
+    Show(ShowArgs),
+    Explain(ExplainArgs),
+    Log(LogArgs),
     Registry(RegistryArgs),
     Plan(PlanArgs),
     Calc(CalcArgs),
@@ -326,6 +327,10 @@ struct StatusArgs {
     /// Ledger path (default: out/ledger.jsonl)
     #[arg(long)]
     ledger: Option<PathBuf>,
+
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
 
     /// Output JSON instead of key=value lines
     #[arg(long)]
@@ -497,25 +502,31 @@ struct BundleVerifyArgs {
 
 #[derive(Parser)]
 struct ObserveArgs {
-    /// Input markdown/text files (repeatable)
-    #[arg(long, value_name = "PATH", required = true)]
+    /// Scope snapshot mode: e.g. git.working_tree, text.metrics, rust.structure, ingest.dir
+    #[arg(long, value_name = "SCOPE_ID")]
+    scope: Option<String>,
+    /// Root path for scope snapshot mode (default: current directory)
+    #[arg(long, value_name = "PATH")]
+    root: Option<PathBuf>,
+    /// Input markdown/text files (repeatable; regex mode)
+    #[arg(long, value_name = "PATH")]
     input: Vec<PathBuf>,
-    /// Regex pattern to count (repeatable)
-    #[arg(long, value_name = "REGEX", required = true)]
+    /// Regex pattern to count (repeatable; regex mode)
+    #[arg(long, value_name = "REGEX")]
     pattern: Vec<String>,
-    /// Difference name for each pattern (repeatable)
-    #[arg(long, value_name = "DIFF", required = true)]
+    /// Difference name for each pattern (repeatable; regex mode)
+    #[arg(long, value_name = "DIFF")]
     diff: Vec<String>,
-    /// Unit for each pattern (optional; length 1 applies to all patterns)
+    /// Unit for each pattern (regex mode; optional; length 1 applies to all patterns)
     #[arg(long, value_name = "UNIT")]
     unit: Vec<String>,
-    /// Case-insensitive regex matching
+    /// Case-insensitive regex matching (regex mode)
     #[arg(long)]
     case_insensitive: bool,
-    /// Timestamp string to store in the bundle (optional)
+    /// Timestamp string to store in the bundle (scope mode maps this to provider created_at)
     #[arg(long)]
     generated_at: Option<String>,
-    /// Source root for relative paths (default: current directory)
+    /// Source root for relative paths (regex mode; default: current directory)
     #[arg(long, value_name = "PATH")]
     source_root: Option<PathBuf>,
     /// Output path for facts bundle JSON (default: out/facts-bundle.json)
@@ -526,30 +537,107 @@ struct ObserveArgs {
     json: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SchemaKindArg {
+    Witness,
+    Ruleset,
+    FactsBundle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum LogSourceArg {
+    Ledger,
+    Artifacts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum LogVerdictArg {
+    Admissible,
+    Inadmissible,
+}
+
 #[derive(Parser)]
-struct ListArtifactsArgs {
+struct ShowArgs {
+    /// Artifact target path, or sha256:<hash>
+    #[arg(value_name = "TARGET")]
+    target: String,
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
-    /// Output JSON instead of key=value lines
+    /// Schema kind filter (witness|ruleset|facts-bundle)
+    #[arg(long, value_enum)]
+    kind: Option<SchemaKindArg>,
+    /// Output JSON envelope
+    #[arg(long)]
+    json: bool,
+    /// Emit canonical CBOR bytes for decoded payload
+    #[arg(long)]
+    cbor: bool,
+    /// Print only canonical hash as sha256:<hash>
+    #[arg(long)]
+    quiet: bool,
+}
+
+#[derive(Parser)]
+struct ExplainArgs {
+    /// Witness target path, or sha256:<hash>
+    #[arg(value_name = "TARGET")]
+    target: String,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+    /// Schema kind filter (must resolve to witness)
+    #[arg(long, value_enum)]
+    kind: Option<SchemaKindArg>,
+    /// Filter to a specific rule id
+    #[arg(long)]
+    rule: Option<String>,
+    /// Emit file-grouped finding summary
+    #[arg(long)]
+    files: bool,
+    /// Output JSON envelope
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Parser)]
-struct ShowArtifactArgs {
-    /// Artifact kind (e.g., witness)
+struct LogArgs {
+    /// Log source (ledger or artifacts)
+    #[arg(long, value_enum, default_value_t = LogSourceArg::Ledger)]
+    source: LogSourceArg,
+    /// Ledger path (default: out/ledger.jsonl)
     #[arg(long)]
-    kind: String,
-    /// Artifact sha256 (hex)
-    #[arg(long)]
-    sha256: String,
+    ledger: Option<PathBuf>,
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
-    /// Output JSON instead of key=value lines
+    /// Schema kind filter (witness|ruleset|facts-bundle)
+    #[arg(long, value_enum)]
+    kind: Option<SchemaKindArg>,
+    /// Ledger event_type filter (only valid for --source ledger)
+    #[arg(long = "type")]
+    event_type: Option<String>,
+    /// Timestamp cutoff (RFC3339 or relative duration like 7d, 12h; only valid for --source ledger)
+    #[arg(long)]
+    since: Option<String>,
+    /// Scope filter (exact match; only valid for --source ledger)
+    #[arg(long)]
+    scope: Option<String>,
+    /// Verdict filter (admissible|inadmissible; only valid for --source ledger)
+    #[arg(long, value_enum)]
+    verdict: Option<LogVerdictArg>,
+    /// Maximum number of rows (newest first for ledger)
+    #[arg(long)]
+    limit: Option<usize>,
+    /// Output JSON envelope
     #[arg(long)]
     json: bool,
+    /// Output rows as NDJSON
+    #[arg(long)]
+    ndjson: bool,
+    /// Output only ids
+    #[arg(long)]
+    quiet: bool,
 }
 
 #[derive(Parser)]
@@ -1432,7 +1520,7 @@ fn main() {
 
     let result = match cli.command {
         Commands::Init(args) => run_init(args, dag_trace_out),
-        Commands::Status(args) => run_status(args, dag_trace_out),
+        Commands::Status(args) => commands::visualize::run_status(args),
         Commands::DeclareCost(args) => run_declare_cost(args, dag_trace_out, &mut projection),
         Commands::WitnessVerify(args) => run_witness_verify(args, dag_trace_out),
         Commands::Check(args) => run_check(args, dag_trace_out, &mut projection),
@@ -1440,8 +1528,9 @@ fn main() {
         Commands::VerifyLedger(args) => run_verify_ledger(args, dag_trace_out),
         Commands::BundleVerify(args) => run_bundle_verify(args, dag_trace_out),
         Commands::Observe(args) => run_observe(args, dag_trace_out),
-        Commands::ListArtifacts(args) => run_list_artifacts(args, dag_trace_out),
-        Commands::ShowArtifact(args) => run_show_artifact(args, dag_trace_out),
+        Commands::Show(args) => commands::visualize::run_show(args),
+        Commands::Explain(args) => commands::visualize::run_explain(args),
+        Commands::Log(args) => commands::visualize::run_log(args),
         Commands::Registry(args) => run_registry(args, dag_trace_out),
         Commands::Plan(args) => match args.command {
             PlanCommands::New(new_args) => run_plan_new(new_args, dag_trace_out, &mut projection),
@@ -1529,91 +1618,6 @@ fn run_init(args: InitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String>
         println!("  admit ingest .");
         println!("  admit status");
         println!("  admit lint rust");
-    }
-
-    Ok(())
-}
-
-fn run_status(args: StatusArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
-    let ledger = args.ledger.unwrap_or_else(default_ledger_path);
-    let summary = summarize_ledger(&ledger).map_err(|err| err.to_string())?;
-    let scope_enablement = match resolve_scope_enablement(Path::new(".")) {
-        Ok(value) => Some(value),
-        Err(err) => {
-            if !args.json {
-                eprintln!("Warning: scope config unavailable: {}", err);
-            }
-            None
-        }
-    };
-    let known_scope_ids: Vec<&str> = KNOWN_SCOPES.iter().map(|scope| scope.id).collect();
-
-    if args.json {
-        let json = serde_json::to_string_pretty(&serde_json::json!({
-            "summary": summary,
-            "scopes": {
-                "known": known_scope_ids,
-                "enabled": scope_enablement.as_ref().map(|v| v.enabled_scope_ids().to_vec()).unwrap_or_default(),
-                "source": scope_enablement
-                    .as_ref()
-                    .and_then(|v| v.source.as_ref())
-                    .map(|p| p.display().to_string()),
-            }
-        }))
-            .map_err(|err| format!("json encode: {}", err))?;
-        println!("{}", json);
-        return Ok(());
-    }
-
-    println!("ledger={}", summary.ledger_path.display());
-    println!("events_total={}", summary.events_total);
-    if let Some(event_type) = summary.latest_event_type.as_ref() {
-        println!("latest_event_type={}", event_type);
-    }
-    if let Some(event_id) = summary.latest_event_id.as_ref() {
-        println!("latest_event_id={}", event_id);
-    }
-
-    if let Some(ingest) = summary.latest_ingest.as_ref() {
-        println!(
-            "latest_ingest={} run_id={} status={}",
-            ingest.timestamp,
-            ingest.run_id.as_deref().unwrap_or("-"),
-            ingest.status.as_deref().unwrap_or("-")
-        );
-    }
-    if let Some(proj) = summary.latest_projection.as_ref() {
-        println!(
-            "latest_projection={} run_id={} status={}",
-            proj.timestamp,
-            proj.run_id.as_deref().unwrap_or("-"),
-            proj.status.as_deref().unwrap_or("-")
-        );
-    }
-    if let Some(plan) = summary.latest_plan.as_ref() {
-        println!("latest_plan={} event_id={}", plan.timestamp, plan.event_id);
-    }
-    if let Some(lint) = summary.latest_rust_lint.as_ref() {
-        println!(
-            "latest_rust_lint={} passed={} violations={}",
-            lint.timestamp,
-            lint.passed
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string()),
-            lint.violations
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".to_string())
-        );
-    }
-    println!("known_scopes={}", known_scope_ids.join(","));
-    if let Some(enablement) = scope_enablement.as_ref() {
-        println!(
-            "enabled_scopes={}",
-            enablement.enabled_scope_ids().join(",")
-        );
-        if let Some(source) = enablement.source.as_ref() {
-            println!("scopes_source={}", source.display());
-        }
     }
 
     Ok(())
@@ -1876,6 +1880,27 @@ fn build_ruleset_provider_registry(ruleset: &RuleSet) -> Result<ProviderRegistry
                 registry
                     .register(Arc::new(
                         admit_scope_rust::provider_impl::RustStructureProvider::new(),
+                    ))
+                    .map_err(|err| err.to_string())?;
+            }
+            admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID => {
+                registry
+                    .register(Arc::new(
+                        admit_scope_git::provider_impl::GitWorkingTreeProvider::new(),
+                    ))
+                    .map_err(|err| err.to_string())?;
+            }
+            admit_scope_text::backend::TEXT_METRICS_SCOPE_ID => {
+                registry
+                    .register(Arc::new(
+                        admit_scope_text::provider_impl::TextMetricsProvider::new(),
+                    ))
+                    .map_err(|err| err.to_string())?;
+            }
+            admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID => {
+                registry
+                    .register(Arc::new(
+                        admit_scope_deps::provider_impl::DepsManifestProvider::new(),
                     ))
                     .map_err(|err| err.to_string())?;
             }
@@ -2173,6 +2198,19 @@ fn run_bundle_verify(args: BundleVerifyArgs, _dag_trace_out: Option<&Path>) -> R
 }
 
 fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    if let Some(scope_id) = args.scope.clone() {
+        return run_observe_scope(args, &scope_id);
+    }
+
+    if args.input.is_empty() {
+        return Err("regex observe mode requires --input".to_string());
+    }
+    if args.pattern.is_empty() {
+        return Err("regex observe mode requires --pattern".to_string());
+    }
+    if args.diff.is_empty() {
+        return Err("regex observe mode requires --diff".to_string());
+    }
     if args.pattern.len() != args.diff.len() {
         return Err("pattern and diff counts must match".to_string());
     }
@@ -2245,102 +2283,113 @@ fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), S
     Ok(())
 }
 
-
-
-fn run_list_artifacts(
-    args: ListArtifactsArgs,
-    _dag_trace_out: Option<&Path>,
-) -> Result<(), String> {
-    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
-    let entries = list_artifacts(&artifacts_dir).map_err(|err| err.to_string())?;
-
-    if args.json {
-        let json =
-            serde_json::to_string(&entries).map_err(|err| format!("json encode: {}", err))?;
-        println!("{}", json);
-    } else {
-        println!("artifacts_dir={}", artifacts_dir.display());
-        println!("count={}", entries.len());
-        for entry in entries {
-            println!(
-                "artifact kind={} sha256={} size_bytes={} path={}",
-                entry.kind, entry.sha256, entry.size_bytes, entry.path
-            );
-        }
+fn build_observe_scope_provider(scope_id: &str) -> Result<Arc<dyn admit_core::Provider>, String> {
+    match scope_id {
+        admit_scope_ingest::backend::INGEST_DIR_SCOPE_ID => Ok(Arc::new(
+            admit_scope_ingest::provider_impl::IngestDirProvider::new(),
+        )),
+        admit_scope_rust::backend::RUST_SCOPE_ID => Ok(Arc::new(
+            admit_scope_rust::provider_impl::RustStructureProvider::new(),
+        )),
+        admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID => Ok(Arc::new(
+            admit_scope_git::provider_impl::GitWorkingTreeProvider::new(),
+        )),
+        admit_scope_text::backend::TEXT_METRICS_SCOPE_ID => Ok(Arc::new(
+            admit_scope_text::provider_impl::TextMetricsProvider::new(),
+        )),
+        admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID => Ok(Arc::new(
+            admit_scope_deps::provider_impl::DepsManifestProvider::new(),
+        )),
+        _ => Err(format!(
+            "observe --scope '{}' is not wired yet (supported: {}, {}, {}, {}, {})",
+            scope_id,
+            admit_scope_ingest::backend::INGEST_DIR_SCOPE_ID,
+            admit_scope_rust::backend::RUST_SCOPE_ID,
+            admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID,
+            admit_scope_text::backend::TEXT_METRICS_SCOPE_ID,
+            admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID
+        )),
     }
-    Ok(())
 }
 
-fn run_show_artifact(args: ShowArtifactArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
-    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
-    let projection = read_artifact_projection(&artifacts_dir, &args.kind, &args.sha256)
-        .map_err(|err| err.to_string())?;
-    if let Some(bytes) = projection {
-        let text = String::from_utf8(bytes).map_err(|err| format!("utf8 error: {}", err))?;
-        println!("{}", text);
-        return Ok(());
+fn run_observe_scope(args: ObserveArgs, scope_id: &str) -> Result<(), String> {
+    if !args.input.is_empty()
+        || !args.pattern.is_empty()
+        || !args.diff.is_empty()
+        || !args.unit.is_empty()
+        || args.case_insensitive
+        || args.source_root.is_some()
+    {
+        return Err(
+            "scope observe mode does not accept regex flags (--input/--pattern/--diff/--unit/--case-insensitive/--source-root)"
+                .to_string(),
+        );
     }
 
-    // Fallback: if there is no JSON projection, locate the artifact bytes on disk.
-    // Most artifacts are stored as `<sha256>.cbor`, but some kinds (e.g. `file_blob`, `text_chunk`)
-    // store the original extension (`.rs`, `.md`, `.toml`, ...).
-    let kind_dir = artifacts_dir.join(&args.kind);
-    let preferred = kind_dir.join(format!("{}.cbor", args.sha256));
-    let path = if preferred.exists() {
-        preferred
-    } else {
-        let mut found: Option<PathBuf> = None;
-        if kind_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&kind_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if !p.is_file() {
-                        continue;
-                    }
-                    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    if stem == args.sha256 {
-                        found = Some(p);
-                        break;
-                    }
-                }
-            }
-        }
-        found.ok_or_else(|| "artifact not found".to_string())?
+    let provider = build_observe_scope_provider(scope_id)?;
+    let root = match args.root {
+        Some(path) => path,
+        None => std::env::current_dir().map_err(|err| format!("current_dir: {}", err))?,
     };
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "root".to_string(),
+        serde_json::Value::String(root.to_string_lossy().to_string()),
+    );
+    if let Some(ts) = args.generated_at {
+        params.insert("created_at".to_string(), serde_json::Value::String(ts));
+    }
 
-    let size = std::fs::metadata(&path)
-        .map_err(|err| format!("artifact not found: {}", err))?
-        .len();
+    let snapshot = provider
+        .snapshot(&admit_core::provider_types::SnapshotRequest {
+            scope_id: admit_core::ScopeId(scope_id.to_string()),
+            params: serde_json::Value::Object(params),
+        })
+        .map_err(|err| format!("observe scope snapshot failed: {}", err))?;
 
-    // If this is a text artifact, print it (best-effort UTF-8).
-    if let Ok(bytes) = std::fs::read(&path) {
-        if let Ok(text) = String::from_utf8(bytes) {
-            println!("{}", text);
-            return Ok(());
+    let bundle_value = serde_json::to_value(&snapshot.facts_bundle)
+        .map_err(|err| format!("facts bundle encode: {}", err))?;
+    let canonical =
+        admit_core::encode_canonical_value(&bundle_value).map_err(|err| err.to_string())?;
+    let bundle_hash = hex::encode(sha2::Sha256::digest(&canonical));
+    let bundle_bytes =
+        serde_json::to_vec(&snapshot.facts_bundle).map_err(|err| format!("json encode: {}", err))?;
+
+    let out_path = args
+        .out
+        .unwrap_or_else(|| PathBuf::from("out/facts-bundle.json"));
+    if let Some(parent) = out_path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|err| format!("create out dir: {}", err))?;
         }
     }
+    std::fs::write(&out_path, &bundle_bytes).map_err(|err| format!("write facts bundle: {}", err))?;
+    let hash_path = out_path.with_extension("json.sha256");
+    std::fs::write(&hash_path, &bundle_hash).map_err(|err| format!("write facts bundle hash: {}", err))?;
+
     if args.json {
         let output = serde_json::json!({
-            "kind": args.kind,
-            "sha256": args.sha256,
-            "size_bytes": size,
-            "path": path.strip_prefix(&artifacts_dir).ok().and_then(|p| p.to_str()).unwrap_or("")
+            "mode": "scope",
+            "scope_id": scope_id,
+            "snapshot_hash": snapshot.facts_bundle.snapshot_hash.0,
+            "bundle_hash": bundle_hash,
+            "bundle_path": out_path.display().to_string(),
+            "hash_path": hash_path.display().to_string()
         });
         let json = serde_json::to_string(&output).map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
     } else {
-        println!("kind={}", args.kind);
-        println!("sha256={}", args.sha256);
-        println!("size_bytes={}", size);
-        let rel = path
-            .strip_prefix(&artifacts_dir)
-            .ok()
-            .and_then(|p| p.to_str())
-            .unwrap_or("");
-        println!("path={}", rel);
+        println!("mode=scope");
+        println!("scope_id={}", scope_id);
+        println!("snapshot_hash={}", snapshot.facts_bundle.snapshot_hash.0);
+        println!("bundle_hash={}", bundle_hash);
+        println!("bundle_path={}", out_path.display());
+        println!("hash_path={}", hash_path.display());
     }
     Ok(())
 }
+
+
 
 fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     match args.command {

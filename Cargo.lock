@@ -9,9 +9,12 @@ dependencies = [
  "admit_core",
  "admit_dag",
  "admit_embed",
+ "admit_scope_deps",
+ "admit_scope_git",
  "admit_scope_ingest",
  "admit_scope_obsidian",
  "admit_scope_rust",
+ "admit_scope_text",
  "admit_surrealdb",
  "chrono",
  "clap",
@@ -67,6 +70,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "admit_scope_deps"
+version = "0.1.0"
+dependencies = [
+ "admit_core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+]
+
+[[package]]
+name = "admit_scope_git"
+version = "0.1.0"
+dependencies = [
+ "admit_core",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "admit_scope_ingest"
 version = "0.1.0"
 dependencies = [
@@ -102,6 +126,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "syn",
+]
+
+[[package]]
+name = "admit_scope_text"
+version = "0.1.0"
+dependencies = [
+ "admit_core",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

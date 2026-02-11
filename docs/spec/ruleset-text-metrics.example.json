@@ -1,0 +1,43 @@
+{
+  "schema_id": "ruleset/admit@1",
+  "ruleset_id": "text-metrics-default",
+  "enabled_rules": [
+    "R-300",
+    "R-310",
+    "R-320"
+  ],
+  "bindings": [
+    {
+      "rule_id": "R-300",
+      "severity": "error",
+      "when": {
+        "scope_id": "text.metrics",
+        "predicate": "lines_exceed",
+        "params": {
+          "max_lines": 400
+        }
+      }
+    },
+    {
+      "rule_id": "R-310",
+      "severity": "error",
+      "when": {
+        "scope_id": "text.metrics",
+        "predicate": "line_length_exceed",
+        "params": {
+          "max_line_len": 120
+        }
+      }
+    },
+    {
+      "rule_id": "R-320",
+      "severity": "warning",
+      "when": {
+        "scope_id": "text.metrics",
+        "predicate": "todo_present",
+        "params": {}
+      }
+    }
+  ],
+  "fail_on": "error"
+}

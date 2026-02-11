@@ -64,7 +64,65 @@ Enforced by:
 This protocol applies strictly to irreversible execute/apply operations.
 Observation-oriented commands may emit witnesses and artifacts without passing through execute, but MUST remain verifiable and content-addressed.
 
-## Outstanding Gap
+## Ruleset Observation Loop
 
-ProviderRegistry wiring into actual CLI evaluator call sites remains a tracked gap (`F-03`), because current CLI surfaces do not yet route `eval_with_provider` end to end.
+The CLI supports the executable ruleset observation loop:
 
+1. `observe --scope <scope_id> --root <path> --out <facts.json>`
+2. `check --ruleset <ruleset.json> --inputs <facts.json>`
+
+Copy/paste multi-scope guardrail example:
+
+```bash
+admit observe --scope git.working_tree --root . --out out/git.facts.json
+admit observe --scope deps.manifest --root . --out out/deps.facts.json
+
+admit check --ruleset testdata/rulesets/git-deps-guardrails.ruleset.json \
+  --inputs out/git.facts.json,out/deps.facts.json
+```
+
+Normative requirements:
+
+1. Scope observation mode MUST remain read-only and emit a facts bundle artifact.
+2. Ruleset check mode MUST route predicate dispatch through `ProviderRegistry`.
+3. Ruleset witnesses MUST include rule and predicate evaluation trace facts.
+
+## Visualization Surface
+
+The CLI provides a Git-like visualization surface over governance artifacts:
+
+1. `status` renders governance/repo/evidence state from ledger + artifact metadata.
+1. `show <target>` renders decoded artifacts (`path` or `sha256:<hash>`).
+2. `explain <target>` renders witness verdict explanations from witness facts.
+3. `log --source ledger|artifacts` renders event/artifact rows.
+
+Normative requirements:
+
+1. `show --quiet` MUST print canonical payload hash as `sha256:<hash>`.
+2. `show` and `explain` hash resolution MUST be schema-first (decode then detect).
+3. `explain` ordering MUST be deterministic for rules, predicate trace, and findings.
+4. `status --json` MUST emit stable top-level sections: `repo`, `ledger`, `governance`, `scopes`.
+5. `log --source ledger` MUST support deterministic filtering for `--since`, `--scope`, and `--verdict`.
+6. Pretty output for `status`, `show`, `explain`, and `log` SHOULD use section headers + key=value rows.
+
+## Status V2 Contract
+
+`status` is governance-focused and reports:
+
+1. Repo context (`root`, `branch`, `head`) where derivable.
+2. Ledger overview (`path`, total events, latest event).
+3. Latest governance transitions (`admissibility.checked`, `admissibility.executed`).
+4. Evidence freshness state (`fresh` | `pending_apply` | `missing`) with reason.
+5. Ruleset hash visibility from latest check witness when present.
+
+`status --json` envelope:
+
+```json
+{
+  "command": "status",
+  "repo": {},
+  "ledger": {},
+  "governance": {},
+  "scopes": {}
+}
+```

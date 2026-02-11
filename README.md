@@ -230,6 +230,11 @@ admit_cli scope verify <scope_id>          # Verify scope conformance
 admit_cli plan new                         # Create plan with risk assessment
 admit_cli calc execute <plan> <inputs>     # Execute calculation
 admit_cli calc verify <witness>            # Verify calculation witness
+admit_cli status --json                    # Governance status (repo/ledger/evidence)
+admit_cli show <path|sha256:...>           # Show governance artifact
+admit_cli explain <path|sha256:...>        # Explain witness verdict
+admit_cli log --source ledger|artifacts    # Log ledger events or artifact inventory
+admit_cli log --source ledger --since 7d --scope scope:main --verdict inadmissible
 ```
 
 #### **`admit_surrealdb`** — Knowledge Graph
@@ -1208,4 +1213,3 @@ Design documents and protocols are canonical. Code changes must:
 **Last Updated**: 2026-02-07
 **Compiler Version**: 0.1.0 (Phase 3)
 **Status**: Active Development
-

@@ -1,0 +1,39 @@
+{
+  "schema_id": "ruleset/admit@1",
+  "ruleset_id": "deps-manifest-default",
+  "enabled_rules": [
+    "R-400",
+    "R-410",
+    "R-420"
+  ],
+  "bindings": [
+    {
+      "rule_id": "R-400",
+      "severity": "error",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "git_dependency_present",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-410",
+      "severity": "error",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "wildcard_version_present",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-420",
+      "severity": "error",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "lockfile_missing",
+        "params": {}
+      }
+    }
+  ],
+  "fail_on": "error"
+}

@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 chumsky = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 admit_core = { path = "../admit_core" }
 
 [dev-dependencies]
-serde_json = "1.0"

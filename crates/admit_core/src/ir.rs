@@ -177,16 +177,15 @@ pub enum Predicate {
         op: CmpOp,
         value: Quantity,
     },
-    #[serde(rename = "ObsidianVaultRule", alias = "VaultRule")]
-    ObsidianVaultRule { rule_id: String },
-    #[serde(rename = "CalcWitness")]
-    CalcWitness {
-        witness_hash: String,
-        expected_schema_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        expected_plan_hash: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        expected_output: Option<crate::exact_types::ExactValue>,
+    /// Generic provider-delegated predicate. Replaces hardcoded extension
+    /// predicates (ObsidianVaultRule, CalcWitness). The provider is resolved
+    /// from the registry by `scope_id` and dispatched via `eval_predicate`.
+    #[serde(rename = "ProviderPredicate")]
+    ProviderPredicate {
+        scope_id: ScopeId,
+        name: String,
+        #[serde(default)]
+        params: serde_json::Value,
     },
 }
 

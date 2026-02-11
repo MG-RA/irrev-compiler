@@ -1,7 +1,11 @@
 # Constraint First-Class (Compiler Design)
 
+Status: planned, not yet implemented (as of 2026-02-11).
+
 ## Summary
 Make constraints first-class compiler objects with stable IDs, attached metadata, and deterministic witness output. This removes the current "optional id" path and makes constraint declarations an explicit, addressable unit across parse, lower, evaluate, and witness emission.
+
+This document is a target-state design note, not current behavior.
 
 ## Motivation
 - Constraints are the core admissibility boundary, but today they are only partially structured.
@@ -15,6 +19,11 @@ Make constraints first-class compiler objects with stable IDs, attached metadata
   - `Stmt::ConstraintMeta { id, key, value, span }`
 - `Env` stores `Vec<(Option<SymbolRef>, BoolExpr, Span)>`.
 - `Fact::ConstraintTriggered` includes `Option<SymbolRef>`.
+
+Implementation note:
+- Anonymous constraints are still accepted in code.
+- This means witness facts may omit `constraint_id` today.
+- Any references to "must" below are intended-state requirements.
 
 ## Goal
 Constraints are a first-class entity with:

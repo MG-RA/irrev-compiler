@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use crate::env::Env;
 use crate::error::EvalError;
 use crate::ir::{CmpOp, Predicate};
-use crate::provider::PredicateProvider;
+use crate::provider_registry::ProviderRegistry;
 use crate::span::Span;
 use crate::symbols::{SymbolNamespace, SymbolRef};
 use crate::trace::Trace;
@@ -23,7 +23,7 @@ pub fn eval_pred_with_provider(
     env: &Env,
     trace: &mut Trace,
     span: &Span,
-    provider: Option<&dyn PredicateProvider>,
+    registry: Option<&ProviderRegistry>,
 ) -> Result<bool, EvalError> {
     match pred {
         Predicate::EraseAllowed { diff } => Ok(env.is_allowed(diff)),
@@ -61,55 +61,40 @@ pub fn eval_pred_with_provider(
                 Err(EvalError("commit is not a quantity".into()))
             }
         }
-        Predicate::ObsidianVaultRule { rule_id } => {
-            let Some(provider) = provider else {
-                return Err(EvalError(
-                    "obsidian_vault_rule (vault_rule alias) requires a predicate provider".into(),
-                ));
-            };
-            let findings = provider.eval_obsidian_vault_rule(rule_id)?;
-            let triggered = !findings.is_empty();
-            for f in findings {
+        Predicate::ProviderPredicate {
+            scope_id,
+            name,
+            params,
+        } => {
+            let registry = registry.ok_or_else(|| {
+                EvalError(format!(
+                    "provider predicate '{}.{}' requires a provider registry",
+                    scope_id.0, name
+                ))
+            })?;
+            let provider = registry.get(scope_id).ok_or_else(|| {
+                EvalError(format!(
+                    "no provider registered for scope '{}'",
+                    scope_id.0
+                ))
+            })?;
+            let result = provider
+                .eval_predicate(name, params)
+                .map_err(|e| EvalError(e.message))?;
+
+            for f in &result.findings {
                 trace.record(Fact::LintFinding {
-                    rule_id: f.rule_id,
-                    severity: f.severity,
-                    invariant: f.invariant,
-                    path: f.path,
-                    span: f.span,
-                    message: f.message,
-                    evidence: f.evidence,
+                    rule_id: f.rule_id.clone(),
+                    severity: f.severity.clone(),
+                    invariant: f.invariant.clone(),
+                    path: f.path.clone(),
+                    span: f.span.clone(),
+                    message: f.message.clone(),
+                    evidence: f.evidence.clone(),
                 });
             }
-            // v0 coercion: Findings in boolean position is `exists(findings)`.
-            Ok(triggered)
-        }
-        Predicate::CalcWitness {
-            witness_hash,
-            expected_schema_id,
-            expected_plan_hash,
-            expected_output,
-        } => {
-            // CalcWitness predicate requires artifact loading support
-            // This is a placeholder that will be extended with artifact resolution
-            // For now, record the check and return false (will be implemented in provider)
-            let _ = (
-                witness_hash,
-                expected_schema_id,
-                expected_plan_hash,
-                expected_output,
-            );
 
-            // TODO: Implement full verification:
-            // 1. Load witness from artifacts by witness_hash
-            // 2. Verify witness.core.schema_id == expected_schema_id
-            // 3. If expected_plan_hash is Some, verify witness.core.plan_hash matches
-            // 4. If expected_output is Some, verify witness.core.output.value matches
-            // 5. Compute core_hash and verify it matches witness_hash
-
-            Err(EvalError(format!(
-                "calc_witness predicate not yet supported (requires artifact resolution for witness {})",
-                witness_hash
-            )))
+            Ok(result.triggered)
         }
     }
 }
@@ -188,26 +173,12 @@ pub fn predicate_to_string(pred: &Predicate) -> String {
             cmp_op_repr(op),
             quantity_repr(value)
         ),
-        Predicate::ObsidianVaultRule { rule_id } => {
-            format!("obsidian_vault_rule \"{}\"", rule_id)
-        }
-        Predicate::CalcWitness {
-            witness_hash,
-            expected_schema_id,
-            expected_plan_hash,
-            expected_output,
+        Predicate::ProviderPredicate {
+            scope_id,
+            name,
+            params,
         } => {
-            let mut parts = vec![
-                format!("calc_witness \"{}\"", witness_hash),
-                format!("schema \"{}\"", expected_schema_id),
-            ];
-            if let Some(plan_hash) = expected_plan_hash {
-                parts.push(format!("plan \"{}\"", plan_hash));
-            }
-            if let Some(output) = expected_output {
-                parts.push(format!("output {:?}", output));
-            }
-            parts.join(" ")
+            format!("{}.{}({})", scope_id.0, name, params)
         }
     }
 }

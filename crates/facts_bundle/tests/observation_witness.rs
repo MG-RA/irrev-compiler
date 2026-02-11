@@ -138,15 +138,12 @@ fn observation_witness_matches_golden() {
 #[test]
 #[ignore]
 fn dump_observation_goldens() {
-    let bundle = observe_bundle();
-    let bundle_with_hash = bundle_with_hash(bundle).expect("hash bundle");
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&bundle_with_hash.bundle).unwrap()
-    );
-    println!("{}", bundle_with_hash.sha256);
-
     let witness = witness_from_observation();
-    println!("{}", serde_json::to_string_pretty(&witness).unwrap());
-    println!("{}", canonical_hash(&witness));
+    let json = serde_json::to_string_pretty(&witness).expect("serialize witness");
+    let hash = canonical_hash(&witness);
+    std::fs::write(golden_fixture_path("facts-prescriptive-count.json"), &json)
+        .expect("write golden json");
+    std::fs::write(golden_fixture_path("facts-prescriptive-count.cbor.sha256"), &hash)
+        .expect("write golden hash");
+    println!("WROTE facts-prescriptive-count: hash={}", hash);
 }

@@ -40,19 +40,15 @@ mod tests {
     }
 
     #[test]
-    fn predicate_serde_accepts_legacy_vault_rule_variant() {
-        let json = r#"{"type":"VaultRule","rule_id":"broken-link"}"#;
-        let pred: Predicate = serde_json::from_str(json).expect("deserialize predicate");
-        assert_eq!(
-            pred,
-            Predicate::ObsidianVaultRule {
-                rule_id: "broken-link".to_string()
-            }
-        );
-        assert_eq!(
-            crate::predicates::predicate_to_string(&pred),
-            r#"obsidian_vault_rule "broken-link""#
-        );
+    fn predicate_serde_roundtrip_provider_predicate() {
+        let pred = Predicate::ProviderPredicate {
+            scope_id: ScopeId("obsidian".into()),
+            name: "vault_rule".into(),
+            params: serde_json::json!({ "rule_id": "broken-link" }),
+        };
+        let json = serde_json::to_string(&pred).expect("serialize");
+        let decoded: Predicate = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(pred, decoded);
     }
 
     #[test]
@@ -353,9 +349,33 @@ mod tests {
     }
 
     #[test]
+    fn witness_builder_sets_default_schema_id() {
+        let metadata = WitnessProgram {
+            module: ModuleId("module:test@1".to_string()),
+            scope: ScopeId("scope:main".to_string()),
+            ruleset_id: None,
+            ruleset_version: None,
+            content_id: None,
+            program_hash: None,
+            snapshot_hash: None,
+            facts_bundle_hash: None,
+            ruleset_hash: None,
+        };
+
+        let witness = WitnessBuilder::new(metadata, Verdict::Admissible, "ok").build();
+        assert_eq!(
+            witness.schema_id.as_deref(),
+            Some(DEFAULT_WITNESS_SCHEMA_ID)
+        );
+    }
+
+    /// Run with `--ignored` to regenerate golden fixtures:
+    /// `cargo test -p admit_core -- --ignored dump_scope_change_goldens`
+    #[test]
     #[ignore]
     fn dump_scope_change_goldens() {
         let cases: Vec<(&str, Witness)> = vec![
+            ("allow-erasure-trigger", allow_erasure_witness()),
             ("scope-widen-unaccounted", scope_widen_unaccounted_witness()),
             ("scope-widen-accounted", scope_widen_accounted_witness()),
             (
@@ -364,10 +384,16 @@ mod tests {
             ),
         ];
 
-        for (name, witness) in cases {
-            println!("CASE {}", name);
-            println!("{}", serde_json::to_string_pretty(&witness).unwrap());
-            println!("HASH {}", canonical_hash(&witness).unwrap());
+        for (name, witness) in &cases {
+            let json = serde_json::to_string_pretty(witness).unwrap();
+            let hash = canonical_hash(witness).unwrap();
+            fs::write(golden_fixture_path(&format!("{}.json", name)), &json).unwrap();
+            fs::write(
+                golden_fixture_path(&format!("{}.cbor.sha256", name)),
+                &hash,
+            )
+            .unwrap();
+            println!("WROTE {}: hash={}", name, hash);
         }
     }
 
@@ -617,5 +643,361 @@ mod tests {
             },
         )
         .expect("eval")
+    }
+
+    // ── Invariant-first tests ──────────────────────────────────────────
+
+    #[test]
+    fn constraint_with_invariant_tag_appears_in_fact() {
+        let diff = symbol(SymbolNamespace::Difference, "approved");
+        let cid = symbol(SymbolNamespace::Constraint, "gov_check");
+
+        let program = Program {
+            module: ModuleId("module:test@1".to_string()),
+            scope: ScopeId("scope:test".to_string()),
+            dependencies: vec![],
+            statements: vec![
+                Stmt::DeclareDifference {
+                    diff: diff.clone(),
+                    unit: None,
+                    span: base_span(),
+                },
+                Stmt::Commit {
+                    diff: diff.clone(),
+                    value: CommitValue::Bool(false),
+                    span: base_span(),
+                },
+                Stmt::Constraint {
+                    id: Some(cid.clone()),
+                    expr: BoolExpr::Pred {
+                        pred: Predicate::CommitEquals {
+                            diff: diff.clone(),
+                            value: CommitValue::Bool(false),
+                        },
+                    },
+                    span: base_span(),
+                },
+                Stmt::ConstraintMeta {
+                    id: cid.clone(),
+                    key: "invariant".to_string(),
+                    value: "governance".to_string(),
+                    span: base_span(),
+                },
+            ],
+        };
+
+        let witness = eval(
+            &program,
+            Query::Admissible,
+            EvalOpts {
+                displacement_mode: DisplacementMode::Potential,
+                float_policy: FloatPolicy::Ban,
+            },
+        )
+        .expect("eval");
+
+        assert_eq!(witness.verdict, Verdict::Inadmissible);
+
+        // ConstraintTriggered fact should carry invariant: Some("governance")
+        let ct = witness.facts.iter().find(|f| {
+            matches!(f, Fact::ConstraintTriggered { .. })
+        });
+        assert!(ct.is_some(), "should have ConstraintTriggered fact");
+        if let Some(Fact::ConstraintTriggered { invariant, .. }) = ct {
+            assert_eq!(invariant, &Some("governance".to_string()));
+        }
+
+        // InvariantProfile should contain governance
+        assert_eq!(witness.invariants_touched(), vec!["governance".to_string()]);
+
+        // Reason should contain [governance]
+        assert!(
+            witness.reason.contains("[governance]"),
+            "reason should contain [governance], got: {}",
+            witness.reason
+        );
+    }
+
+    #[test]
+    fn anonymous_constraint_has_no_invariant() {
+        let diff = symbol(SymbolNamespace::Difference, "x");
+
+        let program = Program {
+            module: ModuleId("module:test@1".to_string()),
+            scope: ScopeId("scope:test".to_string()),
+            dependencies: vec![],
+            statements: vec![
+                Stmt::DeclareDifference {
+                    diff: diff.clone(),
+                    unit: None,
+                    span: base_span(),
+                },
+                Stmt::Commit {
+                    diff: diff.clone(),
+                    value: CommitValue::Bool(true),
+                    span: base_span(),
+                },
+                Stmt::Constraint {
+                    id: None, // anonymous
+                    expr: BoolExpr::Pred {
+                        pred: Predicate::CommitEquals {
+                            diff: diff.clone(),
+                            value: CommitValue::Bool(true),
+                        },
+                    },
+                    span: base_span(),
+                },
+            ],
+        };
+
+        let witness = eval(
+            &program,
+            Query::Admissible,
+            EvalOpts {
+                displacement_mode: DisplacementMode::Potential,
+                float_policy: FloatPolicy::Ban,
+            },
+        )
+        .expect("eval");
+
+        assert_eq!(witness.verdict, Verdict::Inadmissible);
+        // Anonymous constraint → invariant: None → not in profile
+        assert!(witness.invariants_touched().is_empty());
+        assert!(witness.invariant_profile.is_empty());
+    }
+
+    #[test]
+    fn multi_invariant_profile_is_sorted() {
+        let diff_a = symbol(SymbolNamespace::Difference, "a");
+        let diff_b = symbol(SymbolNamespace::Difference, "b");
+        let cid_attr = symbol(SymbolNamespace::Constraint, "attr_check");
+        let cid_gov = symbol(SymbolNamespace::Constraint, "gov_check");
+
+        let program = Program {
+            module: ModuleId("module:test@1".to_string()),
+            scope: ScopeId("scope:test".to_string()),
+            dependencies: vec![],
+            statements: vec![
+                Stmt::DeclareDifference {
+                    diff: diff_a.clone(),
+                    unit: None,
+                    span: base_span(),
+                },
+                Stmt::DeclareDifference {
+                    diff: diff_b.clone(),
+                    unit: None,
+                    span: base_span(),
+                },
+                Stmt::Commit {
+                    diff: diff_a.clone(),
+                    value: CommitValue::Bool(true),
+                    span: base_span(),
+                },
+                Stmt::Commit {
+                    diff: diff_b.clone(),
+                    value: CommitValue::Bool(true),
+                    span: base_span(),
+                },
+                // governance constraint (will appear second alphabetically but defined first)
+                Stmt::Constraint {
+                    id: Some(cid_gov.clone()),
+                    expr: BoolExpr::Pred {
+                        pred: Predicate::CommitEquals {
+                            diff: diff_a.clone(),
+                            value: CommitValue::Bool(true),
+                        },
+                    },
+                    span: base_span(),
+                },
+                Stmt::ConstraintMeta {
+                    id: cid_gov.clone(),
+                    key: "invariant".to_string(),
+                    value: "governance".to_string(),
+                    span: base_span(),
+                },
+                // attribution constraint
+                Stmt::Constraint {
+                    id: Some(cid_attr.clone()),
+                    expr: BoolExpr::Pred {
+                        pred: Predicate::CommitEquals {
+                            diff: diff_b.clone(),
+                            value: CommitValue::Bool(true),
+                        },
+                    },
+                    span: base_span(),
+                },
+                Stmt::ConstraintMeta {
+                    id: cid_attr.clone(),
+                    key: "invariant".to_string(),
+                    value: "attribution".to_string(),
+                    span: base_span(),
+                },
+            ],
+        };
+
+        let witness = eval(
+            &program,
+            Query::Admissible,
+            EvalOpts {
+                displacement_mode: DisplacementMode::Potential,
+                float_policy: FloatPolicy::Ban,
+            },
+        )
+        .expect("eval");
+
+        assert_eq!(witness.verdict, Verdict::Inadmissible);
+        // Profile should be sorted alphabetically: attribution before governance
+        assert_eq!(
+            witness.invariants_touched(),
+            vec!["attribution".to_string(), "governance".to_string()]
+        );
+        assert!(witness.reason.contains("[attribution, governance]"));
+    }
+
+    #[test]
+    fn invariant_normalization_lowercases_and_trims() {
+        let diff = symbol(SymbolNamespace::Difference, "x");
+        let cid = symbol(SymbolNamespace::Constraint, "check");
+
+        let program = Program {
+            module: ModuleId("module:test@1".to_string()),
+            scope: ScopeId("scope:test".to_string()),
+            dependencies: vec![],
+            statements: vec![
+                Stmt::DeclareDifference {
+                    diff: diff.clone(),
+                    unit: None,
+                    span: base_span(),
+                },
+                Stmt::Commit {
+                    diff: diff.clone(),
+                    value: CommitValue::Bool(true),
+                    span: base_span(),
+                },
+                Stmt::Constraint {
+                    id: Some(cid.clone()),
+                    expr: BoolExpr::Pred {
+                        pred: Predicate::CommitEquals {
+                            diff: diff.clone(),
+                            value: CommitValue::Bool(true),
+                        },
+                    },
+                    span: base_span(),
+                },
+                Stmt::ConstraintMeta {
+                    id: cid.clone(),
+                    key: "invariant".to_string(),
+                    value: " GOVERNANCE ".to_string(), // mixed case, extra spaces
+                    span: base_span(),
+                },
+            ],
+        };
+
+        let witness = eval(
+            &program,
+            Query::Admissible,
+            EvalOpts {
+                displacement_mode: DisplacementMode::Potential,
+                float_policy: FloatPolicy::Ban,
+            },
+        )
+        .expect("eval");
+
+        // Should be normalized to "governance"
+        assert_eq!(witness.invariants_touched(), vec!["governance".to_string()]);
+    }
+
+    #[test]
+    fn conflicting_invariant_tags_emit_diagnostic() {
+        let diff = symbol(SymbolNamespace::Difference, "x");
+        let cid = symbol(SymbolNamespace::Constraint, "check");
+
+        let program = Program {
+            module: ModuleId("module:test@1".to_string()),
+            scope: ScopeId("scope:test".to_string()),
+            dependencies: vec![],
+            statements: vec![
+                Stmt::DeclareDifference {
+                    diff: diff.clone(),
+                    unit: None,
+                    span: base_span(),
+                },
+                Stmt::Commit {
+                    diff: diff.clone(),
+                    value: CommitValue::Bool(true),
+                    span: base_span(),
+                },
+                Stmt::Constraint {
+                    id: Some(cid.clone()),
+                    expr: BoolExpr::Pred {
+                        pred: Predicate::CommitEquals {
+                            diff: diff.clone(),
+                            value: CommitValue::Bool(true),
+                        },
+                    },
+                    span: base_span(),
+                },
+                // First tag
+                Stmt::ConstraintMeta {
+                    id: cid.clone(),
+                    key: "invariant".to_string(),
+                    value: "governance".to_string(),
+                    span: base_span(),
+                },
+                // Conflicting second tag (last-write-wins)
+                Stmt::ConstraintMeta {
+                    id: cid.clone(),
+                    key: "invariant".to_string(),
+                    value: "attribution".to_string(),
+                    span: base_span(),
+                },
+            ],
+        };
+
+        let witness = eval(
+            &program,
+            Query::Admissible,
+            EvalOpts {
+                displacement_mode: DisplacementMode::Potential,
+                float_policy: FloatPolicy::Ban,
+            },
+        )
+        .expect("eval");
+
+        // Last-write-wins: attribution
+        assert!(witness.invariants_touched().contains(&"attribution".to_string()));
+
+        // Should have a meta-conflict LintFinding
+        let conflict_finding = witness.facts.iter().find(|f| {
+            matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == "meta-conflict")
+        });
+        assert!(
+            conflict_finding.is_some(),
+            "should emit meta-conflict lint finding"
+        );
+    }
+
+    #[test]
+    fn old_witness_json_without_invariant_profile_deserializes() {
+        // Simulate old witness JSON (before invariant_profile was added)
+        let json = r#"{
+            "verdict": "admissible",
+            "program": {
+                "module": "module:test@1",
+                "scope": "scope:main"
+            },
+            "reason": "admissible",
+            "facts": [],
+            "displacement_trace": {
+                "mode": "potential",
+                "totals": [],
+                "contributions": []
+            }
+        }"#;
+
+        let witness: Witness = serde_json::from_str(json).expect("deserialize old witness");
+        assert_eq!(witness.verdict, Verdict::Admissible);
+        assert!(witness.invariant_profile.is_empty());
+        assert!(witness.invariants_touched().is_empty());
     }
 }

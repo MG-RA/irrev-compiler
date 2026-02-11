@@ -202,7 +202,7 @@ query witness
     }
 
     #[test]
-    fn parse_legacy_vault_rule_alias_lowers_to_obsidian_predicate() {
+    fn parse_legacy_vault_rule_alias_lowers_to_provider_predicate() {
         let source = r#"
 module test@1
 depends [irrev_std@1]
@@ -218,10 +218,10 @@ scope vault_lint
                 s,
                 admit_core::Stmt::Constraint {
                     expr: admit_core::BoolExpr::Pred {
-                        pred: admit_core::Predicate::ObsidianVaultRule { rule_id }
+                        pred: admit_core::Predicate::ProviderPredicate { scope_id, name, .. }
                     },
                     ..
-                } if rule_id == "broken-link"
+                } if scope_id.0 == "obsidian" && name == "vault_rule"
             )
         }));
     }

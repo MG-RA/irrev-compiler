@@ -11,6 +11,7 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 
 pub mod backend;
+pub mod provider_impl;
 
 // Re-export scope identifiers
 pub use backend::{INGEST_DIR_SCOPE_ID, INGEST_DIR_PHASE, is_ingest_dir_scope};

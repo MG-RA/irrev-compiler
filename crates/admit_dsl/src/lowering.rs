@@ -413,7 +413,11 @@ fn lower_predicate(pred: Predicate, errors: &mut Vec<String>) -> admit_core::Pre
             }
         }
         Predicate::ObsidianVaultRule { rule_id } => {
-            admit_core::Predicate::ObsidianVaultRule { rule_id }
+            admit_core::Predicate::ProviderPredicate {
+                scope_id: admit_core::ScopeId("obsidian".into()),
+                name: "vault_rule".into(),
+                params: serde_json::json!({ "rule_id": rule_id }),
+            }
         }
     }
 }

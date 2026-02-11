@@ -7,7 +7,7 @@ pub struct KnownScope {
     pub default_enabled: bool,
 }
 
-pub const KNOWN_SCOPES: [KnownScope; 5] = [
+pub const KNOWN_SCOPES: [KnownScope; 6] = [
     KnownScope {
         id: "rust.ir_lint",
         default_enabled: true,
@@ -27,6 +27,10 @@ pub const KNOWN_SCOPES: [KnownScope; 5] = [
     KnownScope {
         id: "vault.ir_lint",
         default_enabled: false,
+    },
+    KnownScope {
+        id: "rust.structure",
+        default_enabled: true,
     },
 ];
 

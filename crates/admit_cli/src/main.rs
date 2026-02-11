@@ -1,4 +1,6 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use sha2::Digest;
@@ -23,12 +25,14 @@ use admit_cli::{
     registry_build, registry_init,
     render_plan_prompt_template, render_plan_text, resolve_scope_enablement,
     scope_add, scope_list, scope_show, scope_verify,
-    summarize_ledger, verify_ledger, verify_witness, ArtifactInput,
+    store_value_artifact, summarize_ledger, verify_ledger, verify_witness, ArtifactInput,
     DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanNewInput,
     ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
     ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
     VerifyWitnessInput, KNOWN_SCOPES,
 };
+use admit_core::provider_types::FactsBundle;
+use admit_core::{evaluate_ruleset_with_inputs, ProviderRegistry, RuleSet};
 
 mod commands;
 
@@ -400,11 +404,17 @@ struct WitnessVerifyArgs {
 #[derive(Parser)]
 struct CheckArgs {
     /// Cost declaration event id to check
-    #[arg(long)]
-    event_id: String,
+    #[arg(long, required_unless_present = "ruleset", conflicts_with = "ruleset")]
+    event_id: Option<String>,
+    /// Path to ruleset JSON (ruleset/admit@1). When set, runs executable ruleset check mode.
+    #[arg(long, value_name = "PATH", conflicts_with = "event_id")]
+    ruleset: Option<PathBuf>,
     /// Facts bundle JSON path (optional; records bundle hash in the check event)
     #[arg(long)]
     facts_bundle: Option<PathBuf>,
+    /// Ruleset input facts bundle JSON path (repeatable, comma-separated allowed)
+    #[arg(long = "inputs", value_name = "PATH", value_delimiter = ',')]
+    ruleset_inputs: Vec<PathBuf>,
     /// Compiler build identifier (version or commit)
     #[arg(long)]
     compiler_build_id: Option<String>,
@@ -1753,6 +1763,10 @@ fn run_check(
     dag_trace_out: Option<&Path>,
     projection: &mut ProjectionCoordinator,
 ) -> Result<(), String> {
+    if let Some(ruleset_path) = args.ruleset.clone() {
+        return run_ruleset_check(args, ruleset_path);
+    }
+
     let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
     let timestamp = args
@@ -1783,10 +1797,14 @@ fn run_check(
     };
 
     let scope_gate_mode = parse_scope_gate_mode(&args.scope_gate)?;
+    let event_id = args
+        .event_id
+        .as_deref()
+        .ok_or_else(|| "missing --event-id".to_string())?;
     let event = check_cost_declared(
         &ledger_path,
         Some(artifacts_dir.as_path()),
-        &args.event_id,
+        event_id,
         timestamp,
         args.compiler_build_id,
         facts_bundle_input,
@@ -1828,6 +1846,186 @@ fn run_check(
         }
         maybe_project_trace(projection, &trace_sha256, &trace_cbor, trace.dag())?;
     }
+    Ok(())
+}
+
+fn build_ruleset_provider_registry(ruleset: &RuleSet) -> Result<ProviderRegistry, String> {
+    let mut registry = ProviderRegistry::new();
+    let mut scopes: BTreeSet<String> = BTreeSet::new();
+    let enabled: BTreeSet<&str> = if ruleset.enabled_rules.is_empty() {
+        ruleset.bindings.iter().map(|b| b.rule_id.as_str()).collect()
+    } else {
+        ruleset.enabled_rules.iter().map(|id| id.as_str()).collect()
+    };
+    for binding in &ruleset.bindings {
+        if enabled.contains(binding.rule_id.as_str()) {
+            scopes.insert(binding.when.scope_id.0.clone());
+        }
+    }
+
+    for scope in scopes {
+        match scope.as_str() {
+            admit_scope_ingest::backend::INGEST_DIR_SCOPE_ID => {
+                registry
+                    .register(Arc::new(
+                        admit_scope_ingest::provider_impl::IngestDirProvider::new(),
+                    ))
+                    .map_err(|err| err.to_string())?;
+            }
+            admit_scope_rust::backend::RUST_SCOPE_ID => {
+                registry
+                    .register(Arc::new(
+                        admit_scope_rust::provider_impl::RustStructureProvider::new(),
+                    ))
+                    .map_err(|err| err.to_string())?;
+            }
+            _ => {
+                return Err(format!(
+                    "ruleset requires scope '{}', but CLI has no provider wiring for it yet",
+                    scope
+                ));
+            }
+        }
+    }
+    Ok(registry)
+}
+
+fn load_ruleset_input_bundles(args: &CheckArgs) -> Result<BTreeMap<admit_core::ScopeId, FactsBundle>, String> {
+    let mut input_paths = args.ruleset_inputs.clone();
+    if let Some(path) = args.facts_bundle.clone() {
+        input_paths.push(path);
+    }
+
+    let mut bundles: BTreeMap<admit_core::ScopeId, FactsBundle> = BTreeMap::new();
+    let mut source_paths: BTreeMap<admit_core::ScopeId, PathBuf> = BTreeMap::new();
+    for path in input_paths {
+        let bytes = read_file_bytes(&path)
+            .map_err(|err| format!("read ruleset input bundle '{}': {}", path.display(), err))?;
+        let bundle: FactsBundle = serde_json::from_slice(&bytes).map_err(|err| {
+            format!(
+                "decode ruleset input bundle '{}': {}",
+                path.display(),
+                err
+            )
+        })?;
+        let scope_id = bundle.scope_id.clone();
+        if let Some(previous_path) = source_paths.get(&scope_id) {
+            return Err(format!(
+                "duplicate ruleset input for scope '{}': '{}' and '{}'",
+                scope_id.0,
+                previous_path.display(),
+                path.display()
+            ));
+        }
+        source_paths.insert(scope_id.clone(), path);
+        bundles.insert(scope_id, bundle);
+    }
+
+    Ok(bundles)
+}
+
+fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), String> {
+    let input_bundles = load_ruleset_input_bundles(&args)?;
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let ruleset_bytes =
+        read_file_bytes(&ruleset_path).map_err(|err| format!("read ruleset: {}", err))?;
+    let ruleset: RuleSet = serde_json::from_slice(&ruleset_bytes)
+        .map_err(|err| format!("ruleset decode: {}", err))?;
+    let registry = build_ruleset_provider_registry(&ruleset)?;
+    let outcome = evaluate_ruleset_with_inputs(
+        &ruleset,
+        &registry,
+        (!input_bundles.is_empty()).then_some(&input_bundles),
+    )
+    .map_err(|err| err.0)?;
+    let witness_value = serde_json::to_value(&outcome.witness)
+        .map_err(|err| format!("witness encode: {}", err))?;
+    let ruleset_value = serde_json::to_value(&ruleset)
+        .map_err(|err| format!("ruleset encode: {}", err))?;
+
+    let witness_schema_id = outcome
+        .witness
+        .schema_id
+        .as_deref()
+        .unwrap_or("admissibility-witness/1");
+    let witness_artifact = store_value_artifact(
+        artifacts_dir.as_path(),
+        "witness",
+        witness_schema_id,
+        &witness_value,
+    )
+    .map_err(|err| err.to_string())?;
+    let ruleset_artifact = store_value_artifact(
+        artifacts_dir.as_path(),
+        "ruleset",
+        &ruleset.schema_id,
+        &ruleset_value,
+    )
+    .map_err(|err| err.to_string())?;
+
+    let verdict = match outcome.witness.verdict {
+        admit_core::Verdict::Admissible => "admissible",
+        admit_core::Verdict::Inadmissible => "inadmissible",
+    };
+    let input_summary: Vec<serde_json::Value> = input_bundles
+        .values()
+        .map(|bundle| {
+            serde_json::json!({
+                "scope_id": bundle.scope_id.0,
+                "schema_id": bundle.schema_id,
+                "snapshot_hash": bundle.snapshot_hash.0,
+            })
+        })
+        .collect();
+
+    if args.json {
+        let json = serde_json::to_string(&serde_json::json!({
+            "mode": "ruleset",
+            "ruleset_id": ruleset.ruleset_id,
+            "ruleset_hash": outcome.ruleset_hash,
+            "input_bundles": input_summary,
+            "ruleset_artifact": ruleset_artifact,
+            "witness_artifact": witness_artifact,
+            "verdict": verdict,
+            "rule_results": outcome.rule_results,
+            "witness": outcome.witness,
+        }))
+        .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("mode=ruleset");
+        println!("ruleset_id={}", ruleset.ruleset_id);
+        println!("ruleset_hash={}", outcome.ruleset_hash);
+        println!("ruleset_sha256={}", ruleset_artifact.sha256);
+        println!("witness_sha256={}", witness_artifact.sha256);
+        println!("verdict={}", verdict);
+        println!("artifacts_dir={}", artifacts_dir.display());
+        for bundle in input_bundles.values() {
+            println!(
+                "input_bundle scope={} schema={} snapshot_hash={}",
+                bundle.scope_id.0,
+                bundle.schema_id,
+                bundle.snapshot_hash.0
+            );
+        }
+        for result in &outcome.rule_results {
+            let severity = match result.severity {
+                admit_core::Severity::Error => "error",
+                admit_core::Severity::Warning => "warning",
+                admit_core::Severity::Info => "info",
+            };
+            println!(
+                "rule_result id={} severity={} triggered={} findings={} scope={} predicate={}",
+                result.rule_id,
+                severity,
+                result.triggered,
+                result.findings_count,
+                result.scope_id.0,
+                result.predicate
+            );
+        }
+    }
+
     Ok(())
 }
 

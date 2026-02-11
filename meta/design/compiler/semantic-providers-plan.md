@@ -69,33 +69,44 @@ no extra whitespace, arrays already deterministically ordered.
 - `snapshot_hash` is required for the vault provider
 - `generator_id` + `generator_hash` identify the projection tool or pack version
 
-## Provider interface (conceptual)
+## Provider interface (implemented)
 
 ```
-trait SemanticProvider {
-  fn build_bundle(input: ProviderInput) -> ProgramBundleWithHash
+trait Provider {
+  fn describe(&self) -> ProviderDescriptor
+  fn snapshot(&self, req: &SnapshotRequest) -> Result<SnapshotResult, ProviderError>
+  fn plan(&self, intent: &PlanIntent, inputs: &[SnapshotResult]) -> Result<PlanResult, ProviderError>
+  fn execute(&self, plan_ref: &PlanRef) -> Result<ExecutionResult, ProviderError>
+  fn verify(&self, req: &VerifyRequest) -> Result<VerifyResult, ProviderError>
+  fn eval_predicate(&self, name: &str, params: &json) -> Result<PredicateResult, ProviderError>
 }
 ```
 
-### Provider A: VaultProvider
+This repo no longer uses a separate `SemanticProvider::build_bundle()` trait.
+`ProgramBundle` remains a valid artifact format, but provider integration is
+defined by the five-phase `Provider` ceremony in `admit_core`:
+describe -> snapshot -> plan -> execute -> verify (plus `eval_predicate` for
+provider-declared predicates).
+
+### Provider A: Vault / ingest provider
 
 Input: vault path or snapshot
 
 Output:
 
-- ProgramBundle with `source = "vault"`
-- Bundle hash
-- Generator metadata
+- Facts/snapshot artifacts plus witness
+- Optional plan/execute/verify artifacts depending on phase support
+- Descriptor-declared predicates for kernel `ProviderPredicate` dispatch
 
-### Provider B: AdmPackProvider
+### Provider B: ADM pack / static bundle provider
 
 Input: folder of `.adm` modules
 
 Output:
 
-- ProgramBundle with `source = "adm-pack"`
-- Bundle hash
-- Generator metadata (git commit or manifest hash)
+- ProgramBundle and hash (for module provenance)
+- Snapshot artifacts that bind bundle hash into witness metadata
+- Optional plan/execute/verify artifacts
 
 ## Projection convention (vault → adm)
 

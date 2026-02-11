@@ -16,6 +16,10 @@ pub struct Env {
     pub commits: BTreeMap<SymbolRef, crate::ir::CommitValue>,
     pub constraints: Vec<(Option<SymbolRef>, crate::ir::BoolExpr, Span)>,
     pub scope_changes: Vec<(ScopeId, ScopeId, ScopeMode, Span)>,
+    pub constraint_meta: BTreeMap<SymbolRef, BTreeMap<String, String>>,
+    /// Conflicts where the same constraint key was set to different values.
+    /// Tuple: (constraint_id, key, previous_value, new_value)
+    pub meta_conflicts: Vec<(SymbolRef, String, String, String)>,
 }
 
 impl Env {
@@ -29,6 +33,8 @@ impl Env {
             commits: BTreeMap::new(),
             constraints: Vec::new(),
             scope_changes: Vec::new(),
+            constraint_meta: BTreeMap::new(),
+            meta_conflicts: Vec::new(),
         };
 
         for stmt in &program.statements {
@@ -76,7 +82,20 @@ impl Env {
                     env.constraints
                         .push((id.clone(), expr.clone(), span.clone()));
                 }
-                Stmt::ConstraintMeta { .. } => {}
+                Stmt::ConstraintMeta { id, key, value, .. } => {
+                    let meta = env.constraint_meta.entry(id.clone()).or_default();
+                    if let Some(prev) = meta.get(key) {
+                        if prev != value {
+                            env.meta_conflicts.push((
+                                id.clone(),
+                                key.clone(),
+                                prev.clone(),
+                                value.clone(),
+                            ));
+                        }
+                    }
+                    meta.insert(key.clone(), value.clone());
+                }
                 Stmt::Query { .. } => {}
             }
         }

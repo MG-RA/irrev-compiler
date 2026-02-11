@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/admit_core", "crates/admit_dag", "crates/admit_dsl", "crates/admit_cli", "crates/admit_surrealdb", "crates/admit_scope_obsidian", "crates/admit_scope_ingest", "crates/admit_embed", "crates/vault_snapshot", "crates/program_bundle", "crates/facts_bundle"]
+members = ["crates/admit_core", "crates/admit_dag", "crates/admit_dsl", "crates/admit_cli", "crates/admit_surrealdb", "crates/admit_scope_obsidian", "crates/admit_scope_ingest", "crates/admit_scope_rust", "crates/admit_embed", "crates/vault_snapshot", "crates/program_bundle", "crates/facts_bundle"]
 resolver = "2"
 
 [workspace.dependencies]

@@ -2,7 +2,7 @@ use crate::env::Env;
 use crate::error::EvalError;
 use crate::ir::BoolExpr;
 use crate::predicates::{eval_pred_with_provider, predicate_to_string};
-use crate::provider::PredicateProvider;
+use crate::provider_registry::ProviderRegistry;
 use crate::span::Span;
 use crate::trace::Trace;
 use crate::witness::Fact;
@@ -21,7 +21,7 @@ pub fn eval_bool_with_provider(
     env: &Env,
     trace: &mut Trace,
     span: &Span,
-    provider: Option<&dyn PredicateProvider>,
+    provider: Option<&ProviderRegistry>,
 ) -> Result<bool, EvalError> {
     match expr {
         BoolExpr::And { items } => {

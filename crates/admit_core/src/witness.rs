@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -5,6 +7,8 @@ use crate::ir::{CommitValue, Program, Quantity, ScopeMode};
 use crate::span::Span;
 use crate::symbols::{ModuleId, ScopeId, SymbolRef};
 use crate::trace::Trace;
+
+pub const DEFAULT_WITNESS_SCHEMA_ID: &str = "admissibility-witness/1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Witness {
@@ -23,6 +27,8 @@ pub struct Witness {
     pub reason: String,
     pub facts: Vec<Fact>,
     pub displacement_trace: DisplacementTrace,
+    #[serde(default, skip_serializing_if = "InvariantProfile::is_empty")]
+    pub invariant_profile: InvariantProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -67,6 +73,8 @@ pub enum Fact {
     ConstraintTriggered {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         constraint_id: Option<SymbolRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invariant: Option<String>,
         span: Span,
     },
     #[serde(rename = "permission_used")]
@@ -94,6 +102,15 @@ pub enum Fact {
         result: bool,
         span: Span,
     },
+    #[serde(rename = "rule_evaluated")]
+    RuleEvaluated {
+        rule_id: String,
+        severity: Severity,
+        triggered: bool,
+        scope_id: ScopeId,
+        predicate: String,
+        span: Span,
+    },
     #[serde(rename = "scope_change_used")]
     ScopeChangeUsed {
         from: ScopeId,
@@ -106,6 +123,8 @@ pub enum Fact {
         from: ScopeId,
         to: ScopeId,
         mode: ScopeMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        invariant: Option<String>,
         span: Span,
     },
     #[serde(rename = "lint_finding")]
@@ -159,7 +178,35 @@ pub struct DisplacementContribution {
     pub rule_span: Span,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InvariantSummary {
+    pub invariant: String,
+    pub triggered_count: usize,
+    pub finding_count: usize,
+    pub constraint_ids: Vec<SymbolRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct InvariantProfile {
+    pub summaries: Vec<InvariantSummary>,
+}
+
+impl InvariantProfile {
+    pub fn is_empty(&self) -> bool {
+        self.summaries.is_empty()
+    }
+}
+
 impl Witness {
+    /// Deduped, sorted list of invariant names touched in this witness.
+    pub fn invariants_touched(&self) -> Vec<String> {
+        self.invariant_profile
+            .summaries
+            .iter()
+            .map(|s| s.invariant.clone())
+            .collect()
+    }
+
     pub fn new(
         program: WitnessProgram,
         trace: Trace,
@@ -252,8 +299,10 @@ impl WitnessBuilder {
                 contributions: Vec::new(),
             });
 
+        let invariant_profile = compute_invariant_profile(&self.facts);
+
         Witness {
-            schema_id: None,
+            schema_id: Some(DEFAULT_WITNESS_SCHEMA_ID.to_string()),
             created_at: None,
             engine_version: None,
             input_id: None,
@@ -263,8 +312,65 @@ impl WitnessBuilder {
             reason: self.reason,
             facts: self.facts,
             displacement_trace,
+            invariant_profile,
         }
     }
+}
+
+/// Build an `InvariantProfile` purely from facts. Uses `BTreeMap`/`BTreeSet` for deterministic
+/// ordering: same facts always produce the same profile regardless of insertion order.
+fn compute_invariant_profile(facts: &[Fact]) -> InvariantProfile {
+    // (triggered_count, finding_count, constraint_ids)
+    let mut by_inv: BTreeMap<String, (usize, usize, BTreeSet<SymbolRef>)> = BTreeMap::new();
+    for fact in facts {
+        match fact {
+            Fact::ConstraintTriggered {
+                constraint_id,
+                invariant: Some(inv),
+                ..
+            } => {
+                let e = by_inv.entry(inv.clone()).or_default();
+                e.0 += 1;
+                if let Some(id) = constraint_id {
+                    e.2.insert(id.clone());
+                }
+            }
+            Fact::LintFinding {
+                invariant: Some(inv),
+                ..
+            } => {
+                by_inv.entry(inv.clone()).or_default().1 += 1;
+            }
+            Fact::UnaccountedBoundaryChange {
+                invariant: Some(inv),
+                ..
+            } => {
+                by_inv.entry(inv.clone()).or_default().0 += 1;
+            }
+            _ => {}
+        }
+    }
+    InvariantProfile {
+        summaries: by_inv
+            .into_iter()
+            .map(|(inv, (tc, fc, ids))| InvariantSummary {
+                invariant: inv,
+                triggered_count: tc,
+                finding_count: fc,
+                constraint_ids: ids.into_iter().collect(),
+            })
+            .collect(),
+    }
+}
+
+/// Normalize an invariant tag to lowercase, trimmed, whitespace replaced with underscores.
+/// Prevents "Governance", " governance ", "GOVERNANCE" from being treated as different invariants.
+pub fn normalize_invariant(s: &str) -> String {
+    let trimmed = s.trim().to_lowercase();
+    trimmed
+        .chars()
+        .map(|c| if c.is_whitespace() { '_' } else { c })
+        .collect()
 }
 
 fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
@@ -274,11 +380,13 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::ErasureRuleUsed { .. } => 2,
         Fact::CommitUsed { .. } => 3,
         Fact::PredicateEvaluated { .. } => 4,
-        Fact::ScopeChangeUsed { .. } => 5,
-        Fact::UnaccountedBoundaryChange { .. } => 6,
-        Fact::LintFinding { .. } => 7,
+        Fact::RuleEvaluated { .. } => 5,
+        Fact::ScopeChangeUsed { .. } => 6,
+        Fact::UnaccountedBoundaryChange { .. } => 7,
+        Fact::LintFinding { .. } => 8,
     };
     let aux = match fact {
+        Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
         Fact::LintFinding { rule_id, .. } => rule_id.clone(),
         _ => String::new(),
     };
@@ -288,6 +396,7 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::ErasureRuleUsed { span, .. } => span,
         Fact::CommitUsed { span, .. } => span,
         Fact::PredicateEvaluated { span, .. } => span,
+        Fact::RuleEvaluated { span, .. } => span,
         Fact::ScopeChangeUsed { span, .. } => span,
         Fact::UnaccountedBoundaryChange { span, .. } => span,
         Fact::LintFinding { span, .. } => span,

@@ -1,10 +1,12 @@
+use std::collections::BTreeSet;
+
 use crate::boundary_loss_diff;
 use crate::constraints::evaluate_constraints_with_provider;
 use crate::displacement::build_displacement_trace;
 use crate::env::Env;
 use crate::error::EvalError;
 use crate::ir::{Program, Query, ScopeMode};
-use crate::provider::PredicateProvider;
+use crate::provider_registry::ProviderRegistry;
 use crate::trace::Trace;
 use crate::witness::Fact;
 use crate::witness::{DisplacementMode, Verdict, Witness, WitnessProgram};
@@ -29,7 +31,7 @@ pub fn eval_with_provider(
     program: &Program,
     query: Query,
     opts: EvalOpts,
-    provider: Option<&dyn PredicateProvider>,
+    provider: Option<&ProviderRegistry>,
 ) -> Result<Witness, EvalError> {
     let env = Env::from_program(program)?;
     let mut trace = Trace::new();
@@ -51,9 +53,15 @@ pub fn eval_with_provider(
             } else {
                 Verdict::Admissible
             };
+            let touched = collect_invariants_from_trace(&trace);
+            let inv_suffix = if touched.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", touched.join(", "))
+            };
             let reason = format!(
-                "lint: {} error(s), {} warning(s), {} info(s)",
-                errors, warnings, infos
+                "lint: {} error(s), {} warning(s), {} info(s){}",
+                errors, warnings, infos, inv_suffix
             );
             let witness = Witness::new(
                 WitnessProgram::from_program(program),
@@ -80,12 +88,21 @@ pub fn eval_with_provider(
             } else {
                 Verdict::Admissible
             };
+            let touched = collect_invariants_from_trace(&trace);
+            let inv_suffix = if touched.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", touched.join(", "))
+            };
             let reason = if boundary_triggered && constraints_triggered {
-                "constraints triggered; unaccounted boundary change".to_string()
+                format!(
+                    "constraints triggered; unaccounted boundary change{}",
+                    inv_suffix
+                )
             } else if boundary_triggered {
-                "unaccounted boundary change".to_string()
+                format!("unaccounted boundary change{}", inv_suffix)
             } else if constraints_triggered {
-                "constraints triggered".to_string()
+                format!("constraints triggered{}", inv_suffix)
             } else {
                 "admissible".to_string()
             };
@@ -121,6 +138,7 @@ fn evaluate_scope_changes(env: &Env, trace: &mut Trace) -> bool {
                     from: from.clone(),
                     to: to.clone(),
                     mode: mode.clone(),
+                    invariant: Some("irreversibility".to_string()),
                     span: span.clone(),
                 });
             }
@@ -128,6 +146,30 @@ fn evaluate_scope_changes(env: &Env, trace: &mut Trace) -> bool {
     }
 
     triggered
+}
+
+fn collect_invariants_from_trace(trace: &Trace) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for fact in trace.facts() {
+        match fact {
+            Fact::ConstraintTriggered {
+                invariant: Some(inv),
+                ..
+            }
+            | Fact::LintFinding {
+                invariant: Some(inv),
+                ..
+            }
+            | Fact::UnaccountedBoundaryChange {
+                invariant: Some(inv),
+                ..
+            } => {
+                set.insert(inv.clone());
+            }
+            _ => {}
+        }
+    }
+    set.into_iter().collect()
 }
 
 fn lint_counts(trace: &Trace) -> (usize, usize, usize) {

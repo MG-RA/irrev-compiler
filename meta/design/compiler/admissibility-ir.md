@@ -199,7 +199,7 @@ Commit {
 8) Query
 
 ```
-Query = Admissible | Witness | Delta
+Query = Admissible | Witness | Delta | Lint { fail_on: Error|Warning|Info }
 
 QueryStmt { query: Query, span: Span }
 ```
@@ -221,11 +221,43 @@ Predicate =
   | HasCommit(diff: SymbolRef)
   | CommitEquals(diff: SymbolRef, value: Quantity|str|bool)
   | CommitCmp(diff: SymbolRef, op: CmpOp, value: Quantity)   // unit-checked
+  | ProviderPredicate(scope_id: ScopeId, name: str, params: json)
 
 CmpOp = "==" | "!=" | ">" | ">=" | "<" | "<="
 ```
 
-This is a minimal starter set; the contract is: any predicate added later must emit witness facts with explicit spans and symbol references.
+This is a minimal starter set.
+
+### Extension predicate contract (implemented)
+
+`ProviderPredicate` is the generic extension point. It replaces hardcoded
+provider-specific predicates and is dispatched through the provider registry:
+
+- `scope_id` selects the provider instance.
+- `name` selects the provider-declared predicate.
+- `params` is provider-specific JSON input.
+
+Kernel witness obligations:
+
+- The evaluator must always emit `Fact::PredicateEvaluated` for every predicate.
+- Provider findings returned by predicate evaluation are recorded as
+  `Fact::LintFinding`.
+- If the registry is missing or `scope_id` is unregistered, evaluation fails
+  with a structured error.
+
+This keeps extension predicates witness-visible without adding custom IR
+variants per provider.
+
+### Kernel extension: scope boundary changes
+
+In addition to the core primitives above, code currently includes:
+
+```
+ScopeChange { from: ScopeId, to: ScopeId, mode: ScopeMode, span: Span }
+```
+
+This statement models boundary shifts directly in IR so witness emission can
+attribute boundary effects to explicit source spans.
 
 ## Semantics (what evaluation means)
 
@@ -363,4 +395,3 @@ If later someone adds `AllowErase(crew_fatigue)` without adjusting thresholds, t
 - the constraint span
 
 …with no advice, no blame, and no claims about what should be done—only what is structurally inadmissible.
-

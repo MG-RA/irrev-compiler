@@ -2,7 +2,29 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopePackRegistryEntry {
+    pub scope_id: String,
+    pub version: u32,
+}
+
 pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>> {
+    lower_to_ir_with_scope_packs(program, &[])
+}
+
+pub fn lower_to_ir_with_meta_registry(
+    program: Program,
+    meta_registry: &serde_json::Value,
+) -> Result<admit_core::Program, Vec<String>> {
+    let entries = scope_packs_from_meta_registry(meta_registry)
+        .map_err(|err| vec![format!("meta registry scope_packs decode failed: {}", err)])?;
+    lower_to_ir_with_scope_packs(program, &entries)
+}
+
+pub fn lower_to_ir_with_scope_packs(
+    program: Program,
+    scope_packs: &[ScopePackRegistryEntry],
+) -> Result<admit_core::Program, Vec<String>> {
     let mut module: Option<(String, u32)> = None;
     let mut scope: Option<String> = None;
     let mut depends: Vec<String> = Vec::new();
@@ -16,9 +38,14 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
     let mut declared_buckets: HashSet<String> = HashSet::new();
     let mut declared_constraints: HashSet<String> = HashSet::new();
     let mut declared_lenses: HashSet<String> = HashSet::new();
+    let mut imported_scope_packs: HashSet<(String, u32)> = HashSet::new();
     let mut lens_hashes: HashMap<String, String> = HashMap::new();
     let mut erasure_rules: HashSet<String> = HashSet::new();
     let mut permissions: HashMap<String, PermissionKind> = HashMap::new();
+    let registered_scope_packs: HashSet<(String, u32)> = scope_packs
+        .iter()
+        .map(|entry| (normalize_scope_pack_scope_id(&entry.scope_id), entry.version))
+        .collect();
 
     for stmt in program.statements {
         match stmt {
@@ -55,6 +82,31 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     },
                     span: lower_span(&decl.span),
                 });
+            }
+            Stmt::ImportScopePack(decl) => {
+                let scope_id = normalize_scope_pack_scope_id(&decl.scope_id);
+                let key = (scope_id.clone(), decl.version);
+                if !imported_scope_packs.insert(key.clone()) {
+                    errors.push(format!(
+                        "duplicate scope_pack import: {}@{}",
+                        scope_id, decl.version
+                    ));
+                    continue;
+                }
+
+                if registered_scope_packs.is_empty() {
+                    errors.push(format!(
+                        "scope_pack import {}@{} requires registry scope_packs context",
+                        scope_id, decl.version
+                    ));
+                    continue;
+                }
+                if !registered_scope_packs.contains(&key) {
+                    errors.push(format!(
+                        "unknown scope_pack import: {}@{}",
+                        scope_id, decl.version
+                    ));
+                }
             }
             Stmt::ScopeChange(stmt) => {
                 let from = normalize_name("scope", stmt.from, &mut errors);
@@ -556,4 +608,44 @@ fn stmt_sort_key(stmt: &admit_core::Stmt) -> String {
         }
         _ => "zzzz".to_string(),
     }
+}
+
+fn normalize_scope_pack_scope_id(raw: &str) -> String {
+    raw.strip_prefix("scope:").unwrap_or(raw).to_string()
+}
+
+pub fn scope_packs_from_meta_registry(
+    meta_registry: &serde_json::Value,
+) -> Result<Vec<ScopePackRegistryEntry>, String> {
+    let obj = meta_registry
+        .as_object()
+        .ok_or_else(|| "meta registry must be a JSON object".to_string())?;
+    let Some(scope_packs) = obj.get("scope_packs") else {
+        return Ok(vec![]);
+    };
+    let rows = scope_packs
+        .as_array()
+        .ok_or_else(|| "meta registry scope_packs must be an array".to_string())?;
+
+    let mut entries = Vec::with_capacity(rows.len());
+    for (idx, row) in rows.iter().enumerate() {
+        let row_obj = row
+            .as_object()
+            .ok_or_else(|| format!("scope_packs[{}] must be an object", idx))?;
+        let scope_id = row_obj
+            .get("scope_id")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("scope_packs[{}].scope_id must be a string", idx))?;
+        let version_u64 = row_obj
+            .get("version")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| format!("scope_packs[{}].version must be an integer", idx))?;
+        let version = u32::try_from(version_u64)
+            .map_err(|_| format!("scope_packs[{}].version out of range for u32", idx))?;
+        entries.push(ScopePackRegistryEntry {
+            scope_id: normalize_scope_pack_scope_id(scope_id),
+            version,
+        });
+    }
+    Ok(entries)
 }

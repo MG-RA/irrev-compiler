@@ -15,13 +15,13 @@ inputs:
     required: false
     default: "false"
   plan-path:
-    description: "Optional plan artifact path"
+    description: "Optional plan artifact path (omit to skip plan checks)"
     required: false
-    default: "out/plan/plan-artifact.json"
+    default: ""
   manifest-path:
-    description: "Optional proposal manifest path"
+    description: "Optional proposal manifest path (omit to skip manifest checks)"
     required: false
-    default: "out/plan/proposal-manifest.json"
+    default: ""
   plan-rollout:
     description: "Plan contract rollout: advisory|enforce"
     required: false
@@ -51,9 +51,14 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Build admit CLI
+    - name: Ensure admit CLI binary
       shell: bash
-      run: cargo build -p admit_cli --release
+      run: |
+        if [ -x target/debug/admit_cli ]; then
+          echo "using existing target/debug/admit_cli"
+          exit 0
+        fi
+        cargo build -p admit_cli
 
     - name: Run admissibility witness
       id: run_witness
@@ -65,6 +70,7 @@ runs:
         GH_REPO: ${{ github.repository }}
       run: |
         mkdir -p out/artifacts
+        ADMIT_BIN="target/debug/admit_cli"
         CONFIG_ARG=""
         if [ -n "${{ inputs.config-path }}" ]; then
           CONFIG_ARG="--config ${{ inputs.config-path }}"
@@ -73,7 +79,15 @@ runs:
         if [ "${{ inputs.require-github }}" = "true" ]; then
           REQUIRE_GH_ARG="--require-github"
         fi
-        target/release/admit_cli ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan "${{ inputs.plan-path }}" --manifest "${{ inputs.manifest-path }}" --plan-rollout "${{ inputs.plan-rollout }}" $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
+        PLAN_ARG=""
+        if [ -n "${{ inputs.plan-path }}" ]; then
+          PLAN_ARG="--plan ${{ inputs.plan-path }}"
+        fi
+        MANIFEST_ARG=""
+        if [ -n "${{ inputs.manifest-path }}" ]; then
+          MANIFEST_ARG="--manifest ${{ inputs.manifest-path }}"
+        fi
+        $ADMIT_BIN ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan-rollout "${{ inputs.plan-rollout }}" $PLAN_ARG $MANIFEST_ARG $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
 
     - name: Parse outputs
       id: parse

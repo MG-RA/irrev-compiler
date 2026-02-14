@@ -192,9 +192,15 @@ struct CheckRow {
 }
 
 fn gh_pr_view_payload(root: &Path, scope_id: &ScopeId) -> Result<Value, ProviderError> {
-    let output = Command::new("gh")
-        .arg("pr")
-        .arg("view")
+    let mut cmd = Command::new("gh");
+    cmd.arg("pr").arg("view");
+    if let Some(pr_number) = resolve_pr_number_from_env() {
+        cmd.arg(pr_number.to_string());
+    }
+    if let Some(repo) = resolve_repo_from_env() {
+        cmd.arg("--repo").arg(repo);
+    }
+    let output = cmd
         .arg("--json")
         .arg("state,baseRefName,headRefName,headRefOid,number,title,labels,reviews,reviewDecision,statusCheckRollup,files")
         .current_dir(path_for_gh(root))
@@ -219,6 +225,34 @@ fn gh_pr_view_payload(root: &Path, scope_id: &ScopeId) -> Result<Value, Provider
         phase: ProviderPhase::Snapshot,
         message: format!("decode gh pr view json failed: {}", err),
     })
+}
+
+fn resolve_pr_number_from_env() -> Option<u64> {
+    std::env::var("GH_PR_NUMBER")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .or_else(|| {
+            let ref_name = std::env::var("GITHUB_REF").ok()?;
+            let mut parts = ref_name.split('/');
+            let first = parts.next()?;
+            let second = parts.next()?;
+            let third = parts.next()?;
+            if first != "refs" || second != "pull" {
+                return None;
+            }
+            third.parse::<u64>().ok()
+        })
+}
+
+fn resolve_repo_from_env() -> Option<String> {
+    std::env::var("GH_REPO")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("GITHUB_REPOSITORY")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
 }
 
 fn payload_to_facts(payload: &Value) -> Vec<Fact> {

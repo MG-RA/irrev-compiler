@@ -43,6 +43,8 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         GITHUB_TOKEN: ${{ github.token }}
+        GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_REPO: ${{ github.repository }}
       run: |
         mkdir -p out/artifacts
         CONFIG_ARG=""

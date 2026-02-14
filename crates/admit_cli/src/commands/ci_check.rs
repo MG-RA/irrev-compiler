@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use admit_core::provider_trait::Provider;
@@ -204,12 +204,7 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         ));
     }
 
-    let changed_paths = bundles
-        .get(&ScopeId(
-            admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string(),
-        ))
-        .map(extract_changed_paths)
-        .unwrap_or_default();
+    let changed_paths = observed_changed_paths(&bundles);
     let runtime_overlays = build_runtime_overlays(&ruleset, &changed_paths);
     let plan_enforce = matches!(args.plan_rollout, PlanRolloutMode::Enforce);
     let mut plan_contract = check_plan_contract(PlanCheckInput {
@@ -650,7 +645,7 @@ fn parse_ci_mode(raw: &str) -> Result<CiMode, String> {
     }
 }
 
-fn extract_changed_paths(bundle: &FactsBundle) -> Vec<String> {
+fn extract_git_changed_paths(bundle: &FactsBundle) -> Vec<String> {
     let mut paths = Vec::new();
     for fact in &bundle.facts {
         if let Fact::LintFinding {
@@ -674,6 +669,54 @@ fn extract_changed_paths(bundle: &FactsBundle) -> Vec<String> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn extract_github_changed_paths(bundle: &FactsBundle) -> Vec<String> {
+    let mut paths = Vec::new();
+    for fact in &bundle.facts {
+        if let Fact::LintFinding {
+            rule_id,
+            evidence: Some(evidence),
+            ..
+        } = fact
+        {
+            if rule_id == "github/changed_files" {
+                if let Some(arr) = evidence.get("files").and_then(|v| v.as_array()) {
+                    for item in arr {
+                        if let Some(path) = item.as_str() {
+                            paths.push(path.to_string());
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn observed_changed_paths(bundles: &BTreeMap<ScopeId, FactsBundle>) -> Vec<String> {
+    let mut github_paths = Vec::new();
+    if let Some(bundle) = bundles.get(&ScopeId(
+        admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID.to_string(),
+    )) {
+        github_paths = extract_github_changed_paths(bundle);
+    }
+    if !github_paths.is_empty() {
+        return github_paths;
+    }
+
+    let mut observed = BTreeSet::new();
+    if let Some(bundle) = bundles.get(&ScopeId(
+        admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string(),
+    )) {
+        for path in extract_git_changed_paths(bundle) {
+            observed.insert(path);
+        }
+    }
+    observed.into_iter().collect()
 }
 
 fn build_runtime_overlays(
@@ -788,4 +831,86 @@ fn apply_ci_witness_metadata(
 fn canonical_sha256(value: &serde_json::Value) -> Result<String, String> {
     let bytes = admit_core::encode_canonical_value(value).map_err(|err| err.0)?;
     Ok(hex::encode(sha2::Sha256::digest(&bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use admit_core::provider_types::FactsBundle;
+    use admit_core::witness::Fact;
+
+    fn mk_bundle(scope_id: &str, rule_id: &str, evidence: serde_json::Value) -> FactsBundle {
+        FactsBundle {
+            schema_id: format!("facts-bundle/{}@1", scope_id),
+            scope_id: ScopeId(scope_id.to_string()),
+            facts: vec![Fact::LintFinding {
+                rule_id: rule_id.to_string(),
+                severity: Severity::Info,
+                invariant: None,
+                path: ".".to_string(),
+                span: admit_core::Span {
+                    file: ".".to_string(),
+                    start: None,
+                    end: None,
+                    line: None,
+                    col: None,
+                },
+                message: "fixture".to_string(),
+                evidence: Some(evidence),
+            }],
+            snapshot_hash: Sha256Hex::new("abc123"),
+            created_at: Rfc3339Timestamp::new("2026-02-14T00:00:00Z"),
+        }
+    }
+
+    #[test]
+    fn observed_changed_paths_prefers_github_when_available() {
+        let mut bundles = BTreeMap::new();
+        bundles.insert(
+            ScopeId(admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID,
+                "git/changed_paths",
+                serde_json::json!({ "paths": ["Cargo.toml", "tmp/generated.json"] }),
+            ),
+        );
+        bundles.insert(
+            ScopeId(admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID,
+                "github/changed_files",
+                serde_json::json!({ "files": ["src/lib.rs", "Cargo.toml"] }),
+            ),
+        );
+
+        let observed = observed_changed_paths(&bundles);
+        assert_eq!(observed, vec!["Cargo.toml".to_string(), "src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn observed_changed_paths_falls_back_to_git_when_github_missing() {
+        let mut bundles = BTreeMap::new();
+        bundles.insert(
+            ScopeId(admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID,
+                "git/changed_paths",
+                serde_json::json!({ "paths": ["src/main.rs", "Cargo.toml", "src/main.rs"] }),
+            ),
+        );
+        bundles.insert(
+            ScopeId(admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID,
+                "github/scope_unavailable",
+                serde_json::json!({ "scope_id": admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID }),
+            ),
+        );
+
+        let observed = observed_changed_paths(&bundles);
+        assert_eq!(
+            observed,
+            vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]
+        );
+    }
 }

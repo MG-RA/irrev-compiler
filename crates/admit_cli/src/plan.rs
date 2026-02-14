@@ -748,7 +748,7 @@ pub fn check_plan_contract(input: PlanCheckInput) -> PlanCheckOutput {
     }
 
     apply_changed_path_checks(parsed_plan.as_ref(), parsed_manifest.as_ref(), &mut out);
-    apply_hard_stop_checks(&mut out);
+    apply_hard_stop_checks(input.enforce, &mut out);
     classify_failures(&mut out);
 
     let contract_violation = !out.errors.is_empty() || out.requires_manual_approval;
@@ -941,24 +941,67 @@ fn apply_changed_path_checks(
     }
 }
 
-fn apply_hard_stop_checks(out: &mut PlanCheckOutput) {
+fn apply_hard_stop_checks(enforce: bool, out: &mut PlanCheckOutput) {
     let observed_paths = out.changed_paths_observed.clone();
-    for path in &observed_paths {
-        if path.starts_with(".github/workflows/") {
-            add_stop_reason(out, "touches_github_workflows");
-        }
-        if path.starts_with(".admit/schemas/") {
-            add_stop_reason(out, "meta_schema_change");
-        } else if path.starts_with(".admit/prompts/") {
-            add_stop_reason(out, "meta_prompt_change");
-        } else if path.starts_with(".admit/") {
-            add_stop_reason(out, "meta_registry_change");
-        }
-        if is_secret_like_path(path) {
-            add_stop_reason(out, "secrets_detected");
+    let claimed_paths = out.changed_paths_claimed.clone();
+
+    if enforce && observed_paths.is_empty() {
+        add_stop_reason(out, "changed_paths_unavailable");
+        if !out
+            .warnings
+            .iter()
+            .any(|w| w == "changed paths unavailable in enforce mode")
+        {
+            out.warnings
+                .push("changed paths unavailable in enforce mode".to_string());
         }
     }
+
+    for path in &observed_paths {
+        apply_path_stop_policies(path, out);
+    }
+
+    if enforce {
+        let observed_set: std::collections::BTreeSet<String> =
+            observed_paths.iter().cloned().collect();
+        for path in &claimed_paths {
+            if observed_set.contains(path) {
+                continue;
+            }
+            if is_sensitive_control_path(path) || is_secret_like_path(path) {
+                add_stop_reason(out, "claimed_sensitive_path_unverified");
+                // Preserve category-specific stop reasons for governance routing.
+                apply_path_stop_policies(path, out);
+            }
+        }
+    }
+
     out.requires_manual_approval = !out.stop_reasons.is_empty();
+}
+
+fn apply_path_stop_policies(path: &str, out: &mut PlanCheckOutput) {
+    if path.starts_with(".github/workflows/") {
+        add_stop_reason(out, "touches_github_workflows");
+    }
+    if path == "action.yml" {
+        add_stop_reason(out, "touches_action_definition");
+    }
+    if path.starts_with(".admit/schemas/") {
+        add_stop_reason(out, "meta_schema_change");
+    } else if path.starts_with(".admit/prompts/") {
+        add_stop_reason(out, "meta_prompt_change");
+    } else if path.starts_with(".admit/") {
+        add_stop_reason(out, "meta_registry_change");
+    }
+    if is_secret_like_path(path) {
+        add_stop_reason(out, "secrets_detected");
+    }
+}
+
+fn is_sensitive_control_path(path: &str) -> bool {
+    path.starts_with(".github/workflows/")
+        || path == "action.yml"
+        || path.starts_with(".admit/")
 }
 
 fn classify_failures(out: &mut PlanCheckOutput) {
@@ -1567,5 +1610,76 @@ mod plan_contract_tests {
             report.manifest_id.as_deref(),
             Some(generated.manifest_id.as_str())
         );
+    }
+
+    #[test]
+    fn enforce_mode_stops_when_changed_paths_unavailable() {
+        let mut plan = sample_plan();
+        let plan_hash = canonical_hash_without_field(&plan, "plan_id").expect("hash");
+        plan.plan_id = format!("plan:{}", plan_hash);
+
+        let mut manifest = sample_manifest(&plan.plan_id);
+        let manifest_hash = canonical_hash_without_field(&manifest, "manifest_id").expect("hash");
+        manifest.manifest_id = format!("manifest:{}", manifest_hash);
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("plan.json");
+        let manifest_path = temp.path().join("manifest.json");
+        fs::write(&plan_path, serde_json::to_vec(&plan).expect("encode")).expect("write");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("encode"),
+        )
+        .expect("write");
+
+        let out = check_plan_contract(PlanCheckInput {
+            plan_path: Some(plan_path),
+            manifest_path: Some(manifest_path),
+            changed_paths_observed: vec![],
+            enforce: true,
+        });
+        assert!(out.requires_manual_approval);
+        assert!(out
+            .stop_reasons
+            .contains(&"changed_paths_unavailable".to_string()));
+        assert_eq!(out.exit_code, 2);
+    }
+
+    #[test]
+    fn enforce_mode_stops_on_unverified_sensitive_claim() {
+        let mut plan = sample_plan();
+        plan.expected_changed_paths = vec![".github/workflows/ci.yml".to_string()];
+        let plan_hash = canonical_hash_without_field(&plan, "plan_id").expect("hash");
+        plan.plan_id = format!("plan:{}", plan_hash);
+
+        let mut manifest = sample_manifest(&plan.plan_id);
+        manifest.changed_paths = vec![".github/workflows/ci.yml".to_string()];
+        let manifest_hash = canonical_hash_without_field(&manifest, "manifest_id").expect("hash");
+        manifest.manifest_id = format!("manifest:{}", manifest_hash);
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("plan.json");
+        let manifest_path = temp.path().join("manifest.json");
+        fs::write(&plan_path, serde_json::to_vec(&plan).expect("encode")).expect("write");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("encode"),
+        )
+        .expect("write");
+
+        let out = check_plan_contract(PlanCheckInput {
+            plan_path: Some(plan_path),
+            manifest_path: Some(manifest_path),
+            changed_paths_observed: vec!["src/lib.rs".to_string()],
+            enforce: true,
+        });
+        assert!(out.requires_manual_approval);
+        assert!(out
+            .stop_reasons
+            .contains(&"claimed_sensitive_path_unverified".to_string()));
+        assert!(out
+            .stop_reasons
+            .contains(&"touches_github_workflows".to_string()));
+        assert_eq!(out.exit_code, 2);
     }
 }

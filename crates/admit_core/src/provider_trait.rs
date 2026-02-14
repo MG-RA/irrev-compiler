@@ -70,11 +70,14 @@ pub trait Provider: Send + Sync {
     ///
     /// The provider returns `PredicateResult` with a boolean and optional findings.
     /// The evaluator is responsible for recording findings into the trace.
+    /// `PredicateEvalContext` carries snapshot-bound facts/identity for
+    /// context-first evaluation with legacy params fallback support.
     /// Default: returns "predicate not supported".
     fn eval_predicate(
         &self,
         name: &str,
         _params: &serde_json::Value,
+        _ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         Err(ProviderError {
             scope: self.describe().scope_id,

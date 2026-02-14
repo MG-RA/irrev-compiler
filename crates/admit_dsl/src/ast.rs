@@ -29,6 +29,13 @@ pub struct LensDecl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScopePackImportDecl {
+    pub scope_id: String,
+    pub version: u32,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ScopeMode {
     Widen,
     Narrow,
@@ -236,6 +243,7 @@ pub enum Stmt {
     Depends(DependsDecl),
     Scope(ScopeDecl),
     Lens(LensDecl),
+    ImportScopePack(ScopePackImportDecl),
     ScopeChange(ScopeChangeStmt),
     AllowScopeChange(AllowScopeChangeStmt),
     ScopeChangeRule(ScopeChangeRuleStmt),

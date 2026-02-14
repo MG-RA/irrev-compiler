@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use admit_core::Provider;
+
 use super::artifact::store_artifact;
 use super::internal::{
     artifact_disk_path, decode_cbor_to_value, sha256_hex, META_REGISTRY_ENV, META_REGISTRY_KIND,
@@ -8,8 +10,8 @@ use super::internal::{
 };
 use super::types::{
     ArtifactRef, DeclareCostError, MetaRegistryDefaultLens, MetaRegistryMetaBucket,
-    MetaRegistryMetaChangeKind, MetaRegistrySchema, MetaRegistryScope, MetaRegistryStdlib,
-    MetaRegistryV0, ScopeGateMode,
+    MetaRegistryMetaChangeKind, MetaRegistrySchema, MetaRegistryScope, MetaRegistryScopePack,
+    MetaRegistryStdlib, MetaRegistryV0, ScopeGateMode,
 };
 
 const META_REGISTRY_SCHEMA_ID_V0: &str = "meta-registry/0";
@@ -445,6 +447,7 @@ pub fn registry_init(out_path: &Path) -> Result<(), DeclareCostError> {
                 contract_ref: None,
             },
         ],
+        scope_packs: vec![],
     };
 
     let json = serde_json::to_string_pretty(&registry)
@@ -495,6 +498,44 @@ pub fn registry_build(
         Some(json_projection),
         Some(&registry),
     )
+}
+
+pub fn registry_scope_pack_sync(input_path: &Path, out_path: &Path) -> Result<(), DeclareCostError> {
+    let bytes = fs::read(input_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    let registry_raw: MetaRegistryV0 = serde_json::from_slice(&bytes)
+        .map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
+    if registry_raw.schema_id != META_REGISTRY_SCHEMA_ID
+        && registry_raw.schema_id != META_REGISTRY_SCHEMA_ID_V0
+    {
+        return Err(DeclareCostError::MetaRegistrySchemaMismatch {
+            expected: format!("{}/{}", META_REGISTRY_SCHEMA_ID, META_REGISTRY_SCHEMA_ID_V0),
+            found: registry_raw.schema_id.clone(),
+        });
+    }
+
+    let mut registry = normalize_meta_registry(registry_raw)?;
+
+    let mut by_key: std::collections::BTreeMap<(String, u32), MetaRegistryScopePack> = registry
+        .scope_packs
+        .into_iter()
+        .map(|entry| ((entry.scope_id.clone(), entry.version), entry))
+        .collect();
+    for entry in builtin_scope_packs()? {
+        by_key.insert((entry.scope_id.clone(), entry.version), entry);
+    }
+    registry.scope_packs = by_key.into_values().collect();
+    registry.registry_version = registry.registry_version.saturating_add(1);
+    registry = normalize_meta_registry(registry)?;
+
+    if let Some(parent) = out_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        }
+    }
+    let json = serde_json::to_string_pretty(&registry)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    fs::write(out_path, json).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    Ok(())
 }
 
 pub fn registry_migrate_v0_v1(input_path: &Path, out_path: &Path) -> Result<(), DeclareCostError> {
@@ -729,6 +770,52 @@ pub fn normalize_meta_registry(
     }
     registry.scopes.sort_by(|a, b| a.id.cmp(&b.id));
 
+    let mut deduped_scope_packs: std::collections::BTreeMap<(String, u32), MetaRegistryScopePack> =
+        std::collections::BTreeMap::new();
+    for mut entry in std::mem::take(&mut registry.scope_packs) {
+        if !is_sha256_hex(&entry.provider_pack_hash) {
+            return Err(DeclareCostError::MetaRegistryInvalidScopePackHash {
+                scope_id: entry.scope_id.clone(),
+                version: entry.version,
+                hash: entry.provider_pack_hash.clone(),
+            });
+        }
+
+        let mut pred_ids = std::collections::HashSet::new();
+        for predicate_id in &entry.predicate_ids {
+            if !pred_ids.insert(predicate_id.as_str()) {
+                return Err(DeclareCostError::MetaRegistryDuplicateScopePackPredicate {
+                    scope_id: entry.scope_id.clone(),
+                    version: entry.version,
+                    predicate_id: predicate_id.clone(),
+                });
+            }
+        }
+        entry.predicate_ids.sort();
+
+        let key = (entry.scope_id.clone(), entry.version);
+        if let Some(existing) = deduped_scope_packs.get(&key) {
+            if existing.provider_pack_hash == entry.provider_pack_hash
+                && existing.deterministic == entry.deterministic
+                && existing.predicate_ids == entry.predicate_ids
+            {
+                continue;
+            }
+            return Err(DeclareCostError::MetaRegistryDuplicateScopePack {
+                scope_id: entry.scope_id,
+                version: entry.version,
+            });
+        }
+        deduped_scope_packs.insert(key, entry);
+    }
+    registry.scope_packs = deduped_scope_packs.into_values().collect();
+    registry.scope_packs.sort_by(|a, b| {
+        a.scope_id
+            .cmp(&b.scope_id)
+            .then(a.version.cmp(&b.version))
+            .then(a.provider_pack_hash.cmp(&b.provider_pack_hash))
+    });
+
     Ok(registry)
 }
 
@@ -740,4 +827,57 @@ fn default_lens_hash() -> String {
     });
     let bytes = admit_core::encode_canonical_value(&lens_value).unwrap_or_default();
     super::internal::sha256_hex(&bytes)
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn builtin_scope_packs() -> Result<Vec<MetaRegistryScopePack>, DeclareCostError> {
+    let descriptors = vec![
+        admit_scope_ingest::provider_impl::IngestDirProvider::new().describe(),
+        admit_scope_rust::provider_impl::RustStructureProvider::new().describe(),
+        admit_scope_git::provider_impl::GitWorkingTreeProvider::new().describe(),
+        admit_scope_text::provider_impl::TextMetricsProvider::new().describe(),
+        admit_scope_deps::provider_impl::DepsManifestProvider::new().describe(),
+        admit_scope_github::provider_impl::GithubCeremonyProvider::new().describe(),
+    ];
+
+    descriptors
+        .into_iter()
+        .map(|desc| {
+            let provider_pack_hash =
+                admit_core::provider_pack_hash(&desc).map_err(|err| {
+                    DeclareCostError::CanonicalEncode(format!(
+                        "provider_pack_hash {}: {}",
+                        desc.scope_id.0, err
+                    ))
+                })?;
+            let mut predicate_ids = desc
+                .predicates
+                .iter()
+                .map(|pred| normalize_predicate_id(&desc.scope_id.0, desc.version, pred))
+                .collect::<Vec<_>>();
+            predicate_ids.sort();
+            Ok(MetaRegistryScopePack {
+                scope_id: desc.scope_id.0,
+                version: desc.version,
+                provider_pack_hash,
+                deterministic: desc.deterministic,
+                predicate_ids,
+            })
+        })
+        .collect()
+}
+
+fn normalize_predicate_id(
+    scope_id: &str,
+    version: u32,
+    pred: &admit_core::PredicateDescriptor,
+) -> String {
+    if pred.predicate_id.trim().is_empty() {
+        format!("{}/{}@{}", scope_id, pred.name, version)
+    } else {
+        pred.predicate_id.clone()
+    }
 }

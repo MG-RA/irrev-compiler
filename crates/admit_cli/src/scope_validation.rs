@@ -613,6 +613,7 @@ mod tests {
             stdlib: vec![],
             schemas: vec![],
             scopes: vec![],
+            scope_packs: vec![],
         }
     }
 
@@ -652,6 +653,7 @@ mod tests {
             stdlib: vec![],
             schemas: vec![],
             scopes,
+            scope_packs: vec![],
         }
     }
 

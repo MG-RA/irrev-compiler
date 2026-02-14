@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 
-use admit_cli::{registry_build, registry_init, DeclareCostError, MetaRegistryV0};
+use admit_cli::{
+    registry_build, registry_init, registry_scope_pack_sync, DeclareCostError, MetaRegistryV0,
+};
+use admit_core::Provider;
+use admit_scope_text::provider_impl::TextMetricsProvider;
 use sha2::Digest;
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -77,6 +81,41 @@ fn base_registry_json() -> serde_json::Value {
             { "id": "scope:meta.registry", "version": 0 }
         ]
     })
+}
+
+fn base_registry_v1_json() -> serde_json::Value {
+    let mut registry = base_registry_json();
+    registry["schema_id"] = serde_json::json!("meta-registry/1");
+    registry["schema_version"] = serde_json::json!(1);
+    registry["default_lens"] = serde_json::json!({
+        "lens_id": "lens:default@0",
+        "lens_hash": "lens:default:pending"
+    });
+    registry["lenses"] = serde_json::json!([{
+        "lens_id": "lens:default@0",
+        "lens_hash": "lens:default:pending"
+    }]);
+    registry["meta_change_kinds"] = serde_json::json!([]);
+    registry["meta_buckets"] = serde_json::json!([
+        { "bucket_id": "bucket:trust_debt" },
+        { "bucket_id": "bucket:compatibility_debt" },
+        { "bucket_id": "bucket:explanation_debt" }
+    ]);
+    let schemas = registry["schemas"]
+        .as_array_mut()
+        .expect("schemas array in base registry");
+    if !schemas
+        .iter()
+        .any(|entry| entry.get("id").and_then(|v| v.as_str()) == Some("meta-registry/1"))
+    {
+        schemas.push(serde_json::json!({
+            "id": "meta-registry/1",
+            "schema_version": 1,
+            "kind": "meta_registry",
+            "canonical_encoding": "canonical-cbor"
+        }));
+    }
+    registry
 }
 
 #[test]
@@ -350,4 +389,143 @@ fn default_lens_v0_canonical_hash_is_pinned() {
         hash, "29fa7bf20f869e1cfbbf0b0299a5a6567262d560133c5f38d9a6502c5b279702",
         "default lens canonical hash changed - this is a governance-level breaking change"
     );
+}
+
+#[test]
+fn registry_rejects_duplicate_scope_pack_entries() {
+    let dir = temp_dir("dup-scope-pack");
+    let artifacts_dir = dir.join("artifacts");
+    let path = dir.join("registry.json");
+
+    let mut registry = base_registry_v1_json();
+    registry["scope_packs"] = serde_json::json!([
+        {
+            "scope_id": "text.metrics",
+            "version": 1,
+            "provider_pack_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "deterministic": true,
+            "predicate_ids": ["text.metrics/lines_exceed@1"]
+        },
+        {
+            "scope_id": "text.metrics",
+            "version": 1,
+            "provider_pack_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "deterministic": true,
+            "predicate_ids": ["text.metrics/todo_present@1"]
+        }
+    ]);
+
+    write_registry(&path, registry);
+    let err = registry_build(&path, &artifacts_dir).expect_err("duplicate scope pack");
+    match err {
+        DeclareCostError::MetaRegistryDuplicateScopePack { .. } => {}
+        other => panic!("unexpected error: {}", other),
+    }
+}
+
+#[test]
+fn registry_dedupes_identical_scope_pack_entries() {
+    let dir = temp_dir("dedupe-scope-pack");
+    let artifacts_dir = dir.join("artifacts");
+    let path = dir.join("registry.json");
+
+    let mut registry = base_registry_v1_json();
+    registry["scope_packs"] = serde_json::json!([
+        {
+            "scope_id": "text.metrics",
+            "version": 1,
+            "provider_pack_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "deterministic": true,
+            "predicate_ids": ["text.metrics/lines_exceed@1"]
+        },
+        {
+            "scope_id": "text.metrics",
+            "version": 1,
+            "provider_pack_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "deterministic": true,
+            "predicate_ids": ["text.metrics/lines_exceed@1"]
+        }
+    ]);
+
+    write_registry(&path, registry);
+    registry_build(&path, &artifacts_dir).expect("identical duplicate scope pack should dedupe");
+}
+
+#[test]
+fn registry_rejects_invalid_scope_pack_hash() {
+    let dir = temp_dir("bad-scope-pack-hash");
+    let artifacts_dir = dir.join("artifacts");
+    let path = dir.join("registry.json");
+
+    let mut registry = base_registry_v1_json();
+    registry["scope_packs"] = serde_json::json!([
+        {
+            "scope_id": "text.metrics",
+            "version": 1,
+            "provider_pack_hash": "not-a-hash",
+            "deterministic": true,
+            "predicate_ids": ["text.metrics/lines_exceed@1"]
+        }
+    ]);
+
+    write_registry(&path, registry);
+    let err = registry_build(&path, &artifacts_dir).expect_err("invalid scope pack hash");
+    match err {
+        DeclareCostError::MetaRegistryInvalidScopePackHash { .. } => {}
+        other => panic!("unexpected error: {}", other),
+    }
+}
+
+#[test]
+fn registry_scope_pack_sync_writes_packs_and_increments_version() {
+    let dir = temp_dir("scope-pack-sync");
+    let in_path = dir.join("meta-registry.json");
+    let out_path = dir.join("meta-registry.synced.json");
+    registry_init(&in_path).expect("registry init");
+
+    let before: MetaRegistryV0 =
+        serde_json::from_slice(&std::fs::read(&in_path).expect("read before")).expect("decode");
+    registry_scope_pack_sync(&in_path, &out_path).expect("scope pack sync");
+    let after: MetaRegistryV0 =
+        serde_json::from_slice(&std::fs::read(&out_path).expect("read after")).expect("decode");
+
+    assert_eq!(after.registry_version, before.registry_version + 1);
+    assert!(
+        !after.scope_packs.is_empty(),
+        "expected synced registry to include scope_packs"
+    );
+    assert!(
+        after
+            .scope_packs
+            .iter()
+            .any(|entry| entry.scope_id == "text.metrics" && entry.version == 1)
+    );
+
+    let text_desc = TextMetricsProvider::new().describe();
+    let expected = admit_core::provider_pack_hash(&text_desc).expect("hash");
+    let synced = after
+        .scope_packs
+        .iter()
+        .find(|entry| entry.scope_id == "text.metrics" && entry.version == 1)
+        .expect("text metrics scope pack");
+    assert_eq!(synced.provider_pack_hash, expected);
+}
+
+#[test]
+fn registry_scope_pack_sync_is_stable_across_repeated_runs() {
+    let dir = temp_dir("scope-pack-sync-repeat");
+    let in_path = dir.join("meta-registry.json");
+    let out1 = dir.join("meta-registry.sync1.json");
+    let out2 = dir.join("meta-registry.sync2.json");
+    registry_init(&in_path).expect("registry init");
+
+    registry_scope_pack_sync(&in_path, &out1).expect("sync 1");
+    registry_scope_pack_sync(&out1, &out2).expect("sync 2");
+
+    let a: MetaRegistryV0 =
+        serde_json::from_slice(&std::fs::read(&out1).expect("read sync1")).expect("decode");
+    let b: MetaRegistryV0 =
+        serde_json::from_slice(&std::fs::read(&out2).expect("read sync2")).expect("decode");
+    assert_eq!(a.scope_packs.len(), b.scope_packs.len());
+    assert_eq!(a.scope_packs, b.scope_packs);
 }

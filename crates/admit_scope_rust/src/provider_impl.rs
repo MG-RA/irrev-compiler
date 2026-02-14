@@ -45,17 +45,19 @@ impl Provider for RustStructureProvider {
             },
             required_approvals: vec![],
             predicates: vec![PredicateDescriptor {
+                predicate_id: "rust.structure/unsafe_without_justification@1".to_string(),
                 name: "unsafe_without_justification".to_string(),
                 doc: "Flags rust/unsafe_block facts without matching justification facts."
                     .to_string(),
+                result_kind: PredicateResultKind::Bool,
+                emits_findings: true,
                 param_schema: Some(serde_json::json!({
                     "type": "object",
-                    "required": ["facts"],
                     "properties": {
-                        "facts": { "type": "array" },
                         "justification_rule_id": { "type": "string" }
                     }
                 })),
+                evidence_schema: None,
             }],
         }
     }
@@ -157,21 +159,12 @@ impl Provider for RustStructureProvider {
         &self,
         name: &str,
         params: &serde_json::Value,
+        ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         let scope_id = ScopeId(RUST_SCOPE_ID.to_string());
         match name {
             "unsafe_without_justification" => {
-                let facts_value = params.get("facts").cloned().ok_or_else(|| ProviderError {
-                    scope: scope_id.clone(),
-                    phase: ProviderPhase::Snapshot,
-                    message: "unsafe_without_justification requires params.facts".to_string(),
-                })?;
-                let facts: Vec<Fact> =
-                    serde_json::from_value(facts_value).map_err(|err| ProviderError {
-                        scope: scope_id.clone(),
-                        phase: ProviderPhase::Snapshot,
-                        message: format!("decode params.facts: {}", err),
-                    })?;
+                let facts = decode_facts(params, ctx, &scope_id)?;
                 let justification_rule = params
                     .get("justification_rule_id")
                     .and_then(|v| v.as_str())
@@ -249,6 +242,26 @@ impl Provider for RustStructureProvider {
             }),
         }
     }
+}
+
+fn decode_facts(
+    params: &serde_json::Value,
+    ctx: &PredicateEvalContext,
+    scope_id: &ScopeId,
+) -> Result<Vec<Fact>, ProviderError> {
+    if let Some(facts) = &ctx.facts {
+        return Ok(facts.clone());
+    }
+    let facts_value = params.get("facts").cloned().ok_or_else(|| ProviderError {
+        scope: scope_id.clone(),
+        phase: ProviderPhase::Snapshot,
+        message: "predicate requires context.facts or params.facts".to_string(),
+    })?;
+    serde_json::from_value(facts_value).map_err(|err| ProviderError {
+        scope: scope_id.clone(),
+        phase: ProviderPhase::Snapshot,
+        message: format!("decode params.facts: {}", err),
+    })
 }
 
 /// Minimal sort key for facts (mirrors admit_scope_ingest pattern).
@@ -432,6 +445,7 @@ mod tests {
             .eval_predicate(
                 "unsafe_without_justification",
                 &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -477,10 +491,43 @@ mod tests {
             .eval_predicate(
                 "unsafe_without_justification",
                 &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);
         assert!(out.findings.is_empty());
+    }
+
+    #[test]
+    fn unsafe_without_justification_uses_context_facts() {
+        let p = RustStructureProvider::new();
+        let facts = vec![Fact::LintFinding {
+            rule_id: "rust/unsafe_block".to_string(),
+            severity: Severity::Info,
+            invariant: None,
+            path: "src/lib.rs".to_string(),
+            span: admit_core::Span {
+                file: "src/lib.rs".to_string(),
+                start: None,
+                end: None,
+                line: Some(12),
+                col: Some(3),
+            },
+            message: "unsafe block in x".to_string(),
+            evidence: Some(serde_json::json!({ "file_sha256": "abc" })),
+        }];
+        let out = p
+            .eval_predicate(
+                "unsafe_without_justification",
+                &serde_json::json!({}),
+                &PredicateEvalContext {
+                    facts: Some(facts),
+                    snapshot_hash: None,
+                    facts_schema_id: None,
+                },
+            )
+            .expect("predicate");
+        assert!(out.triggered);
     }
 
     fn temp_dir(label: &str) -> std::path::PathBuf {

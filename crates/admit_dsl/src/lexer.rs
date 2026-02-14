@@ -22,8 +22,9 @@ pub(crate) fn lexer(
         .then_ignore(just('"'))
         .map(Token::Str);
 
-    let symbol =
-        filter(|c: &char| c.is_ascii_alphanumeric() || matches!(*c, '_' | ':' | '@' | '-'))
+    let symbol = filter(|c: &char| {
+        c.is_ascii_alphanumeric() || matches!(*c, '_' | ':' | '@' | '-' | '.')
+    })
             .repeated()
             .at_least(1)
             .collect::<String>();
@@ -42,6 +43,8 @@ pub(crate) fn lexer(
         make_keyword("module", Token::KwModule).boxed(),
         make_keyword("scope", Token::KwScope).boxed(),
         make_keyword("lens", Token::KwLens).boxed(),
+        make_keyword("import", Token::KwImport).boxed(),
+        make_keyword("scope_pack", Token::KwScopePack).boxed(),
         make_keyword("scope_change", Token::KwScopeChange).boxed(),
         make_keyword("allow_scope_change", Token::KwAllowScopeChange).boxed(),
         make_keyword("scope_change_rule", Token::KwScopeChangeRule).boxed(),

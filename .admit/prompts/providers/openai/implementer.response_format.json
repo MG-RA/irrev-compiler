@@ -1,0 +1,8 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "proposal_manifest_v0",
+    "schema_ref": ".admit/schemas/proposal-manifest.v0.schema.json",
+    "strict": true
+  }
+}

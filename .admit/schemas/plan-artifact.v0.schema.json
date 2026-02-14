@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://irrev.local/schemas/plan-artifact.v0.schema.json",
+  "title": "PlanArtifactV0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "plan_id",
+    "intent",
+    "scope_targets",
+    "assumptions",
+    "constraints_expected",
+    "allowed_exceptions",
+    "validation_steps",
+    "stop_conditions",
+    "risk_routes",
+    "unknowns",
+    "confidence",
+    "generated_by"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "plan-artifact/0"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^plan:[0-9a-f]{64}$"
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope_targets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "expected_changed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "default": []
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "constraints_expected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "allowed_exceptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "validation_steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "command", "required"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "command": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean" }
+        }
+      }
+    },
+    "stop_conditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risk_routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bucket", "cost_estimate", "unit", "rationale"],
+        "properties": {
+          "bucket": { "type": "string", "minLength": 1 },
+          "cost_estimate": { "type": "number" },
+          "unit": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "unknowns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "generated_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "surface", "timestamp"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "surface": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "minLength": 1 },
+        "planner_prompt_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "implementer_prompt_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

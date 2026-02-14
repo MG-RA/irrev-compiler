@@ -57,6 +57,17 @@ pub enum DeclareCostError {
     MetaRegistryDuplicateMetaChangeKind(String),
     MetaRegistryMissingCoreBucket(String),
     MetaRegistryDuplicateMetaBucket(String),
+    MetaRegistryDuplicateScopePack { scope_id: String, version: u32 },
+    MetaRegistryInvalidScopePackHash {
+        scope_id: String,
+        version: u32,
+        hash: String,
+    },
+    MetaRegistryDuplicateScopePackPredicate {
+        scope_id: String,
+        version: u32,
+        predicate_id: String,
+    },
 }
 
 impl fmt::Display for DeclareCostError {
@@ -221,6 +232,35 @@ impl fmt::Display for DeclareCostError {
             }
             DeclareCostError::MetaRegistryDuplicateMetaBucket(bucket_id) => {
                 write!(f, "meta registry duplicate meta bucket: {}", bucket_id)
+            }
+            DeclareCostError::MetaRegistryDuplicateScopePack { scope_id, version } => {
+                write!(
+                    f,
+                    "meta registry duplicate scope_pack entry for {}@{}",
+                    scope_id, version
+                )
+            }
+            DeclareCostError::MetaRegistryInvalidScopePackHash {
+                scope_id,
+                version,
+                hash,
+            } => {
+                write!(
+                    f,
+                    "meta registry invalid scope_pack hash for {}@{}: {}",
+                    scope_id, version, hash
+                )
+            }
+            DeclareCostError::MetaRegistryDuplicateScopePackPredicate {
+                scope_id,
+                version,
+                predicate_id,
+            } => {
+                write!(
+                    f,
+                    "meta registry duplicate scope_pack predicate for {}@{}: {}",
+                    scope_id, version, predicate_id
+                )
             }
         }
     }
@@ -593,6 +633,8 @@ pub struct MetaRegistryV1 {
     pub schemas: Vec<MetaRegistrySchema>,
     #[serde(default)]
     pub scopes: Vec<MetaRegistryScope>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope_packs: Vec<MetaRegistryScopePack>,
 }
 
 pub type MetaRegistryV0 = MetaRegistryV1;
@@ -685,6 +727,16 @@ pub struct MetaRegistryScope {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MetaRegistryScopePack {
+    pub scope_id: String,
+    pub version: u32,
+    pub provider_pack_hash: String,
+    pub deterministic: bool,
+    #[serde(default)]
+    pub predicate_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

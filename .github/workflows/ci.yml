@@ -9,15 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace
       - run: cargo test --workspace
-      - run: cargo run -p admit_cli -- lint rust .
+      - run: target/debug/admit_cli lint rust .
       - name: Admissibility witness
         uses: ./
         with:
           mode: ${{ github.event_name == 'pull_request' && 'enforce' || 'observe' }}
           require-github: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          plan-rollout: enforce
+          scope-pack-gate: error
           comment: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
       - name: Upload witness artifacts
         if: always()

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 
+use admit_cli::registry_init;
 use admit_core::provider_types::{FactsBundle, SnapshotRequest};
 use admit_core::{Fact, Provider, ScopeId};
 use admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID;
@@ -116,6 +117,29 @@ fn combined_git_deps_guardrails_ruleset() -> serde_json::Value {
         ],
         "fail_on": "error"
     })
+}
+
+fn write_registry_with_scope_pack_override(
+    path: &std::path::Path,
+    scope_id: &str,
+    version: u32,
+    hash: &str,
+) {
+    registry_init(path).expect("registry init");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("read registry")).expect("decode");
+    value["scope_packs"] = serde_json::json!([{
+        "scope_id": scope_id,
+        "version": version,
+        "provider_pack_hash": hash,
+        "deterministic": true,
+        "predicate_ids": []
+    }]);
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&value).expect("encode registry"),
+    )
+    .expect("write registry");
 }
 
 #[test]
@@ -1015,5 +1039,164 @@ serde = "1.0"
             Fact::LintFinding { rule_id, .. } if rule_id == "deps/manifest_file"
         )),
         "expected deps/manifest_file fact"
+    );
+}
+
+#[test]
+fn check_ruleset_scope_pack_gate_warn_records_warning_fact() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("repo");
+    std::fs::create_dir_all(&root).expect("create repo dir");
+    std::fs::write(root.join("large.txt"), "line1\nline2\n").expect("write fixture");
+
+    let provider = TextMetricsProvider::new();
+    let snapshot = provider
+        .snapshot(&SnapshotRequest {
+            scope_id: ScopeId(TEXT_METRICS_SCOPE_ID.to_string()),
+            params: serde_json::json!({ "root": root.to_string_lossy() }),
+        })
+        .expect("snapshot");
+    let facts_path = temp.path().join("text.facts.json");
+    std::fs::write(
+        &facts_path,
+        serde_json::to_vec(&snapshot.facts_bundle).expect("encode facts"),
+    )
+    .expect("write facts");
+
+    let ruleset_path = temp.path().join("ruleset-text.json");
+    let ruleset = serde_json::json!({
+        "schema_id": "ruleset/admit@1",
+        "ruleset_id": "text-default",
+        "enabled_rules": ["R-300"],
+        "bindings": [{
+            "rule_id": "R-300",
+            "severity": "warning",
+            "when": {
+                "scope_id": "text.metrics",
+                "predicate": "lines_exceed",
+                "params": { "max_lines": 100 }
+            }
+        }],
+        "fail_on": "error"
+    });
+    std::fs::write(
+        &ruleset_path,
+        serde_json::to_vec(&ruleset).expect("encode ruleset"),
+    )
+    .expect("write ruleset");
+
+    let registry_path = temp.path().join("meta-registry.json");
+    write_registry_with_scope_pack_override(&registry_path, "text.metrics", 1, &"0".repeat(64));
+
+    let artifacts_dir = temp.path().join("artifacts");
+    let bin = find_admit_cli_bin();
+    let output = Command::new(bin)
+        .args([
+            "check",
+            "--ruleset",
+            ruleset_path.to_str().expect("ruleset path"),
+            "--inputs",
+            facts_path.to_str().expect("facts path"),
+            "--artifacts-dir",
+            artifacts_dir.to_str().expect("artifacts path"),
+            "--meta-registry",
+            registry_path.to_str().expect("registry path"),
+            "--scope-pack-gate",
+            "warn",
+        ])
+        .output()
+        .expect("run admit_cli check");
+    assert!(output.status.success(), "expected warn mode to continue");
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let witness_sha = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("witness_sha256="))
+        .expect("witness_sha256 line");
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
+    let witness: admit_core::Witness =
+        serde_json::from_slice(&std::fs::read(witness_path).expect("read witness"))
+            .expect("decode witness");
+    assert!(witness.facts.iter().any(|fact| matches!(
+        fact,
+        Fact::LintFinding { rule_id, .. } if rule_id == "provider/scope_pack_mismatch"
+    )));
+}
+
+#[test]
+fn check_ruleset_scope_pack_gate_error_fails() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("repo");
+    std::fs::create_dir_all(&root).expect("create repo dir");
+    std::fs::write(root.join("large.txt"), "line1\nline2\n").expect("write fixture");
+
+    let provider = TextMetricsProvider::new();
+    let snapshot = provider
+        .snapshot(&SnapshotRequest {
+            scope_id: ScopeId(TEXT_METRICS_SCOPE_ID.to_string()),
+            params: serde_json::json!({ "root": root.to_string_lossy() }),
+        })
+        .expect("snapshot");
+    let facts_path = temp.path().join("text.facts.json");
+    std::fs::write(
+        &facts_path,
+        serde_json::to_vec(&snapshot.facts_bundle).expect("encode facts"),
+    )
+    .expect("write facts");
+
+    let ruleset_path = temp.path().join("ruleset-text.json");
+    let ruleset = serde_json::json!({
+        "schema_id": "ruleset/admit@1",
+        "ruleset_id": "text-default",
+        "enabled_rules": ["R-300"],
+        "bindings": [{
+            "rule_id": "R-300",
+            "severity": "warning",
+            "when": {
+                "scope_id": "text.metrics",
+                "predicate": "lines_exceed",
+                "params": { "max_lines": 100 }
+            }
+        }],
+        "fail_on": "error"
+    });
+    std::fs::write(
+        &ruleset_path,
+        serde_json::to_vec(&ruleset).expect("encode ruleset"),
+    )
+    .expect("write ruleset");
+
+    let registry_path = temp.path().join("meta-registry.json");
+    write_registry_with_scope_pack_override(&registry_path, "text.metrics", 1, &"0".repeat(64));
+
+    let artifacts_dir = temp.path().join("artifacts");
+    let bin = find_admit_cli_bin();
+    let output = Command::new(bin)
+        .args([
+            "check",
+            "--ruleset",
+            ruleset_path.to_str().expect("ruleset path"),
+            "--inputs",
+            facts_path.to_str().expect("facts path"),
+            "--artifacts-dir",
+            artifacts_dir.to_str().expect("artifacts path"),
+            "--meta-registry",
+            registry_path.to_str().expect("registry path"),
+            "--scope-pack-gate",
+            "error",
+        ])
+        .output()
+        .expect("run admit_cli check");
+    assert!(!output.status.success(), "expected error mode to fail");
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    assert!(
+        stderr.contains("scope-pack gate failed") || stdout.contains("scope-pack gate failed"),
+        "expected gate failure message\nstdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
     );
 }

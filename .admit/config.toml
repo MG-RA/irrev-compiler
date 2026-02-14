@@ -1,4 +1,4 @@
 [ci]
 default_ruleset = "rulesets/software-lens-v0.json"
-mode = "observe"
+mode = "enforce"
 require_github_scope = false

@@ -257,4 +257,140 @@ allow_scope_change main -> prod
             .iter()
             .any(|e| e.contains("allow_erase requires erasure_rule")));
     }
+
+    #[test]
+    fn parse_import_scope_pack_statement() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope main
+
+import scope_pack "git.working_tree@1"
+"#;
+        let program = parse_program(source, "import-scope-pack.adm").expect("parse program");
+        assert!(program.statements.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::ImportScopePack(import)
+                if import.scope_id == "git.working_tree" && import.version == 1
+        )));
+    }
+
+    #[test]
+    fn parse_import_scope_pack_statement_unquoted() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope main
+
+import scope_pack git.working_tree@1
+"#;
+        let program =
+            parse_program(source, "import-scope-pack-unquoted.adm").expect("parse program");
+        assert!(program.statements.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::ImportScopePack(import)
+                if import.scope_id == "git.working_tree" && import.version == 1
+        )));
+    }
+
+    #[test]
+    fn lower_error_scope_pack_import_requires_registry_context() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope main
+
+import scope_pack "git.working_tree@1"
+"#;
+        let program = parse_program(source, "import-scope-pack-no-registry.adm")
+            .expect("parse program");
+        let err = lower_to_ir(program).expect_err("expected missing registry context");
+        assert!(err
+            .iter()
+            .any(|e| e.contains("requires registry scope_packs context")));
+    }
+
+    #[test]
+    fn lower_resolves_scope_pack_import_with_registry() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope main
+
+import scope_pack "git.working_tree@1"
+"#;
+        let program = parse_program(source, "import-scope-pack-with-registry.adm")
+            .expect("parse program");
+        let ir = crate::lower_to_ir_with_scope_packs(
+            program,
+            &[crate::ScopePackRegistryEntry {
+                scope_id: "git.working_tree".to_string(),
+                version: 1,
+            }],
+        )
+        .expect("lower with registry");
+        assert_eq!(ir.module.0, "module:test@1");
+    }
+
+    #[test]
+    fn lower_error_unknown_scope_pack_import() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope main
+
+import scope_pack "github.ceremony@1"
+"#;
+        let program =
+            parse_program(source, "import-scope-pack-unknown.adm").expect("parse program");
+        let err = crate::lower_to_ir_with_scope_packs(
+            program,
+            &[crate::ScopePackRegistryEntry {
+                scope_id: "git.working_tree".to_string(),
+                version: 1,
+            }],
+        )
+        .expect_err("expected unknown scope pack import");
+        assert!(err.iter().any(|e| e.contains("unknown scope_pack import")));
+    }
+
+    #[test]
+    fn scope_packs_from_meta_registry_extracts_entries() {
+        let meta_registry = serde_json::json!({
+            "schema_id": "meta-registry/1",
+            "scope_packs": [
+                { "scope_id": "git.working_tree", "version": 1 },
+                { "scope_id": "scope:deps.manifest", "version": 1 }
+            ]
+        });
+        let entries =
+            crate::scope_packs_from_meta_registry(&meta_registry).expect("extract scope packs");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].scope_id, "git.working_tree");
+        assert_eq!(entries[0].version, 1);
+        assert_eq!(entries[1].scope_id, "deps.manifest");
+        assert_eq!(entries[1].version, 1);
+    }
+
+    #[test]
+    fn lower_resolves_scope_pack_import_with_meta_registry() {
+        let source = r#"
+module test@1
+depends [irrev_std@1]
+scope main
+
+import scope_pack "git.working_tree@1"
+"#;
+        let program = parse_program(source, "import-scope-pack-meta-registry.adm")
+            .expect("parse program");
+        let meta_registry = serde_json::json!({
+            "schema_id": "meta-registry/1",
+            "scope_packs": [
+                { "scope_id": "git.working_tree", "version": 1 }
+            ]
+        });
+        let ir = crate::lower_to_ir_with_meta_registry(program, &meta_registry)
+            .expect("lower with meta registry");
+        assert_eq!(ir.module.0, "module:test@1");
+    }
 }

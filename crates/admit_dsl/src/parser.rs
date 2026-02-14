@@ -214,6 +214,23 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             }))
         });
 
+    let scope_pack_ref = choice::<_, Simple<Token>>((string.clone(), ident.clone()))
+        .try_map(|raw: String, span| {
+            parse_scope_pack_ref(&raw)
+                .map_err(|msg| Simple::custom(span, msg))
+        });
+
+    let import_scope_pack_stmt = just(Token::KwImport)
+        .ignore_then(just(Token::KwScopePack))
+        .ignore_then(scope_pack_ref)
+        .map_with_span(|(scope_id, version), span| {
+            Stmt::ImportScopePack(ScopePackImportDecl {
+                scope_id,
+                version,
+                span: make_span(file, span, &line_index),
+            })
+        });
+
     let scope_mode = ident
         .clone()
         .then(ident.clone().or_not())
@@ -652,6 +669,7 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         depends_stmt.map(|s| vec![s]),
         scope_stmt.map(|s| vec![s]),
         lens_stmt.map(|s| vec![s]),
+        import_scope_pack_stmt.map(|s| vec![s]),
         scope_change_stmt,
         allow_scope_change_stmt.map(|s| vec![s]),
         scope_change_rule_stmt.map(|s| vec![s]),
@@ -718,6 +736,21 @@ fn parse_module_ref(raw: &str) -> Result<String, String> {
         return Err("module name cannot be empty".to_string());
     }
     Ok(format!("{}@{}", name, major))
+}
+
+fn parse_scope_pack_ref(raw: &str) -> Result<(String, u32), String> {
+    let trimmed = raw.trim();
+    let rest = trimmed.strip_prefix("scope:").unwrap_or(trimmed);
+    let (scope_id, major) = rest
+        .rsplit_once('@')
+        .ok_or_else(|| "expected <scope_id>@<major> for scope_pack import".to_string())?;
+    if scope_id.trim().is_empty() {
+        return Err("scope_pack import scope_id cannot be empty".to_string());
+    }
+    let major = major
+        .parse::<u32>()
+        .map_err(|_| "scope_pack import major must be an integer".to_string())?;
+    Ok((scope_id.to_string(), major))
 }
 
 fn resolve_prefixed(prefix: &str, raw: &str) -> Result<String, String> {

@@ -1,0 +1,4 @@
+{
+  "schema_ref": ".admit/schemas/proposal-manifest.v0.schema.json",
+  "notes": "Provider adapter only. Core contract lives in .admit/schemas."
+}

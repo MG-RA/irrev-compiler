@@ -60,24 +60,63 @@ impl Provider for GithubCeremonyProvider {
             required_approvals: vec![],
             predicates: vec![
                 PredicateDescriptor {
+                    predicate_id: "github.ceremony/required_checks_green@1".to_string(),
                     name: PRED_REQUIRED_CHECKS_GREEN.to_string(),
                     doc: "Triggers when any required check is not SUCCESS.".to_string(),
-                    param_schema: None,
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    param_schema: Some(serde_json::json!({ "type": "object" })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "github.ceremony/min_approvals_met@1".to_string(),
                     name: PRED_MIN_APPROVALS_MET.to_string(),
                     doc: "Triggers when approvals are below params.min (default 1).".to_string(),
-                    param_schema: None,
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "min": { "type": "integer", "minimum": 0 }
+                        }
+                    })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id:
+                        "github.ceremony/workflow_change_requires_extra_approval@1".to_string(),
                     name: PRED_WORKFLOW_CHANGE_REQUIRES_EXTRA_APPROVAL.to_string(),
                     doc: "Triggers when workflow files changed and approvals are below params.min_for_workflow (default 2).".to_string(),
-                    param_schema: None,
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "min_for_workflow": { "type": "integer", "minimum": 0 }
+                        }
+                    })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "github.ceremony/protected_branch_flow@1".to_string(),
                     name: PRED_PROTECTED_BRANCH_FLOW.to_string(),
                     doc: "Triggers when PR targets protected base branches but does not originate from an allowed head branch pattern.".to_string(),
-                    param_schema: None,
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "protected_bases": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            },
+                            "allowed_heads": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        }
+                    })),
+                    evidence_schema: None,
                 },
             ],
         }
@@ -158,9 +197,10 @@ impl Provider for GithubCeremonyProvider {
         &self,
         name: &str,
         params: &serde_json::Value,
+        ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         let scope_id = ScopeId(GITHUB_CEREMONY_SCOPE_ID.to_string());
-        let facts = decode_facts(params, &scope_id)?;
+        let facts = decode_facts(params, ctx, &scope_id)?;
         if has_scope_unavailable(&facts) {
             return Ok(PredicateResult {
                 triggered: false,
@@ -503,12 +543,16 @@ fn check_state(status: &str, conclusion: Option<&str>) -> &'static str {
 
 fn decode_facts(
     params: &serde_json::Value,
+    ctx: &PredicateEvalContext,
     scope_id: &ScopeId,
 ) -> Result<Vec<Fact>, ProviderError> {
+    if let Some(facts) = &ctx.facts {
+        return Ok(facts.clone());
+    }
     let value = params.get("facts").cloned().ok_or_else(|| ProviderError {
         scope: scope_id.clone(),
         phase: ProviderPhase::Snapshot,
-        message: "predicate requires params.facts".to_string(),
+        message: "predicate requires context.facts or params.facts".to_string(),
     })?;
     serde_json::from_value(value).map_err(|err| ProviderError {
         scope: scope_id.clone(),
@@ -1013,6 +1057,7 @@ mod tests {
                     "facts": facts,
                     "required": ["CI", "lint"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1036,6 +1081,7 @@ mod tests {
                     "facts": facts,
                     "min": 2
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1062,6 +1108,7 @@ mod tests {
                     "facts": facts,
                     "min_for_workflow": 2
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1082,6 +1129,7 @@ mod tests {
             .eval_predicate(
                 PRED_MIN_APPROVALS_MET,
                 &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);
@@ -1108,6 +1156,7 @@ mod tests {
                     "protected_bases": ["main", "master"],
                     "allowed_heads": ["dev", "dev/*"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1137,9 +1186,31 @@ mod tests {
                     "protected_bases": ["main", "master"],
                     "allowed_heads": ["dev", "dev/*"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);
+    }
+
+    #[test]
+    fn min_approvals_met_uses_context_facts() {
+        let provider = GithubCeremonyProvider::new();
+        let facts = vec![make_fact(
+            RULE_REVIEW_SUMMARY,
+            serde_json::json!({"approvals": 1}),
+        )];
+        let out = provider
+            .eval_predicate(
+                PRED_MIN_APPROVALS_MET,
+                &serde_json::json!({ "min": 2 }),
+                &PredicateEvalContext {
+                    facts: Some(facts),
+                    snapshot_hash: None,
+                    facts_schema_id: None,
+                },
+            )
+            .expect("predicate");
+        assert!(out.triggered);
     }
 
     #[test]

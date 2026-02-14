@@ -4,11 +4,11 @@ use std::path::Path;
 
 use admit_cli::{
     append_rust_ir_lint_event, default_artifacts_dir, default_ledger_path,
-    resolve_scope_enablement, run_rust_ir_lint, scope_operation_human_hint, RustIrLintInput,
-    ScopeOperation,
+    resolve_scope_enablement, run_rust_ir_lint, run_vault_schema_lint, scope_operation_human_hint,
+    RustIrLintInput, ScopeOperation, VaultSchemaLintInput,
 };
 
-use crate::LintRustArgs;
+use crate::{LintRustArgs, LintVaultArgs};
 
 pub fn run_lint_rust(args: LintRustArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     let scope_enablement = resolve_scope_enablement(&args.path)?;
@@ -96,6 +96,69 @@ pub fn run_lint_rust(args: LintRustArgs, _dag_trace_out: Option<&Path>) -> Resul
         Err(format!(
             "rust ir lint found {} violation(s)",
             output.event.violations
+        ))
+    }
+}
+
+pub fn run_lint_vault(args: LintVaultArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    let scope_enablement = resolve_scope_enablement(&args.path)?;
+    if !scope_enablement.allows(ScopeOperation::VaultSchemaValidation) {
+        let source = scope_enablement
+            .source
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "default scopes".to_string());
+        return Err(format!(
+            "scope {} is disabled by {} (enable it under [scopes].enabled)",
+            scope_operation_human_hint(ScopeOperation::VaultSchemaValidation),
+            source
+        ));
+    }
+
+    let output = run_vault_schema_lint(VaultSchemaLintInput {
+        vault_root: args.path,
+        json: args.json,
+        higher_order: args.higher_order,
+    })
+    .map_err(|err| err.to_string())?;
+
+    if args.json {
+        let json = serde_json::to_string(&serde_json::json!({
+            "scope_id": "vault.schema",
+            "files_scanned": output.files_scanned,
+            "errors": output.errors,
+            "warnings": output.warnings,
+            "passed": output.passed,
+            "findings": output.findings,
+        }))
+        .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", json);
+    } else {
+        println!("scope_id=vault.schema");
+        println!("files_scanned={}", output.files_scanned);
+        println!("errors={}", output.errors);
+        println!("warnings={}", output.warnings);
+        println!("passed={}", output.passed);
+        for finding in output.findings.iter().take(200) {
+            println!(
+                "finding rule_id={} severity={} path={} message={}",
+                finding.rule_id, finding.severity, finding.path, finding.message
+            );
+        }
+        if output.findings.len() > 200 {
+            println!(
+                "findings_truncated=true shown=200 total={}",
+                output.findings.len()
+            );
+        }
+    }
+
+    if output.passed {
+        Ok(())
+    } else {
+        Err(format!(
+            "vault schema lint found {} error(s), {} warning(s)",
+            output.errors, output.warnings
         ))
     }
 }

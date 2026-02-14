@@ -152,10 +152,8 @@ pub fn run_status(args: StatusArgs) -> Result<(), String> {
         .rev()
         .find(|row| row.event_type == "admissibility.executed")
         .cloned();
-    let (evidence_state, evidence_reason) = evidence_state_reason(
-        latest_check.as_ref(),
-        latest_execute.as_ref(),
-    );
+    let (evidence_state, evidence_reason) =
+        evidence_state_reason(latest_check.as_ref(), latest_execute.as_ref());
     let scope_enablement = match resolve_scope_enablement(Path::new(".")) {
         Ok(value) => Some(value),
         Err(err) => {
@@ -248,9 +246,7 @@ pub fn run_status(args: StatusArgs) -> Result<(), String> {
             "- latest_execute={} event_id={} checked_event_id={} verdict={}",
             row.timestamp,
             row.event_id,
-            row.admissibility_checked_event_id
-                .as_deref()
-                .unwrap_or("-"),
+            row.admissibility_checked_event_id.as_deref().unwrap_or("-"),
             row.verdict.as_deref().unwrap_or("-")
         );
     } else {
@@ -295,7 +291,10 @@ pub fn run_status(args: StatusArgs) -> Result<(), String> {
 pub fn run_show(args: ShowArgs) -> Result<(), String> {
     let mode_count = usize::from(args.json) + usize::from(args.cbor) + usize::from(args.quiet);
     if mode_count > 1 {
-        return Err("show output flags are mutually exclusive: use only one of --json/--cbor/--quiet".to_string());
+        return Err(
+            "show output flags are mutually exclusive: use only one of --json/--cbor/--quiet"
+                .to_string(),
+        );
     }
 
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
@@ -311,7 +310,9 @@ pub fn run_show(args: ShowArgs) -> Result<(), String> {
         stdout
             .write_all(&resolved.canonical_cbor)
             .map_err(|err| format!("write stdout: {}", err))?;
-        stdout.flush().map_err(|err| format!("flush stdout: {}", err))?;
+        stdout
+            .flush()
+            .map_err(|err| format!("flush stdout: {}", err))?;
         return Ok(());
     }
 
@@ -351,8 +352,8 @@ pub fn run_explain(args: ExplainArgs) -> Result<(), String> {
             resolved.schema_kind.as_str()
         ));
     }
-    let witness: Witness =
-        serde_json::from_value(resolved.payload.clone()).map_err(|err| format!("decode witness: {}", err))?;
+    let witness: Witness = serde_json::from_value(resolved.payload.clone())
+        .map_err(|err| format!("decode witness: {}", err))?;
     let explain = build_explain_data(&witness, args.rule.as_deref())?;
 
     if args.json {
@@ -386,7 +387,9 @@ pub fn run_explain(args: ExplainArgs) -> Result<(), String> {
 
 pub fn run_log(args: LogArgs) -> Result<(), String> {
     if args.json && args.ndjson {
-        return Err("log output flags are mutually exclusive: choose --json or --ndjson".to_string());
+        return Err(
+            "log output flags are mutually exclusive: choose --json or --ndjson".to_string(),
+        );
     }
 
     match args.source {
@@ -576,8 +579,8 @@ fn parse_ledger_rows(ledger_path: &Path, artifacts_dir: &Path) -> Result<Vec<Led
         if line.trim().is_empty() {
             continue;
         }
-        let value: serde_json::Value =
-            serde_json::from_str(line).map_err(|err| format!("decode ledger line {}: {}", idx + 1, err))?;
+        let value: serde_json::Value = serde_json::from_str(line)
+            .map_err(|err| format!("decode ledger line {}: {}", idx + 1, err))?;
         let timestamp = value
             .get("created_at")
             .and_then(|v| v.as_str())
@@ -600,8 +603,12 @@ fn parse_ledger_rows(ledger_path: &Path, artifacts_dir: &Path) -> Result<Vec<Led
             .and_then(|v| v.as_str())
             .or_else(|| value.get("witness_sha256").and_then(|v| v.as_str()))
             .map(|s| s.to_string());
-        let witness_summary =
-            load_witness_summary(&value, artifacts_dir, witness_sha.as_deref(), &mut witness_cache);
+        let witness_summary = load_witness_summary(
+            &value,
+            artifacts_dir,
+            witness_sha.as_deref(),
+            &mut witness_cache,
+        );
         let snapshot_hash = value
             .get("snapshot_hash")
             .and_then(|v| v.as_str())
@@ -695,7 +702,10 @@ fn evidence_state_reason(
             if executed.admissibility_checked_event_id.as_deref() == Some(check.event_id.as_str()) {
                 ("fresh", "latest_checked_event_is_executed")
             } else {
-                ("pending_apply", "latest_execute_references_older_checked_event")
+                (
+                    "pending_apply",
+                    "latest_execute_references_older_checked_event",
+                )
             }
         }
     }
@@ -703,8 +713,13 @@ fn evidence_state_reason(
 
 fn detect_repo_context() -> GitRepoContext {
     let root = run_git_capture(["rev-parse", "--show-toplevel"]);
-    let branch = run_git_capture(["rev-parse", "--abbrev-ref", "HEAD"])
-        .map(|value| if value == "HEAD" { "detached".to_string() } else { value });
+    let branch = run_git_capture(["rev-parse", "--abbrev-ref", "HEAD"]).map(|value| {
+        if value == "HEAD" {
+            "detached".to_string()
+        } else {
+            value
+        }
+    });
     let head = run_git_capture(["rev-parse", "HEAD"]);
     GitRepoContext { root, branch, head }
 }
@@ -801,7 +816,8 @@ fn resolve_target(
         return Err(format!("target not found: {}", target));
     }
 
-    let bytes = std::fs::read(&path).map_err(|err| format!("read '{}': {}", path.display(), err))?;
+    let bytes =
+        std::fs::read(&path).map_err(|err| format!("read '{}': {}", path.display(), err))?;
     let decoded = decode_payload_bytes(&bytes)?;
     let schema_kind = detect_schema_kind(decoded.schema_id.as_deref(), &decoded.payload);
     if let Some(kind) = requested_kind {
@@ -872,8 +888,8 @@ fn resolve_by_hash(
             if !path.exists() {
                 continue;
             }
-            let bytes =
-                std::fs::read(&path).map_err(|err| format!("read '{}': {}", path.display(), err))?;
+            let bytes = std::fs::read(&path)
+                .map_err(|err| format!("read '{}': {}", path.display(), err))?;
             let decoded = decode_payload_bytes(&bytes)?;
             if decoded.canonical_sha256 != hash {
                 return Err(format!(
@@ -893,9 +909,7 @@ fn resolve_by_hash(
         } else if decoded_paths.len() == 2 {
             let first = &decoded_paths[0];
             let second = &decoded_paths[1];
-            if first.1.canonical_sha256 == second.1.canonical_sha256
-                && first.2 == second.2
-            {
+            if first.1.canonical_sha256 == second.1.canonical_sha256 && first.2 == second.2 {
                 if first.0.extension().and_then(|e| e.to_str()) == Some("cbor") {
                     decoded_paths.remove(0)
                 } else {
@@ -951,7 +965,11 @@ fn resolve_by_hash(
             .as_deref()
             .unwrap_or("")
             .cmp(b.store_kind.as_deref().unwrap_or(""))
-            .then(a.source_path.to_string_lossy().cmp(&b.source_path.to_string_lossy()))
+            .then(
+                a.source_path
+                    .to_string_lossy()
+                    .cmp(&b.source_path.to_string_lossy()),
+            )
     });
 
     if candidates.len() > 1 {
@@ -990,11 +1008,12 @@ fn decode_payload_bytes(bytes: &[u8]) -> Result<DecodedPayload, String> {
         .or_else(|_| serde_cbor::from_slice::<serde_json::Value>(bytes))
         .map_err(|err| format!("decode artifact bytes as json/cbor: {}", err))?;
 
-    let (payload, schema_id) = if let Some(wrapper_payload) = extract_witness_wrapper_payload(&value) {
-        wrapper_payload
-    } else {
-        (value.clone(), schema_id_from_value(&value))
-    };
+    let (payload, schema_id) =
+        if let Some(wrapper_payload) = extract_witness_wrapper_payload(&value) {
+            wrapper_payload
+        } else {
+            (value.clone(), schema_id_from_value(&value))
+        };
 
     let schema_id = schema_id.or_else(|| {
         if looks_like_witness(&payload) {
@@ -1014,7 +1033,9 @@ fn decode_payload_bytes(bytes: &[u8]) -> Result<DecodedPayload, String> {
     })
 }
 
-fn extract_witness_wrapper_payload(value: &serde_json::Value) -> Option<(serde_json::Value, Option<String>)> {
+fn extract_witness_wrapper_payload(
+    value: &serde_json::Value,
+) -> Option<(serde_json::Value, Option<String>)> {
     let obj = value.as_object()?;
     let witness = obj.get("witness")?;
     if !witness.is_object() {
@@ -1088,9 +1109,13 @@ fn detect_artifact_entry_schema_kind(
     entry: &admit_cli::ArtifactEntry,
 ) -> Result<SchemaKind, String> {
     let path = artifacts_dir.join(&entry.path);
-    let bytes = std::fs::read(&path).map_err(|err| format!("read '{}': {}", path.display(), err))?;
+    let bytes =
+        std::fs::read(&path).map_err(|err| format!("read '{}': {}", path.display(), err))?;
     let decoded = decode_payload_bytes(&bytes)?;
-    Ok(detect_schema_kind(decoded.schema_id.as_deref(), &decoded.payload))
+    Ok(detect_schema_kind(
+        decoded.schema_id.as_deref(),
+        &decoded.payload,
+    ))
 }
 
 fn build_show_sections(resolved: &ResolvedArtifact) -> ShowSections {
@@ -1134,7 +1159,12 @@ fn show_header_json(resolved: &ResolvedArtifact) -> serde_json::Value {
         .payload
         .get("created_at")
         .and_then(|v| v.as_str())
-        .or_else(|| resolved.payload.get("generated_at").and_then(|v| v.as_str()));
+        .or_else(|| {
+            resolved
+                .payload
+                .get("generated_at")
+                .and_then(|v| v.as_str())
+        });
     let scope_id = resolved
         .payload
         .get("scope_id")
@@ -1194,7 +1224,12 @@ fn render_show_pretty(resolved: &ResolvedArtifact, sections: &ShowSections) {
         .payload
         .get("engine_version")
         .and_then(|v| v.as_str())
-        .or_else(|| resolved.payload.get("court_version").and_then(|v| v.as_str()))
+        .or_else(|| {
+            resolved
+                .payload
+                .get("court_version")
+                .and_then(|v| v.as_str())
+        })
     {
         println!("- engine={}", engine);
     }
@@ -1202,7 +1237,12 @@ fn render_show_pretty(resolved: &ResolvedArtifact, sections: &ShowSections) {
         .payload
         .get("created_at")
         .and_then(|v| v.as_str())
-        .or_else(|| resolved.payload.get("generated_at").and_then(|v| v.as_str()))
+        .or_else(|| {
+            resolved
+                .payload
+                .get("generated_at")
+                .and_then(|v| v.as_str())
+        })
     {
         println!("- created_at={}", created_at);
     }
@@ -1239,7 +1279,10 @@ fn render_show_pretty(resolved: &ResolvedArtifact, sections: &ShowSections) {
             println!("- {}", render_row_inline(row));
         }
         if sections.findings.len() > 50 {
-            println!("- ... truncated {} additional findings", sections.findings.len() - 50);
+            println!(
+                "- ... truncated {} additional findings",
+                sections.findings.len() - 50
+            );
         }
     }
     if !sections.trace.is_empty() {
@@ -1248,7 +1291,10 @@ fn render_show_pretty(resolved: &ResolvedArtifact, sections: &ShowSections) {
             println!("- {}", render_row_inline(row));
         }
         if sections.trace.len() > 50 {
-            println!("- ... truncated {} additional rows", sections.trace.len() - 50);
+            println!(
+                "- ... truncated {} additional rows",
+                sections.trace.len() - 50
+            );
         }
     }
 }
@@ -1343,7 +1389,9 @@ fn facts_sections(value: &serde_json::Value) -> ShowSections {
         };
     }
     ShowSections {
-        inputs: vec![serde_json::json!({"field": "schema_id", "value": schema_id_from_value(value)})],
+        inputs: vec![
+            serde_json::json!({"field": "schema_id", "value": schema_id_from_value(value)}),
+        ],
         rules: Vec::new(),
         findings: Vec::new(),
         trace: Vec::new(),
@@ -1359,7 +1407,11 @@ fn build_explain_data(witness: &Witness, rule_filter: Option<&str>) -> Result<Ex
 
     let selected_predicates: BTreeSet<String> = rules
         .iter()
-        .filter_map(|row| row.get("predicate").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .filter_map(|row| {
+            row.get("predicate")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .collect();
 
     let mut predicate_trace = collect_predicate_trace(&witness.facts);
@@ -1367,7 +1419,11 @@ fn build_explain_data(witness: &Witness, rule_filter: Option<&str>) -> Result<Ex
         predicate_trace.retain(|row| {
             row.get("predicate")
                 .and_then(|v| v.as_str())
-                .map(|name| selected_predicates.iter().any(|needle| name.contains(needle)))
+                .map(|name| {
+                    selected_predicates
+                        .iter()
+                        .any(|needle| name.contains(needle))
+                })
                 .unwrap_or(false)
         });
     }
@@ -1402,7 +1458,11 @@ fn render_explain_pretty(data: &ExplainData, rule_filter: Option<&str>, files: b
         println!(
             "- rule={} status={}",
             rule,
-            if data.findings.is_empty() { "pass" } else { "fail" }
+            if data.findings.is_empty() {
+                "pass"
+            } else {
+                "fail"
+            }
         );
     }
     println!("- verdict={}", data.verdict);
@@ -1434,7 +1494,10 @@ fn render_explain_pretty(data: &ExplainData, rule_filter: Option<&str>, files: b
             println!("- {}", render_row_inline(row));
         }
         if data.findings.len() > 100 {
-            println!("- ... truncated {} additional findings", data.findings.len() - 100);
+            println!(
+                "- ... truncated {} additional findings",
+                data.findings.len() - 100
+            );
         }
     }
 
@@ -1654,7 +1717,10 @@ mod tests {
         });
         let bytes = serde_json::to_vec(&value).expect("encode");
         let decoded = decode_payload_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.schema_id.as_deref(), Some("admissibility-witness/1"));
+        assert_eq!(
+            decoded.schema_id.as_deref(),
+            Some("admissibility-witness/1")
+        );
         assert!(looks_like_witness(&decoded.payload));
     }
 
@@ -1707,8 +1773,7 @@ mod tests {
 
     #[test]
     fn parse_since_cutoff_accepts_rfc3339() {
-        let cutoff =
-            parse_since_cutoff("2026-02-01T00:00:00Z").expect("parse cutoff");
+        let cutoff = parse_since_cutoff("2026-02-01T00:00:00Z").expect("parse cutoff");
         assert_eq!(cutoff.to_rfc3339(), "2026-02-01T00:00:00+00:00");
     }
 

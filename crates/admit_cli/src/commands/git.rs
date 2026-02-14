@@ -7,8 +7,8 @@ use sha2::Digest;
 use admit_cli::{default_artifacts_dir, store_value_artifact};
 
 use crate::{
-    GitArgs, GitCommands, GitDiffArgs, GitInstallPlanHookArgs, GitProvenanceArgs,
-    GitSnapshotArgs, GitVerifyCommitPlanArgs,
+    GitArgs, GitCommands, GitDiffArgs, GitInstallPlanHookArgs, GitProvenanceArgs, GitSnapshotArgs,
+    GitVerifyCommitPlanArgs,
 };
 
 pub fn run_git(args: GitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {

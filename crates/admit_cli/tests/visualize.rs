@@ -75,7 +75,11 @@ fn show_path_witness_pretty_prints_header() {
         stdout,
         stderr
     );
-    assert!(stdout.contains("Witness  admissibility-witness/1"), "{}", stdout);
+    assert!(
+        stdout.contains("Witness  admissibility-witness/1"),
+        "{}",
+        stdout
+    );
     assert!(
         stdout.contains(&format!("hash: sha256:{}", WITNESS_SHA)),
         "{}",
@@ -94,7 +98,11 @@ fn show_path_cbor_is_supported() {
         stdout,
         stderr
     );
-    assert!(stdout.contains("Witness  admissibility-witness/1"), "{}", stdout);
+    assert!(
+        stdout.contains("Witness  admissibility-witness/1"),
+        "{}",
+        stdout
+    );
 }
 
 #[test]
@@ -139,7 +147,10 @@ fn status_json_v2_emits_repo_ledger_and_governance_sections() {
         stderr
     );
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("decode json");
-    assert_eq!(value.get("command").and_then(|v| v.as_str()), Some("status"));
+    assert_eq!(
+        value.get("command").and_then(|v| v.as_str()),
+        Some("status")
+    );
     assert!(value.get("repo").is_some());
     assert!(value.get("ledger").is_some());
     assert!(value.get("governance").is_some());
@@ -195,14 +206,20 @@ fn explain_json_emits_verdict_rules_and_findings() {
         stderr
     );
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("decode json");
-    assert_eq!(value.get("command").and_then(|v| v.as_str()), Some("explain"));
+    assert_eq!(
+        value.get("command").and_then(|v| v.as_str()),
+        Some("explain")
+    );
     assert_eq!(
         value.get("verdict").and_then(|v| v.as_str()),
         Some("inadmissible")
     );
     assert!(value.get("rules").and_then(|v| v.as_array()).is_some());
     assert!(value.get("findings").and_then(|v| v.as_array()).is_some());
-    assert!(value.get("grouped_by_file").and_then(|v| v.as_array()).is_some());
+    assert!(value
+        .get("grouped_by_file")
+        .and_then(|v| v.as_array())
+        .is_some());
 }
 
 #[test]
@@ -225,7 +242,10 @@ fn log_artifacts_json_replaces_list_artifacts() {
     );
     let value: serde_json::Value = serde_json::from_str(stdout.trim()).expect("decode json");
     assert_eq!(value.get("command").and_then(|v| v.as_str()), Some("log"));
-    assert_eq!(value.get("source").and_then(|v| v.as_str()), Some("artifacts"));
+    assert_eq!(
+        value.get("source").and_then(|v| v.as_str()),
+        Some("artifacts")
+    );
     let rows = value
         .get("rows")
         .and_then(|v| v.as_array())

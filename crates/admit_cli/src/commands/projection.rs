@@ -3,13 +3,12 @@
 use admit_cli::{
     append_projection_event, build_projection_event, default_artifacts_dir, default_ledger_path,
 };
-use admit_surrealdb::projection_store::ProjectionStoreOps;
 use admit_surrealdb::projection_run::{PhaseResult, PhaseStatus, RunStatus};
+use admit_surrealdb::projection_store::ProjectionStoreOps;
 use admit_surrealdb::ProjectionEventRow;
 
 use crate::{
-    obsidian_adapter, ProjectionCoordinator, ProjectionVacuumArgs, ProjectionRetryArgs,
-    sha256_hex,
+    obsidian_adapter, sha256_hex, ProjectionCoordinator, ProjectionRetryArgs, ProjectionVacuumArgs,
 };
 
 pub fn run_projection_vacuum(
@@ -470,13 +469,13 @@ pub fn run_projection_retry(
                     .map(|s| s.as_str())
                     .collect();
                 obsidian_adapter::project_obsidian_vault_links(
-                        store,
-                        &dag,
-                        &artifacts_dir,
-                        &vault_prefix_refs,
-                        None,
-                        Some(&args.run),
-                    )?
+                    store,
+                    &dag,
+                    &artifacts_dir,
+                    &vault_prefix_refs,
+                    None,
+                    Some(&args.run),
+                )?
             }
             _ => {
                 eprintln!("projection retry: unsupported phase '{}'", phase);

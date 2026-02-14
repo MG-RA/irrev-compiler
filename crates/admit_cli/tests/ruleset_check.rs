@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 
-use admit_core::{Fact, Provider, ScopeId};
 use admit_core::provider_types::{FactsBundle, SnapshotRequest};
-use admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID;
-use admit_scope_git::provider_impl::GitWorkingTreeProvider;
+use admit_core::{Fact, Provider, ScopeId};
 use admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID;
 use admit_scope_deps::provider_impl::DepsManifestProvider;
+use admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID;
+use admit_scope_git::provider_impl::GitWorkingTreeProvider;
 use admit_scope_rust::backend::RUST_SCOPE_ID;
 use admit_scope_rust::provider_impl::RustStructureProvider;
 use admit_scope_text::backend::TEXT_METRICS_SCOPE_ID;
@@ -54,7 +54,12 @@ fn run_git(root: &std::path::Path, args: &[&str]) {
         .args(args)
         .status()
         .expect("run git");
-    assert!(status.success(), "git command failed: git -C {:?} {:?}", root, args);
+    assert!(
+        status.success(),
+        "git command failed: git -C {:?} {:?}",
+        root,
+        args
+    );
 }
 
 fn combined_git_deps_guardrails_ruleset() -> serde_json::Value {
@@ -190,13 +195,19 @@ pub fn do_unsafe() {
         stderr
     );
     assert!(stdout.contains("mode=ruleset"), "stdout:\n{}", stdout);
-    assert!(stdout.contains("verdict=inadmissible"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("verdict=inadmissible"),
+        "stdout:\n{}",
+        stdout
+    );
 
     let witness_sha = stdout
         .lines()
         .find_map(|line| line.strip_prefix("witness_sha256="))
         .expect("witness_sha256 line");
-    let witness_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     assert!(witness_path.exists(), "missing witness artifact");
 
     let witness_bytes = std::fs::read(&witness_path).expect("read witness json");
@@ -326,7 +337,11 @@ fn check_ruleset_git_scope_detects_dirty_tree_from_inputs() {
         stdout,
         stderr
     );
-    assert!(stdout.contains("verdict=inadmissible"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("verdict=inadmissible"),
+        "stdout:\n{}",
+        stdout
+    );
     assert!(
         stdout.contains("rule_result id=R-200"),
         "missing R-200 rule output\n{}",
@@ -337,7 +352,9 @@ fn check_ruleset_git_scope_detects_dirty_tree_from_inputs() {
         .lines()
         .find_map(|line| line.strip_prefix("witness_sha256="))
         .expect("witness_sha256 line");
-    let witness_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     let witness_bytes = std::fs::read(&witness_path).expect("read witness");
     let witness: admit_core::Witness = serde_json::from_slice(&witness_bytes).expect("witness");
     assert!(
@@ -421,7 +438,11 @@ fn check_ruleset_text_metrics_detects_line_limit_violation() {
         stdout,
         stderr
     );
-    assert!(stdout.contains("verdict=inadmissible"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("verdict=inadmissible"),
+        "stdout:\n{}",
+        stdout
+    );
     assert!(
         stdout.contains("rule_result id=R-300"),
         "missing R-300 rule output\n{}",
@@ -432,7 +453,9 @@ fn check_ruleset_text_metrics_detects_line_limit_violation() {
         .lines()
         .find_map(|line| line.strip_prefix("witness_sha256="))
         .expect("witness_sha256 line");
-    let witness_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     let witness_bytes = std::fs::read(&witness_path).expect("read witness");
     let witness: admit_core::Witness = serde_json::from_slice(&witness_bytes).expect("witness");
     assert!(
@@ -525,7 +548,11 @@ git_dep = { git = "https://example.com/repo.git" }
         stdout,
         stderr
     );
-    assert!(stdout.contains("verdict=inadmissible"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("verdict=inadmissible"),
+        "stdout:\n{}",
+        stdout
+    );
     assert!(
         stdout.contains("rule_result id=R-400"),
         "missing R-400 rule output\n{}",
@@ -536,7 +563,9 @@ git_dep = { git = "https://example.com/repo.git" }
         .lines()
         .find_map(|line| line.strip_prefix("witness_sha256="))
         .expect("witness_sha256 line");
-    let witness_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     let witness_bytes = std::fs::read(&witness_path).expect("read witness");
     let witness: admit_core::Witness = serde_json::from_slice(&witness_bytes).expect("witness");
     assert!(
@@ -655,13 +684,19 @@ git_dep = { git = "https://example.com/repo.git" }
         stdout,
         stderr
     );
-    assert!(stdout.contains("verdict=inadmissible"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("verdict=inadmissible"),
+        "stdout:\n{}",
+        stdout
+    );
 
     let witness_sha = stdout
         .lines()
         .find_map(|line| line.strip_prefix("witness_sha256="))
         .expect("witness_sha256 line");
-    let witness_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     let witness_bytes = std::fs::read(&witness_path).expect("read witness");
     let witness: admit_core::Witness = serde_json::from_slice(&witness_bytes).expect("witness");
 
@@ -816,7 +851,9 @@ version = "1.0.0"
         .lines()
         .find_map(|line| line.strip_prefix("witness_sha256="))
         .expect("witness_sha256 line");
-    let witness_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let witness_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     let witness_bytes = std::fs::read(&witness_path).expect("read witness");
     let witness: admit_core::Witness = serde_json::from_slice(&witness_bytes).expect("witness");
 
@@ -899,7 +936,11 @@ fn observe_scope_git_working_tree_writes_facts_bundle() {
         stderr
     );
     assert!(stdout.contains("mode=scope"), "stdout:\n{}", stdout);
-    assert!(stdout.contains("scope_id=git.working_tree"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("scope_id=git.working_tree"),
+        "stdout:\n{}",
+        stdout
+    );
     assert!(out_path.exists(), "missing observe output bundle");
 
     let bundle_bytes = std::fs::read(&out_path).expect("read observe bundle");
@@ -907,10 +948,9 @@ fn observe_scope_git_working_tree_writes_facts_bundle() {
     assert_eq!(bundle.scope_id.0, "git.working_tree");
     assert_eq!(bundle.schema_id, "facts-bundle/git.working_tree@1");
     assert!(
-        bundle
-            .facts
-            .iter()
-            .any(|fact| matches!(fact, Fact::LintFinding { rule_id, .. } if rule_id == "git/branch")),
+        bundle.facts.iter().any(
+            |fact| matches!(fact, Fact::LintFinding { rule_id, .. } if rule_id == "git/branch")
+        ),
         "expected git/branch fact"
     );
 }
@@ -958,7 +998,11 @@ serde = "1.0"
         stderr
     );
     assert!(stdout.contains("mode=scope"), "stdout:\n{}", stdout);
-    assert!(stdout.contains("scope_id=deps.manifest"), "stdout:\n{}", stdout);
+    assert!(
+        stdout.contains("scope_id=deps.manifest"),
+        "stdout:\n{}",
+        stdout
+    );
     assert!(out_path.exists(), "missing observe output bundle");
 
     let bundle_bytes = std::fs::read(&out_path).expect("read observe bundle");

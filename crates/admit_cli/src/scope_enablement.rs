@@ -7,7 +7,7 @@ pub struct KnownScope {
     pub default_enabled: bool,
 }
 
-pub const KNOWN_SCOPES: [KnownScope; 6] = [
+pub const KNOWN_SCOPES: [KnownScope; 7] = [
     KnownScope {
         id: "rust.ir_lint",
         default_enabled: true,
@@ -29,6 +29,10 @@ pub const KNOWN_SCOPES: [KnownScope; 6] = [
         default_enabled: false,
     },
     KnownScope {
+        id: "vault.schema",
+        default_enabled: true,
+    },
+    KnownScope {
         id: "rust.structure",
         default_enabled: true,
     },
@@ -39,6 +43,7 @@ pub enum ScopeOperation {
     RustIrLint,
     ObsidianLinksProjection,
     IngestDir,
+    VaultSchemaValidation,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +77,7 @@ pub fn scope_operation_human_hint(operation: ScopeOperation) -> &'static str {
         ScopeOperation::RustIrLint => "rust.ir_lint",
         ScopeOperation::ObsidianLinksProjection => "obsidian.links or vault.ir_lint",
         ScopeOperation::IngestDir => "ingest.dir",
+        ScopeOperation::VaultSchemaValidation => "vault.schema",
     }
 }
 
@@ -110,6 +116,7 @@ pub fn operation_is_enabled(enabled_scopes: &[String], operation: ScopeOperation
                 || scope_is_enabled(enabled_scopes, "vault.ir_lint")
         }
         ScopeOperation::IngestDir => scope_is_enabled(enabled_scopes, "ingest.dir"),
+        ScopeOperation::VaultSchemaValidation => scope_is_enabled(enabled_scopes, "vault.schema"),
     }
 }
 

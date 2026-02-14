@@ -227,7 +227,10 @@ pub fn append_ingest_event(
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 
-pub fn append_engine_event(ledger_path: &Path, event: &EngineEvent) -> Result<(), DeclareCostError> {
+pub fn append_engine_event(
+    ledger_path: &Path,
+    event: &EngineEvent,
+) -> Result<(), DeclareCostError> {
     append_serialized_event(ledger_path, &event.event_id, event)
 }
 

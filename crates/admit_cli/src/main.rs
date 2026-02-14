@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Parser, Subcommand};
 use sha2::Digest;
 
@@ -10,22 +11,19 @@ use admit_dag::{DagEdge, DagNode, DagTraceCollector, NodeKind, ScopeTag, Tracer}
 use admit_embed::{OllamaEmbedConfig, OllamaEmbedder};
 use admit_surrealdb::{
     projection_config::ProjectionConfig, DocChunkEmbeddingRow, DocEmbeddingRow, EmbedRunRow,
-    IngestEventRow, IngestRunRow, ProjectionEventRow, ProjectionStoreOps,
-    SurrealCliConfig, SurrealCliProjectionStore,
+    IngestEventRow, IngestRunRow, ProjectionEventRow, ProjectionStoreOps, SurrealCliConfig,
+    SurrealCliProjectionStore,
 };
 
 use admit_cli::scope_obsidian as obsidian_adapter;
 use admit_cli::{
-    append_checked_event, append_event, append_executed_event,
-    append_ingest_event, append_plan_created_event, append_projection_event,
-    build_projection_event, check_cost_declared,
-    create_plan, declare_cost, default_artifacts_dir, default_ledger_path, execute_checked,
-    export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
-    parse_plan_answers_markdown, read_file_bytes,
-    registry_build, registry_init,
-    render_plan_prompt_template, render_plan_text, resolve_scope_enablement,
-    scope_add, scope_list, scope_show, scope_verify,
-    store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
+    append_checked_event, append_event, append_executed_event, append_ingest_event,
+    append_plan_created_event, append_projection_event, build_projection_event,
+    check_cost_declared, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
+    execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
+    parse_plan_answers_markdown, read_file_bytes, registry_build, registry_init,
+    render_plan_prompt_template, render_plan_text, resolve_scope_enablement, scope_add, scope_list,
+    scope_show, scope_verify, store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
     DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanNewInput,
     ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
     ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
@@ -35,6 +33,17 @@ use admit_core::provider_types::FactsBundle;
 use admit_core::{evaluate_ruleset_with_inputs, ProviderRegistry, RuleSet};
 
 mod commands;
+
+fn cli_styles() -> Styles {
+    Styles::styled()
+        .header(AnsiColor::Cyan.on_default() | Effects::BOLD)
+        .usage(AnsiColor::Green.on_default() | Effects::BOLD)
+        .literal(AnsiColor::Yellow.on_default() | Effects::BOLD)
+        .placeholder(AnsiColor::BrightBlack.on_default())
+        .valid(AnsiColor::Green.on_default() | Effects::BOLD)
+        .invalid(AnsiColor::Red.on_default() | Effects::BOLD)
+        .error(AnsiColor::Red.on_default() | Effects::BOLD)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum SurrealDbMode {
@@ -200,14 +209,37 @@ impl ProjectionCoordinator {
 
 #[derive(Parser)]
 #[command(
-    name = "admit-cli",
+    name = "admit",
+    bin_name = "admit",
     version,
-    about = "Admissibility compiler CLI utilities"
+    about = "Admissibility compiler CLI utilities",
+    long_about = "Governed admissibility checks, witness lifecycle, scope registry, and ledger operations.",
+    arg_required_else_help = true,
+    subcommand_required = true,
+    propagate_version = true,
+    disable_help_subcommand = true,
+    help_template = "\
+{before-help}{name} {version}
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}
+{after-help}",
+    after_help = "\
+Examples:
+  admit observe --scope git.working_tree --root . --out out/git.facts.json
+  admit check --ruleset testdata/rulesets/git-deps-guardrails.ruleset.json --inputs out/git.facts.json,out/deps.facts.json
+  admit witness verify --witness-json out/witness.json
+  admit ledger verify --json
+  admit status --json",
+    styles = cli_styles(),
+    next_line_help = true
 )]
 struct Cli {
     /// Emit a governed DAG trace (canonical CBOR). If PATH is omitted, writes to out/dag-trace.cbor
     #[arg(
         long,
+        help_heading = "Global Options",
         value_name = "PATH",
         num_args = 0..=1,
         default_missing_value = "out/dag-trace.cbor"
@@ -215,69 +247,79 @@ struct Cli {
     dag_trace: Option<PathBuf>,
 
     /// Project DAG traces to SurrealDB (uses `surreal sql` CLI) (deprecated: use --surrealdb-mode=on)
-    #[arg(long, conflicts_with = "surrealdb_mode")]
+    #[arg(
+        long,
+        help_heading = "Projection Options",
+        conflicts_with = "surrealdb_mode"
+    )]
     surrealdb_project: bool,
 
     /// SurrealDB projection mode: off|auto|on (default: off). In auto mode, projection activates only when namespace+database are configured and the endpoint is ready.
-    #[arg(long, value_enum, default_value_t = SurrealDbMode::Off)]
+    #[arg(long, help_heading = "Projection Options", value_enum, default_value_t = SurrealDbMode::Off)]
     surrealdb_mode: SurrealDbMode,
 
     /// SurrealDB endpoint (passed to `surreal sql --endpoint`)
-    #[arg(long, default_value = "ws://localhost:8000", value_name = "URL")]
+    #[arg(
+        long,
+        help_heading = "Projection Options",
+        default_value = "ws://localhost:8000",
+        value_name = "URL"
+    )]
     surrealdb_endpoint: String,
 
     /// SurrealDB namespace (passed to `surreal sql --namespace`)
-    #[arg(long, value_name = "NS")]
+    #[arg(long, help_heading = "Projection Options", value_name = "NS")]
     surrealdb_namespace: Option<String>,
 
     /// SurrealDB database (passed to `surreal sql --database`)
-    #[arg(long, value_name = "DB")]
+    #[arg(long, help_heading = "Projection Options", value_name = "DB")]
     surrealdb_database: Option<String>,
 
     /// SurrealDB username (passed to `surreal sql --username`)
-    #[arg(long)]
+    #[arg(long, help_heading = "Projection Options")]
     surrealdb_username: Option<String>,
 
     /// SurrealDB password (passed to `surreal sql --password`)
-    #[arg(long)]
+    #[arg(long, help_heading = "Projection Options")]
     surrealdb_password: Option<String>,
 
     /// SurrealDB token (passed to `surreal sql --token`)
-    #[arg(long)]
+    #[arg(long, help_heading = "Projection Options")]
     surrealdb_token: Option<String>,
 
     /// SurrealDB auth level (passed to `surreal sql --auth-level`)
-    #[arg(long)]
+    #[arg(long, help_heading = "Projection Options")]
     surrealdb_auth_level: Option<String>,
 
     /// SurrealDB CLI binary name/path (default: surreal)
-    #[arg(long, default_value = "surreal")]
+    #[arg(long, help_heading = "Projection Options", default_value = "surreal")]
     surrealdb_bin: String,
 
     /// Projection phases to enable (comma-separated: dag_trace,doc_files,doc_chunks,chunk_repr,headings,obsidian_vault_links,stats,embeddings; `vault_links` alias supported)
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, help_heading = "Projection Options", value_delimiter = ',')]
     projection_enabled: Option<Vec<String>>,
 
     /// Override batch size for a projection phase (format: phase:size, e.g., nodes:100)
-    #[arg(long, value_name = "PHASE:SIZE")]
+    #[arg(long, help_heading = "Projection Options", value_name = "PHASE:SIZE")]
     projection_batch_size: Option<Vec<String>>,
 
     /// Max SurrealQL bytes per `surreal sql` invocation (default: 1000000)
-    #[arg(long, value_name = "BYTES")]
+    #[arg(long, help_heading = "Projection Options", value_name = "BYTES")]
     projection_max_sql_bytes: Option<usize>,
 
     /// Force projection even if an identical complete run already exists
-    #[arg(long)]
+    #[arg(long, help_heading = "Projection Options")]
     projection_force: bool,
 
     /// Projection failure handling mode: fail-fast|warn-and-continue|silent-ignore (default: warn-and-continue)
-    #[arg(long, value_enum)]
+    #[arg(long, help_heading = "Projection Options", value_enum)]
     projection_failure_mode: Option<admit_surrealdb::projection_config::FailureHandling>,
 
     /// Obsidian vault prefix for link resolution (repeatable, e.g., irrev-vault/)
     /// Prefer `--obsidian-vault-prefix`; `--vault-prefix` is kept as a compatibility alias.
     #[arg(
         long = "obsidian-vault-prefix",
+        help_heading = "Projection Options",
         alias = "vault-prefix",
         value_name = "PREFIX"
     )]
@@ -289,26 +331,63 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Initialize project scaffolding and default ledger/artifact directories.
     Init(InitArgs),
+    /// Show repository governance status and ledger/artifact health.
     Status(StatusArgs),
-    DeclareCost(DeclareCostArgs),
-    WitnessVerify(WitnessVerifyArgs),
+    /// Witness lifecycle commands (declare-cost, verify).
+    Witness(WitnessArgs),
+    /// Ledger operations.
+    Ledger(LedgerArgs),
+    /// Bundle operations.
+    Bundle(BundleArgs),
+    /// Evaluate admissibility from event or executable ruleset.
     Check(CheckArgs),
+    /// Execute an already checked admissible action.
     Execute(ExecuteArgs),
-    VerifyLedger(VerifyLedgerArgs),
-    BundleVerify(BundleVerifyArgs),
+    /// Collect observable facts into a facts bundle.
     Observe(ObserveArgs),
+    /// Render stored governance artifact by path/hash.
     Show(ShowArgs),
+    /// Explain witness findings with grouped evidence context.
     Explain(ExplainArgs),
+    /// Query ledger/artifact logs with filters.
     Log(LogArgs),
+    /// Manage schema/scope registry state.
     Registry(RegistryArgs),
+    /// Create, answer, and render governance plans.
     Plan(PlanArgs),
+    /// Execute and verify calculator plans.
     Calc(CalcArgs),
+    /// Ingest directory snapshots and produce structured chunks.
     Ingest(IngestArgs),
+    /// Manage SurrealDB projection runs and diagnostics.
     Projection(ProjectionArgs),
+    /// Engine-level diagnostics and maintenance tasks.
     Engine(EngineArgs),
+    /// Run lint checks against governance/ruleset constraints.
     Lint(LintArgs),
+    /// Git-scoped provenance and dependency checks.
     Git(GitArgs),
+    /// Vault utilities (inspection + extraction).
+    Vault(VaultArgs),
+
+    /// Legacy: use `admit witness declare`.
+    #[command(hide = true)]
+    /// Declare irreversible cost against a witness and optionally append to ledger.
+    DeclareCost(DeclareCostArgs),
+    /// Legacy: use `admit witness verify`.
+    #[command(hide = true)]
+    /// Verify witness bytes/hash and optionally emit canonical CBOR.
+    WitnessVerify(WitnessVerifyArgs),
+    /// Legacy: use `admit ledger verify`.
+    #[command(hide = true)]
+    /// Verify append-only ledger integrity and artifact references.
+    VerifyLedger(VerifyLedgerArgs),
+    /// Legacy: use `admit bundle verify`.
+    #[command(hide = true)]
+    /// Verify program bundle schema + deterministic identity.
+    BundleVerify(BundleVerifyArgs),
 }
 
 #[derive(Parser)]
@@ -641,6 +720,45 @@ struct LogArgs {
 }
 
 #[derive(Parser)]
+struct WitnessArgs {
+    #[command(subcommand)]
+    command: WitnessCommands,
+}
+
+#[derive(Subcommand)]
+enum WitnessCommands {
+    /// Declare irreversible cost against a witness and optionally append to ledger.
+    #[command(alias = "declare-cost")]
+    Declare(DeclareCostArgs),
+    /// Verify witness bytes/hash and optionally emit canonical CBOR.
+    Verify(WitnessVerifyArgs),
+}
+
+#[derive(Parser)]
+struct LedgerArgs {
+    #[command(subcommand)]
+    command: LedgerCommands,
+}
+
+#[derive(Subcommand)]
+enum LedgerCommands {
+    /// Verify append-only ledger integrity and artifact references.
+    Verify(VerifyLedgerArgs),
+}
+
+#[derive(Parser)]
+struct BundleArgs {
+    #[command(subcommand)]
+    command: BundleCommands,
+}
+
+#[derive(Subcommand)]
+enum BundleCommands {
+    /// Verify program bundle schema + deterministic identity.
+    Verify(BundleVerifyArgs),
+}
+
+#[derive(Parser)]
 struct PlanArgs {
     #[command(subcommand)]
     command: PlanCommands,
@@ -682,9 +800,318 @@ struct LintArgs {
     command: LintCommands,
 }
 
+#[derive(Parser)]
+struct VaultArgs {
+    #[command(subcommand)]
+    command: VaultCommands,
+}
+
+#[derive(Subcommand)]
+enum VaultCommands {
+    /// Link/backlink utilities (explicit vs implicit mentions).
+    Links(VaultLinksArgs),
+    /// Extract external docs into typed vault artifacts.
+    Docs(VaultDocsArgs),
+    /// Concept spine utilities (Concept → Invariant mapping).
+    Spines(VaultSpinesArgs),
+    /// Build a dependency-ordered concept book export.
+    Book(VaultBookArgs),
+}
+
+#[derive(Parser)]
+struct VaultLinksArgs {
+    #[command(subcommand)]
+    command: VaultLinksCommands,
+}
+
+#[derive(Subcommand)]
+enum VaultLinksCommands {
+    /// Find implicit link edges by scanning plain text for canonical note names/aliases.
+    Implicit(VaultLinksImplicitArgs),
+    /// List explicit and/or implicit backlinks for a target note name (or alias).
+    Backlinks(VaultLinksBacklinksArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum VaultLinkMode {
+    Explicit,
+    Implicit,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum VaultOutputFormat {
+    Md,
+    Json,
+}
+
+impl VaultOutputFormat {
+    fn json(self) -> bool {
+        matches!(self, VaultOutputFormat::Json)
+    }
+}
+
+#[derive(Parser)]
+struct VaultLinksImplicitArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Which note roles to scan as sources (repeatable; default: all roles)
+    #[arg(long = "source-role")]
+    source_role: Vec<String>,
+
+    /// Which note roles to treat as link targets (repeatable)
+    #[arg(long = "target-role", default_values = ["concept", "invariant"])]
+    target_role: Vec<String>,
+
+    /// Limit to a single source note (matches name/title)
+    #[arg(long = "note", value_name = "NOTE")]
+    note: Option<String>,
+
+    /// Min mention count required to report a target
+    #[arg(long = "min-count", default_value_t = 1)]
+    min_count: u32,
+
+    /// Max targets per source note (0 = no limit)
+    #[arg(long = "max-targets", default_value_t = 50)]
+    max_targets_per_note: usize,
+
+    /// Include targets that are already explicitly linked via [[WikiLink]]
+    #[arg(long = "include-explicit")]
+    include_explicit: bool,
+
+    /// Output format
+    #[arg(long = "format", value_enum, default_value_t = VaultOutputFormat::Md)]
+    format: VaultOutputFormat,
+
+    /// Write output to a file (default: stdout)
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct VaultLinksBacklinksArgs {
+    /// Target note name (or alias)
+    #[arg(value_name = "TARGET")]
+    target: String,
+
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Which note roles to scan as sources (repeatable; default: all roles)
+    #[arg(long = "source-role")]
+    source_role: Vec<String>,
+
+    /// Which backlink class to report
+    #[arg(long = "mode", value_enum, default_value_t = VaultLinkMode::Both)]
+    mode: VaultLinkMode,
+
+    /// Output format
+    #[arg(long = "format", value_enum, default_value_t = VaultOutputFormat::Md)]
+    format: VaultOutputFormat,
+
+    /// Write output to a file (default: stdout)
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct VaultDocsArgs {
+    #[command(subcommand)]
+    command: VaultDocsCommands,
+}
+
+#[derive(Subcommand)]
+enum VaultDocsCommands {
+    /// Extract compiler docs into vault support notes (with provenance frontmatter).
+    #[command(name = "compiler-extract")]
+    CompilerExtract(VaultDocsCompilerExtractArgs),
+}
+
+#[derive(Parser)]
+struct VaultSpinesArgs {
+    #[command(subcommand)]
+    command: VaultSpinesCommands,
+}
+
+#[derive(Subcommand)]
+enum VaultSpinesCommands {
+    /// Generate a Concept → Spine index (YAML + Markdown view) from the current vault.
+    Generate(VaultSpinesGenerateArgs),
+    /// Render a Markdown view from an existing Concept → Spine YAML index.
+    Render(VaultSpinesRenderArgs),
+    /// Audit concept coverage and ambiguity (invariants/diagnostics).
+    Audit(VaultSpinesAuditArgs),
+}
+
+#[derive(Parser)]
+struct VaultBookArgs {
+    #[command(subcommand)]
+    command: VaultBookCommands,
+}
+
+#[derive(Subcommand)]
+enum VaultBookCommands {
+    /// Build a linear, dependency-ordered concept book markdown export.
+    Build(VaultBookBuildArgs),
+}
+
+#[derive(Parser)]
+struct VaultBookBuildArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Markdown output path (default: <vault>/exports/irrev-book.md)
+    #[arg(long = "out", value_name = "PATH")]
+    out: Option<PathBuf>,
+
+    /// Include non-canonical concepts (default: canonical-only with dependency closure)
+    #[arg(long = "all-concepts")]
+    all_concepts: bool,
+
+    /// Compute output but do not write file
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+
+    /// Overwrite existing output file
+    #[arg(long = "force")]
+    force: bool,
+
+    /// Also print a short JSON summary to stdout
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct VaultSpinesGenerateArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// YAML output path (default: <vault>/meta/concept_spines.generated.yml)
+    #[arg(long = "out-yaml", value_name = "PATH")]
+    out_yaml: Option<PathBuf>,
+
+    /// Markdown output path (default: <vault>/meta/Concept Spine Index.generated.md)
+    #[arg(long = "out-md", value_name = "PATH")]
+    out_md: Option<PathBuf>,
+
+    /// Compute outputs but do not write files
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+
+    /// Overwrite existing output files
+    #[arg(long = "force")]
+    force: bool,
+
+    /// Also print a short JSON summary to stdout
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct VaultSpinesAuditArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Output format
+    #[arg(long = "format", value_enum, default_value_t = VaultOutputFormat::Md)]
+    format: VaultOutputFormat,
+
+    /// Write output to a file (default: stdout)
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct VaultSpinesRenderArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// YAML input path (default: <vault>/meta/concept_spines.generated.yml)
+    #[arg(long = "in-yaml", value_name = "PATH")]
+    in_yaml: Option<PathBuf>,
+
+    /// Markdown output path (default: <vault>/meta/Concept Spine Index.generated.md)
+    #[arg(long = "out-md", value_name = "PATH")]
+    out_md: Option<PathBuf>,
+
+    /// Compute outputs but do not write files
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+
+    /// Overwrite existing output file
+    #[arg(long = "force")]
+    force: bool,
+
+    /// Also print a short JSON summary to stdout
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum CompilerDocKind {
+    Spec,
+    Arch,
+    Ideas,
+    Status,
+    Meta,
+}
+
+impl std::fmt::Display for CompilerDocKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            CompilerDocKind::Spec => "spec",
+            CompilerDocKind::Arch => "arch",
+            CompilerDocKind::Ideas => "ideas",
+            CompilerDocKind::Status => "status",
+            CompilerDocKind::Meta => "meta",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+#[derive(Parser)]
+struct VaultDocsCompilerExtractArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Path to the `irrev-compiler/` workspace root (default: auto-detect next to the vault)
+    #[arg(long = "compiler-root", value_name = "PATH")]
+    compiler_root: Option<PathBuf>,
+
+    /// Which compiler doc sets to extract (repeatable)
+    #[arg(long = "kind", value_enum, default_values_t = vec![CompilerDocKind::Spec])]
+    kinds: Vec<CompilerDocKind>,
+
+    /// Output directory inside the vault (default: <vault>/meta/compiler-docs)
+    #[arg(long = "out-dir", value_name = "PATH")]
+    out_dir: Option<PathBuf>,
+
+    /// Compute outputs but do not write files
+    #[arg(long = "dry-run")]
+    dry_run: bool,
+
+    /// Overwrite existing files even if they are not generated=true or source_path differs
+    #[arg(long = "force")]
+    force: bool,
+
+    /// Output JSON summary instead of key=value line
+    #[arg(long = "json")]
+    json: bool,
+}
+
 #[derive(Subcommand)]
 enum LintCommands {
     Rust(LintRustArgs),
+    /// Validate vault files against the artifact type registry (artifact-types.toml)
+    Vault(LintVaultArgs),
 }
 
 #[derive(Parser)]
@@ -716,6 +1143,21 @@ struct LintRustArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct LintVaultArgs {
+    /// Vault root path (default: current directory)
+    #[arg(value_name = "PATH", default_value = ".")]
+    path: PathBuf,
+
+    /// Run higher-order checks (role purity, invariant coverage, template compliance, taxonomy drift)
+    #[arg(long)]
+    higher_order: bool,
 
     /// Output JSON instead of key=value lines
     #[arg(long)]
@@ -1456,6 +1898,8 @@ enum CalcCommands {
     Plan(CalcPlanArgs),
     Execute(CalcExecuteArgs),
     Describe(CalcDescribeArgs),
+    #[command(hide = true)]
+    Verify(CalcLegacyVerifyArgs),
 }
 
 #[derive(Parser)]
@@ -1507,6 +1951,21 @@ struct CalcDescribeArgs {
     json: bool,
 }
 
+#[derive(Parser)]
+struct CalcLegacyVerifyArgs {
+    /// Path to witness JSON projection
+    #[arg(value_name = "WITNESS_JSON")]
+    witness_json: PathBuf,
+
+    /// Expected SHA256 hash of canonical CBOR witness bytes
+    #[arg(long)]
+    expected_sha256: Option<String>,
+
+    /// Write canonical CBOR bytes to a file
+    #[arg(long, value_name = "PATH")]
+    out_cbor: Option<PathBuf>,
+}
+
 fn main() {
     let cli = Cli::parse();
     let dag_trace_out = cli.dag_trace.as_deref();
@@ -1521,12 +1980,20 @@ fn main() {
     let result = match cli.command {
         Commands::Init(args) => run_init(args, dag_trace_out),
         Commands::Status(args) => commands::visualize::run_status(args),
-        Commands::DeclareCost(args) => run_declare_cost(args, dag_trace_out, &mut projection),
-        Commands::WitnessVerify(args) => run_witness_verify(args, dag_trace_out),
+        Commands::Witness(args) => match args.command {
+            WitnessCommands::Declare(declare_args) => {
+                run_declare_cost(declare_args, dag_trace_out, &mut projection)
+            }
+            WitnessCommands::Verify(verify_args) => run_witness_verify(verify_args, dag_trace_out),
+        },
+        Commands::Ledger(args) => match args.command {
+            LedgerCommands::Verify(verify_args) => run_verify_ledger(verify_args, dag_trace_out),
+        },
+        Commands::Bundle(args) => match args.command {
+            BundleCommands::Verify(verify_args) => run_bundle_verify(verify_args, dag_trace_out),
+        },
         Commands::Check(args) => run_check(args, dag_trace_out, &mut projection),
         Commands::Execute(args) => run_execute(args, dag_trace_out, &mut projection),
-        Commands::VerifyLedger(args) => run_verify_ledger(args, dag_trace_out),
-        Commands::BundleVerify(args) => run_bundle_verify(args, dag_trace_out),
         Commands::Observe(args) => run_observe(args, dag_trace_out),
         Commands::Show(args) => commands::visualize::run_show(args),
         Commands::Explain(args) => commands::visualize::run_explain(args),
@@ -1551,6 +2018,18 @@ fn main() {
                 run_calc_execute(exec_args, dag_trace_out, &mut projection)
             }
             CalcCommands::Describe(desc_args) => run_calc_describe(desc_args, dag_trace_out),
+            CalcCommands::Verify(verify_args) => {
+                warn_deprecated_command("calc verify", "witness verify");
+                run_witness_verify(
+                    WitnessVerifyArgs {
+                        witness_json: Some(verify_args.witness_json),
+                        witness_cbor: None,
+                        expected_sha256: verify_args.expected_sha256,
+                        out_cbor: verify_args.out_cbor,
+                    },
+                    dag_trace_out,
+                )
+            }
         },
         Commands::Ingest(args) => match args.command {
             IngestCommands::Dir(dir_args) => run_ingest_dir(
@@ -1570,22 +2049,52 @@ fn main() {
         },
         Commands::Engine(args) => match args.command {
             EngineCommands::Query(q) => match q.command {
-                EngineQueryCommands::Add(a) => commands::engine::run_engine_query_add(a, &mut projection),
+                EngineQueryCommands::Add(a) => {
+                    commands::engine::run_engine_query_add(a, &mut projection)
+                }
             },
             EngineCommands::Function(f) => match f.command {
-                EngineFunctionCommands::Add(a) => commands::engine::run_engine_function_add(a, &mut projection),
+                EngineFunctionCommands::Add(a) => {
+                    commands::engine::run_engine_function_add(a, &mut projection)
+                }
             },
         },
         Commands::Lint(args) => match args.command {
-            LintCommands::Rust(rust_args) => commands::lint::run_lint_rust(rust_args, dag_trace_out),
+            LintCommands::Rust(rust_args) => {
+                commands::lint::run_lint_rust(rust_args, dag_trace_out)
+            }
+            LintCommands::Vault(vault_args) => {
+                commands::lint::run_lint_vault(vault_args, dag_trace_out)
+            }
         },
         Commands::Git(args) => commands::git::run_git(args, dag_trace_out),
+        Commands::Vault(args) => commands::vault::run_vault(args, dag_trace_out),
+        Commands::DeclareCost(args) => {
+            warn_deprecated_command("declare-cost", "witness declare");
+            run_declare_cost(args, dag_trace_out, &mut projection)
+        }
+        Commands::WitnessVerify(args) => {
+            warn_deprecated_command("witness-verify", "witness verify");
+            run_witness_verify(args, dag_trace_out)
+        }
+        Commands::VerifyLedger(args) => {
+            warn_deprecated_command("verify-ledger", "ledger verify");
+            run_verify_ledger(args, dag_trace_out)
+        }
+        Commands::BundleVerify(args) => {
+            warn_deprecated_command("bundle-verify", "bundle verify");
+            run_bundle_verify(args, dag_trace_out)
+        }
     };
 
     if let Err(err) = result {
         eprintln!("{}", err);
         std::process::exit(1);
     }
+}
+
+fn warn_deprecated_command(old: &str, new: &str) {
+    eprintln!("warning: '{}' is deprecated; use 'admit {}'", old, new);
 }
 
 fn run_init(args: InitArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
@@ -1857,7 +2366,11 @@ fn build_ruleset_provider_registry(ruleset: &RuleSet) -> Result<ProviderRegistry
     let mut registry = ProviderRegistry::new();
     let mut scopes: BTreeSet<String> = BTreeSet::new();
     let enabled: BTreeSet<&str> = if ruleset.enabled_rules.is_empty() {
-        ruleset.bindings.iter().map(|b| b.rule_id.as_str()).collect()
+        ruleset
+            .bindings
+            .iter()
+            .map(|b| b.rule_id.as_str())
+            .collect()
     } else {
         ruleset.enabled_rules.iter().map(|id| id.as_str()).collect()
     };
@@ -1915,7 +2428,9 @@ fn build_ruleset_provider_registry(ruleset: &RuleSet) -> Result<ProviderRegistry
     Ok(registry)
 }
 
-fn load_ruleset_input_bundles(args: &CheckArgs) -> Result<BTreeMap<admit_core::ScopeId, FactsBundle>, String> {
+fn load_ruleset_input_bundles(
+    args: &CheckArgs,
+) -> Result<BTreeMap<admit_core::ScopeId, FactsBundle>, String> {
     let mut input_paths = args.ruleset_inputs.clone();
     if let Some(path) = args.facts_bundle.clone() {
         input_paths.push(path);
@@ -1926,13 +2441,8 @@ fn load_ruleset_input_bundles(args: &CheckArgs) -> Result<BTreeMap<admit_core::S
     for path in input_paths {
         let bytes = read_file_bytes(&path)
             .map_err(|err| format!("read ruleset input bundle '{}': {}", path.display(), err))?;
-        let bundle: FactsBundle = serde_json::from_slice(&bytes).map_err(|err| {
-            format!(
-                "decode ruleset input bundle '{}': {}",
-                path.display(),
-                err
-            )
-        })?;
+        let bundle: FactsBundle = serde_json::from_slice(&bytes)
+            .map_err(|err| format!("decode ruleset input bundle '{}': {}", path.display(), err))?;
         let scope_id = bundle.scope_id.clone();
         if let Some(previous_path) = source_paths.get(&scope_id) {
             return Err(format!(
@@ -1954,8 +2464,8 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
     let ruleset_bytes =
         read_file_bytes(&ruleset_path).map_err(|err| format!("read ruleset: {}", err))?;
-    let ruleset: RuleSet = serde_json::from_slice(&ruleset_bytes)
-        .map_err(|err| format!("ruleset decode: {}", err))?;
+    let ruleset: RuleSet =
+        serde_json::from_slice(&ruleset_bytes).map_err(|err| format!("ruleset decode: {}", err))?;
     let registry = build_ruleset_provider_registry(&ruleset)?;
     let outcome = evaluate_ruleset_with_inputs(
         &ruleset,
@@ -1963,10 +2473,10 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
         (!input_bundles.is_empty()).then_some(&input_bundles),
     )
     .map_err(|err| err.0)?;
-    let witness_value = serde_json::to_value(&outcome.witness)
-        .map_err(|err| format!("witness encode: {}", err))?;
-    let ruleset_value = serde_json::to_value(&ruleset)
-        .map_err(|err| format!("ruleset encode: {}", err))?;
+    let witness_value =
+        serde_json::to_value(&outcome.witness).map_err(|err| format!("witness encode: {}", err))?;
+    let ruleset_value =
+        serde_json::to_value(&ruleset).map_err(|err| format!("ruleset encode: {}", err))?;
 
     let witness_schema_id = outcome
         .witness
@@ -2028,9 +2538,7 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
         for bundle in input_bundles.values() {
             println!(
                 "input_bundle scope={} schema={} snapshot_hash={}",
-                bundle.scope_id.0,
-                bundle.schema_id,
-                bundle.snapshot_hash.0
+                bundle.scope_id.0, bundle.schema_id, bundle.snapshot_hash.0
             );
         }
         for result in &outcome.rule_results {
@@ -2352,8 +2860,8 @@ fn run_observe_scope(args: ObserveArgs, scope_id: &str) -> Result<(), String> {
     let canonical =
         admit_core::encode_canonical_value(&bundle_value).map_err(|err| err.to_string())?;
     let bundle_hash = hex::encode(sha2::Sha256::digest(&canonical));
-    let bundle_bytes =
-        serde_json::to_vec(&snapshot.facts_bundle).map_err(|err| format!("json encode: {}", err))?;
+    let bundle_bytes = serde_json::to_vec(&snapshot.facts_bundle)
+        .map_err(|err| format!("json encode: {}", err))?;
 
     let out_path = args
         .out
@@ -2363,9 +2871,11 @@ fn run_observe_scope(args: ObserveArgs, scope_id: &str) -> Result<(), String> {
             std::fs::create_dir_all(parent).map_err(|err| format!("create out dir: {}", err))?;
         }
     }
-    std::fs::write(&out_path, &bundle_bytes).map_err(|err| format!("write facts bundle: {}", err))?;
+    std::fs::write(&out_path, &bundle_bytes)
+        .map_err(|err| format!("write facts bundle: {}", err))?;
     let hash_path = out_path.with_extension("json.sha256");
-    std::fs::write(&hash_path, &bundle_hash).map_err(|err| format!("write facts bundle hash: {}", err))?;
+    std::fs::write(&hash_path, &bundle_hash)
+        .map_err(|err| format!("write facts bundle hash: {}", err))?;
 
     if args.json {
         let output = serde_json::json!({
@@ -2388,8 +2898,6 @@ fn run_observe_scope(args: ObserveArgs, scope_id: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-
 
 fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
     match args.command {
@@ -3115,7 +3623,6 @@ fn run_ingest_dir(
 
     Ok(())
 }
-
 
 fn to_projection_event_row(event: &admit_cli::ProjectionEvent) -> ProjectionEventRow {
     ProjectionEventRow {
@@ -4042,9 +4549,7 @@ fn maybe_project_vault_links(
                 None,
                 None,
             )
-            .map_err(|err| {
-                format!("surrealdb obsidian vault link projection failed: {}", err)
-            })?;
+            .map_err(|err| format!("surrealdb obsidian vault link projection failed: {}", err))?;
             Ok(())
         })?
         .map(|_| ());

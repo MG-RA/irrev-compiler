@@ -221,20 +221,19 @@ query admissible
 
 **CLI Commands**:
 ```bash
-admit_cli check <program.adm>              # Admissibility check → witness
-admit_cli declare-cost <witness.json>      # Seal witness → cost.declared event
-admit_cli ledger append <event>            # Append ledger event
-admit_cli verify-ledger                    # Full ledger verification
-admit_cli scope add <scope_spec>           # Add scope to registry
-admit_cli scope verify <scope_id>          # Verify scope conformance
-admit_cli plan new                         # Create plan with risk assessment
-admit_cli calc execute <plan> <inputs>     # Execute calculation
-admit_cli calc verify <witness>            # Verify calculation witness
-admit_cli status --json                    # Governance status (repo/ledger/evidence)
-admit_cli show <path|sha256:...>           # Show governance artifact
-admit_cli explain <path|sha256:...>        # Explain witness verdict
-admit_cli log --source ledger|artifacts    # Log ledger events or artifact inventory
-admit_cli log --source ledger --since 7d --scope scope:main --verdict inadmissible
+admit check --ruleset <ruleset.json> --inputs <facts1.json,facts2.json>
+admit witness declare --witness-json <witness.json> --witness-sha256 <sha256> --snapshot <snapshot.json>
+admit witness verify --witness-json <witness.json>
+admit ledger verify --json
+admit registry scope-add --scope calc.pure@0 --deterministic true --foundational true
+admit registry scope-verify --scope-id scope:calc.pure
+admit plan new --answers <answers.json> --scope <scope> --target <target>
+admit calc execute --plan <plan.json> --input x=42 --out <witness.json>
+admit calc verify <witness.json>           # legacy compatibility route to witness verify
+admit status --json
+admit show <path|sha256:...>
+admit explain <path|sha256:...>
+admit log --source ledger --since 7d --scope scope:main --verdict inadmissible
 ```
 
 #### **`admit_surrealdb`** — Knowledge Graph
@@ -919,26 +918,50 @@ Golden fixture test `test_golden_fixture_scope_addition_witness_wire_format()` p
 
 ```bash
 # Check admissibility
-admit_cli check testdata/programs/hello_world.adm
+admit check --ruleset testdata/rulesets/git-deps-guardrails.ruleset.json --inputs out/git.facts.json,out/deps.facts.json
 
 # Declare cost (seal witness)
-admit_cli declare-cost witness.json --schema calc-plan/0
+admit witness declare --witness-json witness.json --witness-sha256 <sha256> --snapshot snapshot.json
 
 # Verify ledger
-admit_cli verify-ledger --ledger-path .irrev/ledger.jsonl
+admit ledger verify --ledger out/ledger.jsonl
 
 # Registry operations
-admit_cli registry init
-admit_cli scope add --scope calc.pure@0 --deterministic --foundational
-admit_cli scope verify calc.pure
-admit_cli scope list --phase phase1
+admit registry init
+admit registry scope-add --scope calc.pure@0 --deterministic true --foundational true
+admit registry scope-verify --scope-id scope:calc.pure
+admit registry scope-list --phase p1
 
 # Calculator operations
-admit_cli calc execute calc_plan.json --input x=42
-admit_cli calc verify witness.json
+admit calc execute --plan calc_plan.json --input x=42 --out calc_witness.json
+admit calc verify calc_witness.json
 
 # Plan creation
-admit_cli plan new
+admit plan new --answers plan_answers.json --scope scope:calc.pure --target "evaluate expression"
+```
+### Vault Utilities
+
+```bash
+# Find implicit link edges (plain-text mentions) in a vault
+admit vault links implicit ./irrev-vault --format json
+
+# Show implicit backlinks for a target concept/invariant
+admit vault links backlinks governance ./irrev-vault --mode implicit --format json
+
+# Extract compiler docs into typed vault support notes (with provenance frontmatter)
+admit vault docs compiler-extract ./irrev-vault --kind spec
+
+# Generate a Concept → Spine index (YAML + Markdown) from current concepts/invariants/diagnostics
+admit vault spines generate . --json
+
+# Re-render the Markdown view from an existing YAML index
+admit vault spines render . --json
+
+# Audit concept coverage and link ambiguity (invariants/diagnostics)
+admit vault spines audit . --format md
+
+# Build a linear concept book export (dependencies first)
+admit vault book build ./irrev-vault --out ./irrev-vault/exports/irrev-book.md
 ```
 
 ### Ledger Events

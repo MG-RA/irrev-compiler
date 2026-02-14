@@ -19,6 +19,7 @@ mod scope_validation;
 mod status_summary;
 mod types;
 mod vault_prefix;
+mod vault_schema_lint;
 mod verify;
 mod witness;
 
@@ -81,6 +82,9 @@ pub use ingest_protocol::{
 pub use engine::{register_function_artifact, register_query_artifact};
 pub use rust_ir_lint::{
     append_rust_ir_lint_event, run_rust_ir_lint, RustIrLintInput, RustIrLintRunOutput,
+};
+pub use vault_schema_lint::{
+    run_vault_schema_lint, VaultSchemaFinding, VaultSchemaLintInput, VaultSchemaLintOutput,
 };
 
 // Vault prefix helpers

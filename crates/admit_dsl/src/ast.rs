@@ -22,6 +22,13 @@ pub struct ScopeDecl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LensDecl {
+    pub id: String,
+    pub hash: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ScopeMode {
     Widen,
     Narrow,
@@ -50,6 +57,24 @@ pub struct ScopeChangeRuleStmt {
     pub cost_value: f64,
     pub cost_unit: String,
     pub bucket: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MetaRoute {
+    pub bucket: String,
+    pub cost_value: f64,
+    pub cost_unit: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MetaChangeStmt {
+    pub kind: String,
+    pub from_lens: String,
+    pub to_lens: Option<String>,
+    pub payload_ref: String,
+    pub routes: Vec<MetaRoute>,
     pub span: Span,
 }
 
@@ -127,7 +152,13 @@ pub enum QueryKind {
     Admissible,
     Witness,
     Delta,
-    Lint { fail_on: LintFailOn },
+    InterpretationDelta {
+        from_lens: Option<String>,
+        to_lens: Option<String>,
+    },
+    Lint {
+        fail_on: LintFailOn,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -204,9 +235,11 @@ pub enum Stmt {
     Module(ModuleDecl),
     Depends(DependsDecl),
     Scope(ScopeDecl),
+    Lens(LensDecl),
     ScopeChange(ScopeChangeStmt),
     AllowScopeChange(AllowScopeChangeStmt),
     ScopeChangeRule(ScopeChangeRuleStmt),
+    MetaChange(MetaChangeStmt),
     Difference(DifferenceDecl),
     Transform(TransformDecl),
     Bucket(BucketDecl),

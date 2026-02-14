@@ -15,6 +15,8 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
     let mut declared_transforms: HashSet<String> = HashSet::new();
     let mut declared_buckets: HashSet<String> = HashSet::new();
     let mut declared_constraints: HashSet<String> = HashSet::new();
+    let mut declared_lenses: HashSet<String> = HashSet::new();
+    let mut lens_hashes: HashMap<String, String> = HashMap::new();
     let mut erasure_rules: HashSet<String> = HashSet::new();
     let mut permissions: HashMap<String, PermissionKind> = HashMap::new();
 
@@ -36,6 +38,23 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     continue;
                 }
                 scope = Some(normalize_name("scope", decl.name, &mut errors));
+            }
+            Stmt::Lens(decl) => {
+                let id = normalize_name("lens", decl.id, &mut errors);
+                if !declared_lenses.insert(id.clone()) {
+                    errors.push(format!("duplicate lens declaration: {}", id));
+                }
+                if decl.hash.trim().is_empty() {
+                    errors.push(format!("lens {} missing hash", id));
+                }
+                lens_hashes.insert(id.clone(), decl.hash.clone());
+                decls.push(admit_core::Stmt::LensDeclaration {
+                    lens: admit_core::LensRef {
+                        lens_id: format!("lens:{}", id),
+                        lens_hash: decl.hash,
+                    },
+                    span: lower_span(&decl.span),
+                });
             }
             Stmt::ScopeChange(stmt) => {
                 let from = normalize_name("scope", stmt.from, &mut errors);
@@ -84,6 +103,50 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                         unit: stmt.cost_unit,
                     },
                     displaced_to: symbol(admit_core::SymbolNamespace::Bucket, &bucket),
+                    span: lower_span(&stmt.span),
+                });
+            }
+            Stmt::MetaChange(stmt) => {
+                if stmt.routes.is_empty() {
+                    errors.push("meta_change requires at least one route".to_string());
+                }
+                let from_lens = normalize_name("lens", stmt.from_lens, &mut errors);
+                let from_hash = match lens_hashes.get(&from_lens) {
+                    Some(hash) => hash.clone(),
+                    None => {
+                        errors.push(format!(
+                            "meta_change references undeclared from_lens: {}",
+                            from_lens
+                        ));
+                        String::new()
+                    }
+                };
+                let to_lens_id = stmt
+                    .to_lens
+                    .map(|id| format!("lens:{}", normalize_name("lens", id, &mut errors)));
+                let routes = stmt
+                    .routes
+                    .into_iter()
+                    .map(|route| admit_core::MetaRoute {
+                        bucket: symbol(
+                            admit_core::SymbolNamespace::Bucket,
+                            &normalize_name("bucket", route.bucket, &mut errors),
+                        ),
+                        cost: admit_core::Quantity {
+                            value: route.cost_value,
+                            unit: route.cost_unit,
+                        },
+                    })
+                    .collect::<Vec<_>>();
+                rest.push(admit_core::Stmt::MetaChange {
+                    kind: stmt.kind,
+                    from_lens: admit_core::LensRef {
+                        lens_id: format!("lens:{}", from_lens),
+                        lens_hash: from_hash,
+                    },
+                    to_lens_id,
+                    payload_ref: stmt.payload_ref,
+                    routes,
                     span: lower_span(&stmt.span),
                 });
             }
@@ -241,6 +304,38 @@ pub fn lower_to_ir(program: Program) -> Result<admit_core::Program, Vec<String>>
                     QueryKind::Admissible => admit_core::Query::Admissible,
                     QueryKind::Witness => admit_core::Query::Witness,
                     QueryKind::Delta => admit_core::Query::Delta,
+                    QueryKind::InterpretationDelta { from_lens, to_lens } => {
+                        admit_core::Query::InterpretationDelta {
+                            from_lens: from_lens.map(|id| {
+                                let key = normalize_name("lens", id, &mut errors);
+                                let hash = lens_hashes.get(&key).cloned().unwrap_or_else(|| {
+                                    errors.push(format!(
+                                        "interpretation_delta references undeclared from_lens: {}",
+                                        key
+                                    ));
+                                    String::new()
+                                });
+                                admit_core::LensRef {
+                                    lens_id: format!("lens:{}", key),
+                                    lens_hash: hash,
+                                }
+                            }),
+                            to_lens: to_lens.map(|id| {
+                                let key = normalize_name("lens", id, &mut errors);
+                                let hash = lens_hashes.get(&key).cloned().unwrap_or_else(|| {
+                                    errors.push(format!(
+                                        "interpretation_delta references undeclared to_lens: {}",
+                                        key
+                                    ));
+                                    String::new()
+                                });
+                                admit_core::LensRef {
+                                    lens_id: format!("lens:{}", key),
+                                    lens_hash: hash,
+                                }
+                            }),
+                        }
+                    }
                     QueryKind::Lint { fail_on } => admit_core::Query::Lint {
                         fail_on: match fail_on {
                             crate::ast::LintFailOn::Error => admit_core::LintFailOn::Error,
@@ -412,13 +507,11 @@ fn lower_predicate(pred: Predicate, errors: &mut Vec<String>) -> admit_core::Pre
                 value: admit_core::Quantity { value, unit },
             }
         }
-        Predicate::ObsidianVaultRule { rule_id } => {
-            admit_core::Predicate::ProviderPredicate {
-                scope_id: admit_core::ScopeId("obsidian".into()),
-                name: "vault_rule".into(),
-                params: serde_json::json!({ "rule_id": rule_id }),
-            }
-        }
+        Predicate::ObsidianVaultRule { rule_id } => admit_core::Predicate::ProviderPredicate {
+            scope_id: admit_core::ScopeId("obsidian".into()),
+            name: "vault_rule".into(),
+            params: serde_json::json!({ "rule_id": rule_id }),
+        },
     }
 }
 
@@ -456,6 +549,7 @@ fn normalize_name(prefix: &str, raw: String, errors: &mut Vec<String>) -> String
 
 fn stmt_sort_key(stmt: &admit_core::Stmt) -> String {
     match stmt {
+        admit_core::Stmt::LensDeclaration { lens, .. } => format!("lens:{}", lens.lens_id),
         admit_core::Stmt::DeclareDifference { diff, .. } => format!("difference:{}", diff.name),
         admit_core::Stmt::DeclareTransform { transform, .. } => {
             format!("transform:{}", transform.name)

@@ -14,7 +14,7 @@ pub mod backend;
 pub mod provider_impl;
 
 // Re-export scope identifiers
-pub use backend::{INGEST_DIR_SCOPE_ID, INGEST_DIR_PHASE, is_ingest_dir_scope};
+pub use backend::{is_ingest_dir_scope, INGEST_DIR_PHASE, INGEST_DIR_SCOPE_ID};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -269,9 +269,9 @@ fn walk_files_via_git(root: &Path) -> Result<WalkFilesOutput, String> {
         if !abs.starts_with(root) {
             continue;
         }
-        let rel_to_root = abs.strip_prefix(root).map_err(|err| {
-            format!("strip_prefix {}: {}", abs.display(), err)
-        })?;
+        let rel_to_root = abs
+            .strip_prefix(root)
+            .map_err(|err| format!("strip_prefix {}: {}", abs.display(), err))?;
         if should_skip_rel_path(rel_to_root) {
             skipped_by_skip_dir = skipped_by_skip_dir.saturating_add(1);
             continue;
@@ -355,9 +355,8 @@ fn load_root_gitignore_patterns(root: &Path) -> Result<Vec<GitignorePattern>, St
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&path).map_err(|err| {
-        format!("read .gitignore {}: {}", path.display(), err)
-    })?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("read .gitignore {}: {}", path.display(), err))?;
 
     let mut out = Vec::new();
     for line in text.lines() {
@@ -512,12 +511,10 @@ pub fn to_rel_path(root: &Path, path: &Path) -> Result<String, String> {
         .map_err(|err| format!("strip_prefix {}: {}", path.display(), err))?;
     let mut parts = Vec::new();
     for comp in rel.components() {
-        let s = comp.as_os_str().to_str().ok_or_else(|| {
-            format!(
-                "non-utf8 path component under root: {}",
-                path.display()
-            )
-        })?;
+        let s = comp
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| format!("non-utf8 path component under root: {}", path.display()))?;
         parts.push(s);
     }
     Ok(parts.join("/"))
@@ -1076,7 +1073,11 @@ pub fn chunk_line_windows(
     out
 }
 
-pub fn chunk_file_by_format(rel_path: &str, ext: &str, input: &str) -> Result<Vec<ChunkSpec>, String> {
+pub fn chunk_file_by_format(
+    rel_path: &str,
+    ext: &str,
+    input: &str,
+) -> Result<Vec<ChunkSpec>, String> {
     let mut chunks = match ext {
         "md" => chunk_markdown_specs(input),
         "rs" => chunk_rust_specs(input),
@@ -1131,7 +1132,11 @@ fn byte_at_char(s: &str, char_idx: usize) -> usize {
     }
 }
 
-pub fn split_chunk_by_size(chunk: ChunkSpec, max_chars: usize, overlap_chars: usize) -> Vec<ChunkSpec> {
+pub fn split_chunk_by_size(
+    chunk: ChunkSpec,
+    max_chars: usize,
+    overlap_chars: usize,
+) -> Vec<ChunkSpec> {
     let max_chars = max_chars.max(1);
     let overlap_chars = overlap_chars.min(max_chars.saturating_sub(1));
     let step = max_chars.saturating_sub(overlap_chars).max(1);
@@ -1207,7 +1212,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub fn chunk_repr_value(rel_path: &str, chunk_sha256: &str, chunk: &ChunkSpec) -> serde_json::Value {
+pub fn chunk_repr_value(
+    rel_path: &str,
+    chunk_sha256: &str,
+    chunk: &ChunkSpec,
+) -> serde_json::Value {
     let normalized = normalize_text_for_hash(&chunk.text);
     let normalized_text_sha256 = sha256_hex(normalized.as_bytes());
     let tokens = tokenize_simple(&chunk.text).join("\n");

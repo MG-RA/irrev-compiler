@@ -75,8 +75,7 @@ impl Provider for TextMetricsProvider {
                 },
                 PredicateDescriptor {
                     name: "bytes_exceed".to_string(),
-                    doc: "Triggers for files where byte size exceeds params.max_bytes."
-                        .to_string(),
+                    doc: "Triggers for files where byte size exceeds params.max_bytes.".to_string(),
                     param_schema: Some(serde_json::json!({
                         "type": "object",
                         "required": ["facts", "max_bytes"],
@@ -167,11 +166,12 @@ impl Provider for TextMetricsProvider {
             phase: ProviderPhase::Snapshot,
             message: format!("facts serialization failed: {}", err),
         })?;
-        let cbor = admit_core::encode_canonical_value(&facts_value).map_err(|err| ProviderError {
-            scope: scope_id.clone(),
-            phase: ProviderPhase::Snapshot,
-            message: format!("facts canonical encoding failed: {}", err),
-        })?;
+        let cbor =
+            admit_core::encode_canonical_value(&facts_value).map_err(|err| ProviderError {
+                scope: scope_id.clone(),
+                phase: ProviderPhase::Snapshot,
+                message: format!("facts canonical encoding failed: {}", err),
+            })?;
         let mut hasher = Sha256::new();
         hasher.update(cbor);
         let snapshot_hash = Sha256Hex::new(format!("{:x}", hasher.finalize()));
@@ -202,14 +202,15 @@ impl Provider for TextMetricsProvider {
             facts_bundle_hash: None,
             ruleset_hash: None,
         };
-        let witness = WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
-            .with_facts(facts)
-            .with_displacement_trace(DisplacementTrace {
-                mode: DisplacementMode::Potential,
-                totals: vec![],
-                contributions: vec![],
-            })
-            .build();
+        let witness =
+            WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
+                .with_facts(facts)
+                .with_displacement_trace(DisplacementTrace {
+                    mode: DisplacementMode::Potential,
+                    totals: vec![],
+                    contributions: vec![],
+                })
+                .build();
 
         Ok(SnapshotResult {
             facts_bundle,
@@ -519,12 +520,10 @@ fn to_rel_path(root: &Path, path: &Path) -> Result<String, String> {
         .map_err(|err| format!("strip_prefix '{}': {}", path.display(), err))?;
     let mut out = Vec::new();
     for comp in rel.components() {
-        let s = comp.as_os_str().to_str().ok_or_else(|| {
-            format!(
-                "non-utf8 path component under root: {}",
-                path.display()
-            )
-        })?;
+        let s = comp
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| format!("non-utf8 path component under root: {}", path.display()))?;
         out.push(s);
     }
     Ok(out.join("/"))
@@ -562,7 +561,9 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { .. } => 5,
         Fact::ScopeChangeUsed { .. } => 6,
         Fact::UnaccountedBoundaryChange { .. } => 7,
-        Fact::LintFinding { .. } => 8,
+        Fact::LensActivated { .. } => 8,
+        Fact::MetaChangeChecked { .. } => 9,
+        Fact::LintFinding { .. } => 10,
     };
     let aux = match fact {
         Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
@@ -578,6 +579,8 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         | Fact::RuleEvaluated { span, .. }
         | Fact::ScopeChangeUsed { span, .. }
         | Fact::UnaccountedBoundaryChange { span, .. }
+        | Fact::LensActivated { span, .. }
+        | Fact::MetaChangeChecked { span, .. }
         | Fact::LintFinding { span, .. } => span,
     };
     (
@@ -628,7 +631,9 @@ mod tests {
             scope_id: ScopeId(TEXT_METRICS_SCOPE_ID.to_string()),
             params: serde_json::Value::Null,
         };
-        let err = provider.snapshot(&req).expect_err("missing root should fail");
+        let err = provider
+            .snapshot(&req)
+            .expect_err("missing root should fail");
         assert_eq!(err.phase, ProviderPhase::Snapshot);
         assert!(err.message.contains("params.root"));
     }
@@ -647,18 +652,14 @@ mod tests {
         };
         let out = provider.snapshot(&req).expect("snapshot");
         assert_eq!(out.facts_bundle.created_at.0, "2026-02-11T00:00:00Z");
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_FILE_METRICS))
-        );
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_TODO_COUNT))
-        );
+        assert!(out.facts_bundle.facts.iter().any(
+            |f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_FILE_METRICS)
+        ));
+        assert!(out
+            .facts_bundle
+            .facts
+            .iter()
+            .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_TODO_COUNT)));
         let _ = std::fs::remove_dir_all(root);
     }
 

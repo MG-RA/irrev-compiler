@@ -14,7 +14,7 @@ use super::registry::{enforce_scope_gate, resolve_meta_registry};
 use super::types::{
     AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactInput, CheckedPayload,
     CompilerRef, CostDeclaredEvent, CostDeclaredPayload, DeclareCostError, DeclareCostInput,
-    ExecutedPayload, ProgramRef, VerifyWitnessInput, VerifyWitnessOutput,
+    ExecutedPayload, LensActivatedPayload, ProgramRef, VerifyWitnessInput, VerifyWitnessOutput,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,7 @@ impl WitnessInput {
             serde_json::from_value::<Witness>(val)
                 .map_err(|err| DeclareCostError::WitnessDecode(err.to_string()))
         })?;
+        ensure_witness_lens_metadata(&witness)?;
         let snapshot_hash = input
             .snapshot_hash
             .clone()
@@ -81,11 +82,25 @@ fn load_witness(input: &DeclareCostInput) -> Result<WitnessInput, DeclareCostErr
             }
             let witness = serde_json::from_slice::<Witness>(json_bytes)
                 .map_err(|err| DeclareCostError::WitnessDecode(err.to_string()))?;
+            ensure_witness_lens_metadata(&witness)?;
             let canonical = encode_canonical(&witness)
                 .map_err(|err| DeclareCostError::CanonicalEncode(err.0))?;
             Ok(WitnessInput::from_witness(witness, canonical))
         }
         (None, Some(cbor_bytes)) => WitnessInput::from_cbor_only(input, cbor_bytes.clone()),
+    }
+}
+
+fn ensure_witness_lens_metadata(witness: &Witness) -> Result<(), DeclareCostError> {
+    if witness.has_activation_metadata()
+        || witness
+            .schema_id
+            .as_deref()
+            .is_some_and(|schema| schema == "admissibility-witness/1")
+    {
+        Ok(())
+    } else {
+        Err(DeclareCostError::WitnessMissingLensMetadata)
     }
 }
 
@@ -355,6 +370,44 @@ pub fn check_cost_declared(
             actual: hash,
         });
     }
+    let witness_model = decode_cbor_to_value(&cbor_bytes).and_then(|val| {
+        serde_json::from_value::<Witness>(val)
+            .map_err(|err| DeclareCostError::WitnessDecode(err.to_string()))
+    })?;
+    ensure_witness_lens_metadata(&witness_model)?;
+    let requires_lens_activation = cost_event.witness.schema_id == "admissibility-witness/2"
+        || witness_model
+            .schema_id
+            .as_deref()
+            .is_some_and(|schema| schema == "admissibility-witness/2");
+    let (lens_id, lens_hash, lens_activation_event_id) = if requires_lens_activation {
+        let lens_id_value = if witness_model.lens_id.trim().is_empty() {
+            "lens:default@0".to_string()
+        } else {
+            witness_model.lens_id.clone()
+        };
+        let lens_hash_value = if witness_model.lens_hash.trim().is_empty() {
+            "lens:legacy".to_string()
+        } else {
+            witness_model.lens_hash.clone()
+        };
+        let activation_id = payload_hash(&LensActivatedPayload {
+            event_type: "lens.activated".to_string(),
+            timestamp: timestamp.clone(),
+            lens_id: lens_id_value.clone(),
+            lens_hash: lens_hash_value.clone(),
+            activation_reason: Some("check".to_string()),
+            program: cost_event.program.clone(),
+            registry_hash: registry_hash.clone(),
+        })?;
+        (
+            Some(lens_id_value),
+            Some(lens_hash_value),
+            Some(activation_id),
+        )
+    } else {
+        (None, None, None)
+    };
 
     let witness = cost_event.witness.clone();
     let compiler = CompilerRef {
@@ -386,6 +439,9 @@ pub fn check_cost_declared(
         program_bundle_ref: cost_event.program_bundle_ref.clone(),
         facts_bundle_ref: facts_bundle_ref.clone(),
         facts_bundle_hash: facts_bundle_hash.clone(),
+        lens_id: lens_id.clone(),
+        lens_hash: lens_hash.clone(),
+        lens_activation_event_id: lens_activation_event_id.clone(),
         program: cost_event.program.clone(),
         registry_hash: registry_hash.clone(),
     };
@@ -403,6 +459,9 @@ pub fn check_cost_declared(
         program_bundle_ref: checked_payload.program_bundle_ref,
         facts_bundle_ref: checked_payload.facts_bundle_ref,
         facts_bundle_hash: checked_payload.facts_bundle_hash,
+        lens_id,
+        lens_hash,
+        lens_activation_event_id,
         program: checked_payload.program,
         registry_hash,
     })
@@ -445,6 +504,9 @@ pub fn execute_checked(
         program_bundle_ref: checked_event.program_bundle_ref.clone(),
         facts_bundle_ref: checked_event.facts_bundle_ref.clone(),
         facts_bundle_hash: checked_event.facts_bundle_hash.clone(),
+        lens_id: checked_event.lens_id.clone(),
+        lens_hash: checked_event.lens_hash.clone(),
+        lens_activation_event_id: checked_event.lens_activation_event_id.clone(),
         program: checked_event.program.clone(),
         registry_hash: checked_event.registry_hash.clone(),
     };
@@ -505,6 +567,9 @@ pub fn execute_checked(
         program_bundle_ref: cost_event.program_bundle_ref.clone(),
         facts_bundle_ref: checked_event.facts_bundle_ref.clone(),
         facts_bundle_hash: checked_event.facts_bundle_hash.clone(),
+        lens_id: checked_event.lens_id.clone(),
+        lens_hash: checked_event.lens_hash.clone(),
+        lens_activation_event_id: checked_event.lens_activation_event_id.clone(),
         program: cost_event.program.clone(),
         registry_hash: registry_hash.clone(),
     };
@@ -523,6 +588,9 @@ pub fn execute_checked(
         program_bundle_ref: executed_payload.program_bundle_ref,
         facts_bundle_ref: executed_payload.facts_bundle_ref,
         facts_bundle_hash: executed_payload.facts_bundle_hash,
+        lens_id: executed_payload.lens_id,
+        lens_hash: executed_payload.lens_hash,
+        lens_activation_event_id: executed_payload.lens_activation_event_id,
         program: executed_payload.program,
         registry_hash,
     })

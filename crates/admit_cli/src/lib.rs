@@ -29,9 +29,11 @@ pub use types::*;
 // Ledger operations
 pub use ledger::{
     append_checked_event, append_engine_event, append_event, append_executed_event,
-    append_ingest_event, append_projection_event, build_engine_event, build_ingest_event,
-    build_projection_event, default_ledger_path, read_checked_event, read_cost_declared_event,
-    read_file_bytes,
+    append_ingest_event, append_lens_activated_event, append_meta_change_checked_event,
+    append_meta_interpretation_delta_event, append_projection_event, build_engine_event,
+    build_ingest_event, build_lens_activated_event, build_meta_change_checked_event,
+    build_meta_interpretation_delta_event, build_projection_event, default_ledger_path,
+    read_checked_event, read_cost_declared_event, read_file_bytes,
 };
 
 // Artifact operations
@@ -40,7 +42,7 @@ pub use artifact::{
 };
 
 // Registry operations
-pub use registry::{load_meta_registry, registry_build, registry_init};
+pub use registry::{load_meta_registry, registry_build, registry_init, registry_migrate_v0_v1};
 
 // Witness & cost lifecycle
 pub use witness::{check_cost_declared, declare_cost, execute_checked, verify_witness};

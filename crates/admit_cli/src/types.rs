@@ -14,6 +14,7 @@ pub enum DeclareCostError {
     WitnessSha256Required,
     WitnessHashMismatch { expected: String, actual: String },
     WitnessDecode(String),
+    WitnessMissingLensMetadata,
     CborDecode(String),
     CanonicalEncode(String),
     SnapshotHashRequired,
@@ -49,6 +50,13 @@ pub enum DeclareCostError {
     MetaRegistryInvalidCanonicalEncoding(String),
     MetaRegistryMissingSelfSchema,
     MetaRegistrySchemaVersionMismatch { expected: u32, found: u32 },
+    MetaRegistryMissingDefaultLens,
+    MetaRegistryUnknownDefaultLens(String),
+    MetaRegistryDuplicateLensId(String),
+    MetaRegistryDuplicateLensHash(String),
+    MetaRegistryDuplicateMetaChangeKind(String),
+    MetaRegistryMissingCoreBucket(String),
+    MetaRegistryDuplicateMetaBucket(String),
 }
 
 impl fmt::Display for DeclareCostError {
@@ -69,6 +77,9 @@ impl fmt::Display for DeclareCostError {
                 expected, actual
             ),
             DeclareCostError::WitnessDecode(err) => write!(f, "witness decode error: {}", err),
+            DeclareCostError::WitnessMissingLensMetadata => {
+                write!(f, "witness missing required lens activation metadata")
+            }
             DeclareCostError::CborDecode(err) => write!(f, "cbor decode error: {}", err),
             DeclareCostError::CanonicalEncode(err) => {
                 write!(f, "canonical encoding error: {}", err)
@@ -186,6 +197,31 @@ impl fmt::Display for DeclareCostError {
                     expected, found
                 )
             }
+            DeclareCostError::MetaRegistryMissingDefaultLens => {
+                write!(f, "meta registry missing default_lens")
+            }
+            DeclareCostError::MetaRegistryUnknownDefaultLens(lens_id) => {
+                write!(
+                    f,
+                    "meta registry default_lens not found in lenses[]: {}",
+                    lens_id
+                )
+            }
+            DeclareCostError::MetaRegistryDuplicateLensId(lens_id) => {
+                write!(f, "meta registry duplicate lens id: {}", lens_id)
+            }
+            DeclareCostError::MetaRegistryDuplicateLensHash(lens_hash) => {
+                write!(f, "meta registry duplicate lens hash: {}", lens_hash)
+            }
+            DeclareCostError::MetaRegistryDuplicateMetaChangeKind(kind_id) => {
+                write!(f, "meta registry duplicate meta_change kind: {}", kind_id)
+            }
+            DeclareCostError::MetaRegistryMissingCoreBucket(bucket_id) => {
+                write!(f, "meta registry missing core bucket: {}", bucket_id)
+            }
+            DeclareCostError::MetaRegistryDuplicateMetaBucket(bucket_id) => {
+                write!(f, "meta registry duplicate meta bucket: {}", bucket_id)
+            }
         }
     }
 }
@@ -264,6 +300,12 @@ pub struct AdmissibilityCheckedEvent {
     pub facts_bundle_ref: Option<ArtifactRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts_bundle_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_activation_event_id: Option<String>,
     pub program: ProgramRef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry_hash: Option<String>,
@@ -287,7 +329,60 @@ pub struct AdmissibilityExecutedEvent {
     pub facts_bundle_ref: Option<ArtifactRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts_bundle_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_activation_event_id: Option<String>,
     pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LensActivatedEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub lens_id: String,
+    pub lens_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_reason: Option<String>,
+    pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaChangeCheckedEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub kind: String,
+    pub from_lens_id: String,
+    pub from_lens_hash: String,
+    pub to_lens_id: String,
+    pub to_lens_hash: String,
+    pub payload_ref: String,
+    pub synthetic_diff_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaInterpretationDeltaEvent {
+    pub event_type: String,
+    pub event_id: String,
+    pub timestamp: String,
+    pub from_lens_id: String,
+    pub from_lens_hash: String,
+    pub to_lens_id: String,
+    pub to_lens_hash: String,
+    pub witness: ArtifactRef,
+    pub snapshot_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry_hash: Option<String>,
 }
@@ -478,18 +573,68 @@ pub struct ArtifactInput {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetaRegistryV0 {
+pub struct MetaRegistryV1 {
     pub schema_id: String,
     pub schema_version: u32,
     pub registry_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_at: Option<String>,
+    #[serde(default = "default_registry_default_lens")]
+    pub default_lens: MetaRegistryDefaultLens,
+    #[serde(default)]
+    pub lenses: Vec<MetaRegistryLens>,
+    #[serde(default)]
+    pub meta_change_kinds: Vec<MetaRegistryMetaChangeKind>,
+    #[serde(default)]
+    pub meta_buckets: Vec<MetaRegistryMetaBucket>,
     #[serde(default)]
     pub stdlib: Vec<MetaRegistryStdlib>,
     #[serde(default)]
     pub schemas: Vec<MetaRegistrySchema>,
     #[serde(default)]
     pub scopes: Vec<MetaRegistryScope>,
+}
+
+pub type MetaRegistryV0 = MetaRegistryV1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryDefaultLens {
+    pub lens_id: String,
+    pub lens_hash: String,
+}
+
+fn default_registry_default_lens() -> MetaRegistryDefaultLens {
+    MetaRegistryDefaultLens {
+        lens_id: "lens:default@0".to_string(),
+        lens_hash: "lens:default:pending".to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryLens {
+    pub lens_id: String,
+    pub lens_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryMetaChangeKind {
+    pub kind_id: String,
+    pub may_change_transform_space: bool,
+    pub may_change_constraints: bool,
+    pub may_change_accounting_routes: bool,
+    pub may_change_permissions: bool,
+    pub requires_manual_approval: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetaRegistryMetaBucket {
+    pub bucket_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -692,6 +837,12 @@ pub(crate) struct CheckedPayload {
     pub facts_bundle_ref: Option<ArtifactRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts_bundle_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_activation_event_id: Option<String>,
     pub program: ProgramRef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry_hash: Option<String>,
@@ -714,7 +865,57 @@ pub(crate) struct ExecutedPayload {
     pub facts_bundle_ref: Option<ArtifactRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts_bundle_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lens_activation_event_id: Option<String>,
     pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct LensActivatedPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub lens_id: String,
+    pub lens_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_reason: Option<String>,
+    pub program: ProgramRef,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MetaChangeCheckedPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub kind: String,
+    pub from_lens_id: String,
+    pub from_lens_hash: String,
+    pub to_lens_id: String,
+    pub to_lens_hash: String,
+    pub payload_ref: String,
+    pub synthetic_diff_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct MetaInterpretationDeltaPayload {
+    pub event_type: String,
+    pub timestamp: String,
+    pub from_lens_id: String,
+    pub from_lens_hash: String,
+    pub to_lens_id: String,
+    pub to_lens_hash: String,
+    pub witness: ArtifactRef,
+    pub snapshot_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry_hash: Option<String>,
 }

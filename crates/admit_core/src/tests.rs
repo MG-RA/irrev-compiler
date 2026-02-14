@@ -77,6 +77,17 @@ mod tests {
     }
 
     #[test]
+    fn admissibility_witness_v2_hash_is_pinned() {
+        let witness = allow_erasure_witness();
+        let actual_hash = canonical_hash(&witness).expect("hash canonical witness");
+        assert_eq!(
+            actual_hash,
+            "4b09904735046be2aebab585bc974fba206f25e78600d03481b505313fa67055",
+            "admissibility-witness/2 canonical hash changed - update pin intentionally if schema changes"
+        );
+    }
+
+    #[test]
     fn golden_scope_widen_unaccounted_matches_fixture() {
         let witness = scope_widen_unaccounted_witness();
         assert_eq!(witness.verdict, Verdict::Inadmissible);
@@ -388,11 +399,7 @@ mod tests {
             let json = serde_json::to_string_pretty(witness).unwrap();
             let hash = canonical_hash(witness).unwrap();
             fs::write(golden_fixture_path(&format!("{}.json", name)), &json).unwrap();
-            fs::write(
-                golden_fixture_path(&format!("{}.cbor.sha256", name)),
-                &hash,
-            )
-            .unwrap();
+            fs::write(golden_fixture_path(&format!("{}.cbor.sha256", name)), &hash).unwrap();
             println!("WROTE {}: hash={}", name, hash);
         }
     }
@@ -699,9 +706,10 @@ mod tests {
         assert_eq!(witness.verdict, Verdict::Inadmissible);
 
         // ConstraintTriggered fact should carry invariant: Some("governance")
-        let ct = witness.facts.iter().find(|f| {
-            matches!(f, Fact::ConstraintTriggered { .. })
-        });
+        let ct = witness
+            .facts
+            .iter()
+            .find(|f| matches!(f, Fact::ConstraintTriggered { .. }));
         assert!(ct.is_some(), "should have ConstraintTriggered fact");
         if let Some(Fact::ConstraintTriggered { invariant, .. }) = ct {
             assert_eq!(invariant, &Some("governance".to_string()));
@@ -965,12 +973,15 @@ mod tests {
         .expect("eval");
 
         // Last-write-wins: attribution
-        assert!(witness.invariants_touched().contains(&"attribution".to_string()));
+        assert!(witness
+            .invariants_touched()
+            .contains(&"attribution".to_string()));
 
         // Should have a meta-conflict LintFinding
-        let conflict_finding = witness.facts.iter().find(|f| {
-            matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == "meta-conflict")
-        });
+        let conflict_finding = witness
+            .facts
+            .iter()
+            .find(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == "meta-conflict"));
         assert!(
             conflict_finding.is_some(),
             "should emit meta-conflict lint finding"

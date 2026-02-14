@@ -18,10 +18,13 @@ use admit_surrealdb::{
 use admit_cli::scope_obsidian as obsidian_adapter;
 use admit_cli::{
     append_checked_event, append_event, append_executed_event, append_ingest_event,
-    append_plan_created_event, append_projection_event, build_projection_event,
-    check_cost_declared, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
-    execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
-    parse_plan_answers_markdown, read_file_bytes, registry_build, registry_init,
+    append_lens_activated_event, append_meta_change_checked_event,
+    append_meta_interpretation_delta_event, append_plan_created_event, append_projection_event,
+    build_lens_activated_event, build_meta_change_checked_event,
+    build_meta_interpretation_delta_event, build_projection_event, check_cost_declared, create_plan,
+    declare_cost, default_artifacts_dir, default_ledger_path, execute_checked, export_plan_markdown,
+    ingest_dir_protocol_with_cache, init_project, load_meta_registry, parse_plan_answers_markdown,
+    read_file_bytes, registry_build, registry_init, registry_migrate_v0_v1,
     render_plan_prompt_template, render_plan_text, resolve_scope_enablement, scope_add, scope_list,
     scope_show, scope_verify, store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
     DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanNewInput,
@@ -341,6 +344,8 @@ enum Commands {
     Ledger(LedgerArgs),
     /// Bundle operations.
     Bundle(BundleArgs),
+    /// Lens operations (activation lineage and interpretation deltas).
+    Lens(LensArgs),
     /// Evaluate admissibility from event or executable ruleset.
     Check(CheckArgs),
     /// Execute an already checked admissible action.
@@ -427,7 +432,7 @@ struct DeclareCostArgs {
     /// Expected SHA256 hash of canonical CBOR witness bytes
     #[arg(long)]
     witness_sha256: Option<String>,
-    /// Witness schema id (default: admissibility-witness/1)
+    /// Witness schema id (default: admissibility-witness/2)
     #[arg(long)]
     witness_schema_id: Option<String>,
     /// Compiler build identifier (version or commit)
@@ -577,6 +582,100 @@ struct BundleVerifyArgs {
     /// Output JSON instead of key=value lines
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Parser)]
+struct LensArgs {
+    #[command(subcommand)]
+    command: LensCommands,
+}
+
+#[derive(Subcommand)]
+enum LensCommands {
+    /// Validate and record a governed lens amendment as meta.change.checked.
+    Update(LensUpdateArgs),
+    /// Compare two witness projections and emit a deterministic lens delta artifact.
+    Delta(LensDeltaArgs),
+}
+
+#[derive(Parser)]
+struct LensUpdateArgs {
+    /// Source lens id (e.g. lens:default@0)
+    #[arg(long, value_name = "LENS_ID")]
+    from_lens: String,
+    /// Meta-change kind id declared in meta-registry (e.g. lens_amendment)
+    #[arg(long, value_name = "KIND_ID")]
+    kind: String,
+    /// Payload reference used to derive to_lens_hash
+    #[arg(long, value_name = "REF")]
+    payload_ref: String,
+    /// Optional destination lens id label; if present, binding must match derived hash
+    #[arg(long, value_name = "LENS_ID")]
+    to_lens: Option<String>,
+    /// Route in form bucket_id=value:unit (repeatable)
+    #[arg(long = "route", value_name = "BUCKET=VALUE:UNIT")]
+    routes: Vec<String>,
+    /// Declares transform-space capability usage for this update
+    #[arg(long)]
+    change_transform_space: bool,
+    /// Declares constraint-set capability usage for this update
+    #[arg(long)]
+    change_constraints: bool,
+    /// Declares accounting-route capability usage for this update
+    #[arg(long)]
+    change_accounting_routes: bool,
+    /// Declares permission capability usage for this update
+    #[arg(long)]
+    change_permissions: bool,
+    /// Required for kinds that set requires_manual_approval=true
+    #[arg(long)]
+    approve: bool,
+    /// Timestamp string for meta.change.checked event (default: current UTC ISO-8601)
+    #[arg(long)]
+    timestamp: Option<String>,
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+    /// Do not append meta.change.checked event to ledger
+    #[arg(long)]
+    dry_run: bool,
+}
+
+#[derive(Parser)]
+struct LensDeltaArgs {
+    /// Baseline witness JSON/CBOR path
+    #[arg(long, value_name = "PATH")]
+    baseline: PathBuf,
+    /// Candidate witness JSON/CBOR path
+    #[arg(long, value_name = "PATH")]
+    candidate: PathBuf,
+    /// Snapshot hash that both witnesses are evaluated against
+    #[arg(long, value_name = "SHA256")]
+    snapshot_hash: String,
+    /// Timestamp string for meta.interpretation.delta event (default: current UTC ISO-8601)
+    #[arg(long)]
+    timestamp: Option<String>,
+    /// Path to meta registry JSON (or set ADMIT_META_REGISTRY)
+    #[arg(long, value_name = "PATH")]
+    meta_registry: Option<PathBuf>,
+    /// Ledger path (default: out/ledger.jsonl)
+    #[arg(long)]
+    ledger: Option<PathBuf>,
+    /// Artifact store root (default: out/artifacts)
+    #[arg(long)]
+    artifacts_dir: Option<PathBuf>,
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+    /// Do not append meta.interpretation.delta event to ledger
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Parser)]
@@ -812,7 +911,7 @@ enum VaultCommands {
     Links(VaultLinksArgs),
     /// Extract external docs into typed vault artifacts.
     Docs(VaultDocsArgs),
-    /// Concept spine utilities (Concept → Invariant mapping).
+    /// Concept spine utilities (Concept -> Invariant mapping).
     Spines(VaultSpinesArgs),
     /// Build a dependency-ordered concept book export.
     Book(VaultBookArgs),
@@ -938,9 +1037,9 @@ struct VaultSpinesArgs {
 
 #[derive(Subcommand)]
 enum VaultSpinesCommands {
-    /// Generate a Concept → Spine index (YAML + Markdown view) from the current vault.
+    /// Generate a Concept -> Spine index (YAML + Markdown view) from the current vault.
     Generate(VaultSpinesGenerateArgs),
-    /// Render a Markdown view from an existing Concept → Spine YAML index.
+    /// Render a Markdown view from an existing Concept -> Spine YAML index.
     Render(VaultSpinesRenderArgs),
     /// Audit concept coverage and ambiguity (invariants/diagnostics).
     Audit(VaultSpinesAuditArgs),
@@ -1643,6 +1742,7 @@ struct ProjectionRetryArgs {
 enum RegistryCommands {
     Init(RegistryInitArgs),
     Build(RegistryBuildArgs),
+    Migrate(RegistryMigrateArgs),
     Verify(RegistryVerifyArgs),
     ScopeAdd(ScopeAddArgs),
     ScopeVerify(ScopeVerifyArgs),
@@ -1665,6 +1765,16 @@ struct RegistryBuildArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct RegistryMigrateArgs {
+    /// Input v0 registry JSON path
+    #[arg(long, value_name = "PATH", default_value = "out/meta-registry.json")]
+    input: PathBuf,
+    /// Output migrated v1 registry JSON path
+    #[arg(long, value_name = "PATH", default_value = "out/meta-registry.v1.json")]
+    out: PathBuf,
 }
 
 #[derive(Parser)]
@@ -1992,6 +2102,7 @@ fn main() {
         Commands::Bundle(args) => match args.command {
             BundleCommands::Verify(verify_args) => run_bundle_verify(verify_args, dag_trace_out),
         },
+        Commands::Lens(args) => run_lens(args, dag_trace_out),
         Commands::Check(args) => run_check(args, dag_trace_out, &mut projection),
         Commands::Execute(args) => run_execute(args, dag_trace_out, &mut projection),
         Commands::Observe(args) => run_observe(args, dag_trace_out),
@@ -2331,6 +2442,19 @@ fn run_check(
     }
 
     if !args.dry_run {
+        if let (Some(lens_id), Some(lens_hash)) = (event.lens_id.clone(), event.lens_hash.clone()) {
+            let lens_event = build_lens_activated_event(
+                event.timestamp.clone(),
+                lens_id,
+                lens_hash,
+                Some("check".to_string()),
+                event.program.clone(),
+                event.registry_hash.clone(),
+            )
+            .map_err(|err| err.to_string())?;
+            append_lens_activated_event(&ledger_path, &lens_event)
+                .map_err(|err| err.to_string())?;
+        }
         append_checked_event(&ledger_path, &event).map_err(|err| err.to_string())?;
     }
 
@@ -2462,6 +2586,10 @@ fn load_ruleset_input_bundles(
 fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), String> {
     let input_bundles = load_ruleset_input_bundles(&args)?;
     let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let ledger_path = args
+        .ledger
+        .clone()
+        .unwrap_or_else(|| artifacts_dir.join("ledger.jsonl"));
     let ruleset_bytes =
         read_file_bytes(&ruleset_path).map_err(|err| format!("read ruleset: {}", err))?;
     let ruleset: RuleSet =
@@ -2473,16 +2601,29 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
         (!input_bundles.is_empty()).then_some(&input_bundles),
     )
     .map_err(|err| err.0)?;
+    let mut witness = outcome.witness.clone();
+    let lens_activation_event = build_lens_activated_event(
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+        witness.lens_id.clone(),
+        witness.lens_hash.clone(),
+        Some("ruleset_check".to_string()),
+        admit_core::ProgramRef {
+            module: witness.program.module.0.clone(),
+            scope: witness.program.scope.0.clone(),
+        },
+        None,
+    )
+    .map_err(|err| err.to_string())?;
+    witness.lens_activation_event_id = lens_activation_event.event_id.clone();
     let witness_value =
-        serde_json::to_value(&outcome.witness).map_err(|err| format!("witness encode: {}", err))?;
+        serde_json::to_value(&witness).map_err(|err| format!("witness encode: {}", err))?;
     let ruleset_value =
         serde_json::to_value(&ruleset).map_err(|err| format!("ruleset encode: {}", err))?;
 
-    let witness_schema_id = outcome
-        .witness
+    let witness_schema_id = witness
         .schema_id
         .as_deref()
-        .unwrap_or("admissibility-witness/1");
+        .unwrap_or("admissibility-witness/2");
     let witness_artifact = store_value_artifact(
         artifacts_dir.as_path(),
         "witness",
@@ -2497,6 +2638,10 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
         &ruleset_value,
     )
     .map_err(|err| err.to_string())?;
+    if !args.dry_run {
+        append_lens_activated_event(&ledger_path, &lens_activation_event)
+            .map_err(|err| err.to_string())?;
+    }
 
     let verdict = match outcome.witness.verdict {
         admit_core::Verdict::Admissible => "admissible",
@@ -2523,7 +2668,7 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
             "witness_artifact": witness_artifact,
             "verdict": verdict,
             "rule_results": outcome.rule_results,
-            "witness": outcome.witness,
+            "witness": witness,
         }))
         .map_err(|err| format!("json encode: {}", err))?;
         println!("{}", json);
@@ -2703,6 +2848,687 @@ fn run_bundle_verify(args: BundleVerifyArgs, _dag_trace_out: Option<&Path>) -> R
     }
 
     Ok(())
+}
+
+fn run_lens(args: LensArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    match args.command {
+        LensCommands::Update(update_args) => run_lens_update(update_args),
+        LensCommands::Delta(delta_args) => run_lens_delta(delta_args),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ParsedLensRoute {
+    bucket: String,
+    unit: String,
+    normalized: String,
+}
+
+fn run_lens_update(args: LensUpdateArgs) -> Result<(), String> {
+    let from_lens_id = normalize_lens_id(&args.from_lens)
+        .ok_or_else(|| "from_lens cannot be empty".to_string())?;
+    let kind_id = args.kind.trim().to_string();
+    if kind_id.is_empty() {
+        return Err("kind cannot be empty".to_string());
+    }
+    let payload_ref = args.payload_ref.trim().to_string();
+    if payload_ref.is_empty() {
+        return Err("payload_ref cannot be empty".to_string());
+    }
+    if args.routes.is_empty() {
+        return Err("meta change requires at least one --route".to_string());
+    }
+
+    let declared_caps = [
+        args.change_transform_space,
+        args.change_constraints,
+        args.change_accounting_routes,
+        args.change_permissions,
+    ];
+    if !declared_caps.into_iter().any(|v| v) {
+        return Err(
+            "meta change requires explicit capability allow via at least one --change-* flag"
+                .to_string(),
+        );
+    }
+
+    let (registry, registry_hash) = load_meta_registry(args.meta_registry.as_deref())
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| {
+            "meta registry is required for lens update (use --meta-registry or ADMIT_META_REGISTRY)"
+                .to_string()
+        })?;
+
+    let from_lens = registry
+        .lenses
+        .iter()
+        .find(|lens| lens.lens_id == from_lens_id)
+        .ok_or_else(|| format!("unknown lens '{}'", from_lens_id))?;
+    let kind = registry
+        .meta_change_kinds
+        .iter()
+        .find(|entry| entry.kind_id == kind_id)
+        .ok_or_else(|| format!("unknown meta-change kind '{}'", kind_id))?;
+
+    if args.change_transform_space && !kind.may_change_transform_space {
+        return Err(format!(
+            "meta-change kind '{}' does not allow transform-space changes",
+            kind.kind_id
+        ));
+    }
+    if args.change_constraints && !kind.may_change_constraints {
+        return Err(format!(
+            "meta-change kind '{}' does not allow constraint changes",
+            kind.kind_id
+        ));
+    }
+    if args.change_accounting_routes && !kind.may_change_accounting_routes {
+        return Err(format!(
+            "meta-change kind '{}' does not allow accounting-route changes",
+            kind.kind_id
+        ));
+    }
+    if args.change_permissions && !kind.may_change_permissions {
+        return Err(format!(
+            "meta-change kind '{}' does not allow permission changes",
+            kind.kind_id
+        ));
+    }
+    if kind.requires_manual_approval && !args.approve {
+        return Err(format!(
+            "meta-change kind '{}' requires manual approval (pass --approve)",
+            kind.kind_id
+        ));
+    }
+
+    let parsed_routes = args
+        .routes
+        .iter()
+        .map(|raw| parse_lens_route(raw))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut normalized_routes = Vec::with_capacity(parsed_routes.len());
+    for route in parsed_routes {
+        let bucket = registry
+            .meta_buckets
+            .iter()
+            .find(|entry| entry.bucket_id == route.bucket)
+            .ok_or_else(|| format!("unknown route bucket '{}'", route.bucket))?;
+        if let Some(expected_unit) = bucket.unit.as_ref() {
+            if expected_unit != &route.unit {
+                return Err(format!(
+                    "route unit mismatch for '{}': expected '{}', found '{}'",
+                    route.bucket, expected_unit, route.unit
+                ));
+            }
+        }
+        normalized_routes.push(route.normalized);
+    }
+
+    let to_lens_hash = derive_to_lens_hash(&from_lens.lens_hash, &kind_id, &payload_ref);
+    let to_lens_id = if let Some(to_lens_raw) = args.to_lens.as_ref() {
+        let to_lens_id = normalize_lens_id(to_lens_raw)
+            .ok_or_else(|| "to_lens cannot be empty when provided".to_string())?;
+        let binding = registry
+            .lenses
+            .iter()
+            .find(|lens| lens.lens_id == to_lens_id)
+            .ok_or_else(|| format!("unknown lens '{}'", to_lens_id))?;
+        if binding.lens_hash != to_lens_hash {
+            return Err(format!(
+                "hash mismatch for to_lens binding '{}': registry='{}', derived='{}'",
+                to_lens_id, binding.lens_hash, to_lens_hash
+            ));
+        }
+        to_lens_id
+    } else {
+        format!(
+            "lens:derived:{}@0",
+            &to_lens_hash[..12.min(to_lens_hash.len())]
+        )
+    };
+
+    let synthetic_diff_id = format!(
+        "difference:lens_change:{}->{}:{}",
+        from_lens.lens_hash, to_lens_hash, kind_id
+    );
+    let timestamp = args
+        .timestamp
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    let event = build_meta_change_checked_event(
+        timestamp,
+        kind_id.clone(),
+        from_lens.lens_id.clone(),
+        from_lens.lens_hash.clone(),
+        to_lens_id.clone(),
+        to_lens_hash.clone(),
+        payload_ref.clone(),
+        synthetic_diff_id.clone(),
+        normalized_routes.clone(),
+        Some(registry_hash),
+    )
+    .map_err(|err| err.to_string())?;
+
+    if !args.dry_run {
+        let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
+        append_meta_change_checked_event(&ledger_path, &event).map_err(|err| err.to_string())?;
+    }
+
+    if args.json {
+        let output = serde_json::to_string_pretty(&serde_json::json!({
+            "command": "lens_update",
+            "kind": kind_id,
+            "from_lens": {
+                "lens_id": from_lens.lens_id,
+                "lens_hash": from_lens.lens_hash,
+            },
+            "to_lens": {
+                "lens_id": to_lens_id,
+                "lens_hash": to_lens_hash,
+            },
+            "payload_ref": payload_ref,
+            "synthetic_diff_id": synthetic_diff_id,
+            "routes": normalized_routes,
+            "meta_change_checked_event": event,
+            "dry_run": args.dry_run
+        }))
+        .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", output);
+    } else {
+        println!("kind={}", kind_id);
+        println!("from_lens_id={}", from_lens.lens_id);
+        println!("from_lens_hash={}", from_lens.lens_hash);
+        println!("to_lens_id={}", to_lens_id);
+        println!("to_lens_hash={}", to_lens_hash);
+        println!("payload_ref={}", payload_ref);
+        println!("synthetic_diff_id={}", synthetic_diff_id);
+        println!("routes={}", normalized_routes.join(","));
+        if !args.dry_run {
+            println!("meta_change_checked_event_id={}", event.event_id);
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_lens_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("lens:") {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("lens:{}", trimmed))
+    }
+}
+
+fn parse_lens_route(raw: &str) -> Result<ParsedLensRoute, String> {
+    let trimmed = raw.trim();
+    let (bucket_raw, rest) = trimmed
+        .split_once('=')
+        .ok_or_else(|| format!("invalid route '{}': expected BUCKET=VALUE:UNIT", raw))?;
+    let (value_raw, unit_raw) = rest
+        .split_once(':')
+        .ok_or_else(|| format!("invalid route '{}': expected BUCKET=VALUE:UNIT", raw))?;
+    let bucket = bucket_raw.trim();
+    let value = value_raw.trim();
+    let unit = unit_raw.trim();
+    if bucket.is_empty() || value.is_empty() || unit.is_empty() {
+        return Err(format!(
+            "invalid route '{}': expected non-empty BUCKET=VALUE:UNIT",
+            raw
+        ));
+    }
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("invalid route '{}': VALUE must be numeric", raw))?;
+    if !parsed.is_finite() {
+        return Err(format!("invalid route '{}': VALUE must be finite", raw));
+    }
+    Ok(ParsedLensRoute {
+        bucket: bucket.to_string(),
+        unit: unit.to_string(),
+        normalized: format!("{}={}:{}", bucket, value, unit),
+    })
+}
+
+fn derive_to_lens_hash(from_lens_hash: &str, kind: &str, payload_ref: &str) -> String {
+    let payload = serde_json::json!({
+        "from_lens_hash": from_lens_hash,
+        "kind": kind,
+        "payload_ref": payload_ref,
+    });
+    hex::encode(sha2::Sha256::digest(payload.to_string().as_bytes()))
+}
+
+fn run_lens_delta(args: LensDeltaArgs) -> Result<(), String> {
+    if args.snapshot_hash.trim().is_empty() {
+        return Err("snapshot_hash cannot be empty".to_string());
+    }
+
+    let baseline = read_witness_from_path(&args.baseline)
+        .map_err(|err| format!("baseline witness: {}", err))?;
+    let candidate = read_witness_from_path(&args.candidate)
+        .map_err(|err| format!("candidate witness: {}", err))?;
+
+    if let Some(hash) = baseline.program.snapshot_hash.as_ref() {
+        if hash != &args.snapshot_hash {
+            return Err(format!(
+                "baseline snapshot hash mismatch: witness has '{}', command has '{}'",
+                hash, args.snapshot_hash
+            ));
+        }
+    }
+    if let Some(hash) = candidate.program.snapshot_hash.as_ref() {
+        if hash != &args.snapshot_hash {
+            return Err(format!(
+                "candidate snapshot hash mismatch: witness has '{}', command has '{}'",
+                hash, args.snapshot_hash
+            ));
+        }
+    }
+
+    let from_lens = lens_handle_from_witness(&baseline, "baseline")?;
+    let to_lens = lens_handle_from_witness(&candidate, "candidate")?;
+    let rows = build_lens_delta_rows(&baseline, &candidate);
+    let delta_witness = admit_core::LensDeltaWitness::new(
+        from_lens.clone(),
+        to_lens.clone(),
+        args.snapshot_hash.clone(),
+        rows,
+    );
+
+    let (registry, registry_hash) = load_meta_registry(args.meta_registry.as_deref())
+        .map_err(|err| err.to_string())?
+        .map_or((None, None), |(registry, hash)| {
+            (Some(registry), Some(hash))
+        });
+    if let Some(registry) = registry.as_ref() {
+        if !registry
+            .schemas
+            .iter()
+            .any(|schema| schema.id == admit_core::DEFAULT_LENS_DELTA_SCHEMA_ID)
+        {
+            return Err(format!(
+                "meta registry missing schema_id '{}'",
+                admit_core::DEFAULT_LENS_DELTA_SCHEMA_ID
+            ));
+        }
+    }
+
+    let artifacts_dir = args.artifacts_dir.unwrap_or_else(default_artifacts_dir);
+    let delta_value = serde_json::to_value(&delta_witness)
+        .map_err(|err| format!("lens delta encode: {}", err))?;
+    let delta_artifact = store_value_artifact(
+        artifacts_dir.as_path(),
+        "lens_delta",
+        admit_core::DEFAULT_LENS_DELTA_SCHEMA_ID,
+        &delta_value,
+    )
+    .map_err(|err| err.to_string())?;
+
+    let timestamp = args
+        .timestamp
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    let ledger_event = build_meta_interpretation_delta_event(
+        timestamp.clone(),
+        from_lens.lens_id.clone(),
+        from_lens.lens_hash.clone(),
+        to_lens.lens_id.clone(),
+        to_lens.lens_hash.clone(),
+        delta_artifact.clone(),
+        args.snapshot_hash.clone(),
+        registry_hash.clone(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    if !args.dry_run {
+        let ledger_path = args.ledger.unwrap_or_else(default_ledger_path);
+        append_meta_interpretation_delta_event(&ledger_path, &ledger_event)
+            .map_err(|err| err.to_string())?;
+    }
+
+    if args.json {
+        let output = serde_json::to_string_pretty(&serde_json::json!({
+            "command": "lens_delta",
+            "from_lens": from_lens,
+            "to_lens": to_lens,
+            "snapshot_hash": args.snapshot_hash,
+            "witness_artifact": delta_artifact,
+            "meta_interpretation_delta_event": ledger_event,
+            "dry_run": args.dry_run,
+        }))
+        .map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", output);
+    } else {
+        println!("from_lens_id={}", from_lens.lens_id);
+        println!("from_lens_hash={}", from_lens.lens_hash);
+        println!("to_lens_id={}", to_lens.lens_id);
+        println!("to_lens_hash={}", to_lens.lens_hash);
+        println!("snapshot_hash={}", args.snapshot_hash);
+        println!("lens_delta_witness_sha256={}", delta_artifact.sha256);
+        if !args.dry_run {
+            println!(
+                "meta_interpretation_delta_event_id={}",
+                ledger_event.event_id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn read_witness_from_path(path: &Path) -> Result<admit_core::Witness, String> {
+    let bytes = read_file_bytes(path).map_err(|err| err.to_string())?;
+    if let Ok(witness) = serde_json::from_slice::<admit_core::Witness>(&bytes) {
+        return Ok(witness);
+    }
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+        if let Ok(witness) = witness_from_json_value(value) {
+            return Ok(witness);
+        }
+    }
+    if let Ok(value) = serde_cbor::from_slice::<serde_json::Value>(&bytes) {
+        if let Ok(witness) = witness_from_json_value(value) {
+            return Ok(witness);
+        }
+    }
+    Err(format!(
+        "unable to decode witness from '{}'; expected witness JSON, witness wrapper JSON, or canonical CBOR",
+        path.display()
+    ))
+}
+
+fn witness_from_json_value(value: serde_json::Value) -> Result<admit_core::Witness, String> {
+    if let Ok(witness) = serde_json::from_value::<admit_core::Witness>(value.clone()) {
+        return Ok(witness);
+    }
+    let witness_value = value
+        .get("witness")
+        .cloned()
+        .ok_or_else(|| "missing 'witness' payload".to_string())?;
+    serde_json::from_value::<admit_core::Witness>(witness_value)
+        .map_err(|err| format!("decode witness payload: {}", err))
+}
+
+fn lens_handle_from_witness(
+    witness: &admit_core::Witness,
+    role: &str,
+) -> Result<admit_core::LensHandle, String> {
+    if witness.lens_id.trim().is_empty() || witness.lens_hash.trim().is_empty() {
+        return Err(format!(
+            "{} witness missing lens metadata; expected admissibility-witness/2",
+            role
+        ));
+    }
+    Ok(admit_core::LensHandle {
+        lens_id: witness.lens_id.clone(),
+        lens_hash: witness.lens_hash.clone(),
+    })
+}
+
+#[derive(Clone)]
+struct CounterWithLoc {
+    count: usize,
+    source_file: Option<String>,
+    line: Option<u32>,
+    col: Option<u32>,
+}
+
+impl CounterWithLoc {
+    fn from_span(span: &admit_core::Span) -> Self {
+        Self {
+            count: 0,
+            source_file: Some(span.file.clone()),
+            line: span.line,
+            col: span.col,
+        }
+    }
+
+    fn maybe_update_loc(&mut self, span: &admit_core::Span) {
+        let current = (
+            self.source_file.clone().unwrap_or_default(),
+            self.line.unwrap_or(0),
+            self.col.unwrap_or(0),
+        );
+        let candidate = (
+            span.file.clone(),
+            span.line.unwrap_or(0),
+            span.col.unwrap_or(0),
+        );
+        if candidate < current {
+            self.source_file = Some(span.file.clone());
+            self.line = span.line;
+            self.col = span.col;
+        }
+    }
+}
+
+fn build_lens_delta_rows(
+    baseline: &admit_core::Witness,
+    candidate: &admit_core::Witness,
+) -> Vec<admit_core::LensDeltaRow> {
+    let mut rows = Vec::new();
+
+    let before_verdict = verdict_label(&baseline.verdict);
+    let after_verdict = verdict_label(&candidate.verdict);
+    if before_verdict != after_verdict {
+        rows.push(admit_core::LensDeltaRow {
+            section: "verdict_changes".to_string(),
+            stable_id: "verdict".to_string(),
+            source_file: None,
+            line: None,
+            col: None,
+            before: before_verdict.to_string(),
+            after: after_verdict.to_string(),
+        });
+    }
+
+    let baseline_constraints = constraint_trigger_counts(baseline);
+    let candidate_constraints = constraint_trigger_counts(candidate);
+    let constraint_ids: BTreeSet<String> = baseline_constraints
+        .keys()
+        .chain(candidate_constraints.keys())
+        .cloned()
+        .collect();
+    for stable_id in constraint_ids {
+        let before = baseline_constraints
+            .get(&stable_id)
+            .map(|entry| entry.count)
+            .unwrap_or(0);
+        let after = candidate_constraints
+            .get(&stable_id)
+            .map(|entry| entry.count)
+            .unwrap_or(0);
+        if before != after {
+            let loc = earliest_loc(
+                baseline_constraints.get(&stable_id),
+                candidate_constraints.get(&stable_id),
+            );
+            rows.push(admit_core::LensDeltaRow {
+                section: "constraint_trigger_changes".to_string(),
+                stable_id,
+                source_file: loc.0,
+                line: loc.1,
+                col: loc.2,
+                before: before.to_string(),
+                after: after.to_string(),
+            });
+        }
+    }
+
+    let baseline_totals = displacement_total_map(baseline);
+    let candidate_totals = displacement_total_map(candidate);
+    let total_ids: BTreeSet<String> = baseline_totals
+        .keys()
+        .chain(candidate_totals.keys())
+        .cloned()
+        .collect();
+    for stable_id in total_ids {
+        let before = baseline_totals.get(&stable_id).cloned().unwrap_or_default();
+        let after = candidate_totals
+            .get(&stable_id)
+            .cloned()
+            .unwrap_or_default();
+        if before != after {
+            rows.push(admit_core::LensDeltaRow {
+                section: "displacement_total_changes".to_string(),
+                stable_id,
+                source_file: None,
+                line: None,
+                col: None,
+                before,
+                after,
+            });
+        }
+    }
+
+    let baseline_invariants = invariant_profile_map(baseline);
+    let candidate_invariants = invariant_profile_map(candidate);
+    let invariant_ids: BTreeSet<String> = baseline_invariants
+        .keys()
+        .chain(candidate_invariants.keys())
+        .cloned()
+        .collect();
+    for stable_id in invariant_ids {
+        let before = baseline_invariants
+            .get(&stable_id)
+            .cloned()
+            .unwrap_or_default();
+        let after = candidate_invariants
+            .get(&stable_id)
+            .cloned()
+            .unwrap_or_default();
+        if before != after {
+            rows.push(admit_core::LensDeltaRow {
+                section: "invariant_profile_changes".to_string(),
+                stable_id,
+                source_file: None,
+                line: None,
+                col: None,
+                before,
+                after,
+            });
+        }
+    }
+
+    rows
+}
+
+fn earliest_loc(
+    left: Option<&CounterWithLoc>,
+    right: Option<&CounterWithLoc>,
+) -> (Option<String>, Option<u32>, Option<u32>) {
+    match (left, right) {
+        (Some(l), Some(r)) => {
+            let lk = (
+                l.source_file.clone().unwrap_or_default(),
+                l.line.unwrap_or(0),
+                l.col.unwrap_or(0),
+            );
+            let rk = (
+                r.source_file.clone().unwrap_or_default(),
+                r.line.unwrap_or(0),
+                r.col.unwrap_or(0),
+            );
+            if lk <= rk {
+                (l.source_file.clone(), l.line, l.col)
+            } else {
+                (r.source_file.clone(), r.line, r.col)
+            }
+        }
+        (Some(l), None) => (l.source_file.clone(), l.line, l.col),
+        (None, Some(r)) => (r.source_file.clone(), r.line, r.col),
+        (None, None) => (None, None, None),
+    }
+}
+
+fn constraint_trigger_counts(witness: &admit_core::Witness) -> BTreeMap<String, CounterWithLoc> {
+    let mut map: BTreeMap<String, CounterWithLoc> = BTreeMap::new();
+    for fact in &witness.facts {
+        if let admit_core::Fact::ConstraintTriggered {
+            constraint_id,
+            invariant,
+            span,
+        } = fact
+        {
+            let stable_id = match constraint_id {
+                Some(id) => format!("constraint:{}:{}", symbol_namespace_label(&id.ns), id.name),
+                None => format!(
+                    "constraint:anonymous:{}",
+                    invariant.as_deref().unwrap_or("none")
+                ),
+            };
+            let entry = map
+                .entry(stable_id)
+                .or_insert_with(|| CounterWithLoc::from_span(span));
+            entry.count += 1;
+            entry.maybe_update_loc(span);
+        }
+    }
+    map
+}
+
+fn displacement_total_map(witness: &admit_core::Witness) -> BTreeMap<String, String> {
+    witness
+        .displacement_trace
+        .totals
+        .iter()
+        .map(|total| {
+            (
+                format!(
+                    "bucket:{}:{}",
+                    symbol_namespace_label(&total.bucket.ns),
+                    total.bucket.name
+                ),
+                quantity_string(&total.total),
+            )
+        })
+        .collect()
+}
+
+fn invariant_profile_map(witness: &admit_core::Witness) -> BTreeMap<String, String> {
+    witness
+        .invariant_profile
+        .summaries
+        .iter()
+        .map(|summary| {
+            let constraints = summary
+                .constraint_ids
+                .iter()
+                .map(|id| format!("{}:{}", symbol_namespace_label(&id.ns), id.name))
+                .collect::<Vec<_>>()
+                .join(",");
+            (
+                format!("invariant:{}", summary.invariant),
+                format!(
+                    "triggered={};findings={};constraints={}",
+                    summary.triggered_count, summary.finding_count, constraints
+                ),
+            )
+        })
+        .collect()
+}
+
+fn quantity_string(value: &admit_core::Quantity) -> String {
+    format!("{} {}", value.value, value.unit)
+}
+
+fn verdict_label(verdict: &admit_core::Verdict) -> &'static str {
+    match verdict {
+        admit_core::Verdict::Admissible => "admissible",
+        admit_core::Verdict::Inadmissible => "inadmissible",
+    }
+}
+
+fn symbol_namespace_label(namespace: &admit_core::SymbolNamespace) -> &'static str {
+    match namespace {
+        admit_core::SymbolNamespace::Difference => "difference",
+        admit_core::SymbolNamespace::Transform => "transform",
+        admit_core::SymbolNamespace::Bucket => "bucket",
+        admit_core::SymbolNamespace::Constraint => "constraint",
+        admit_core::SymbolNamespace::Scope => "scope",
+        admit_core::SymbolNamespace::Module => "module",
+    }
 }
 
 fn run_observe(args: ObserveArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
@@ -2914,6 +3740,13 @@ fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(),
                 registry_build(&build_args.input, &artifacts_dir).map_err(|err| err.to_string())?;
             println!("registry_hash={}", reference.sha256);
             println!("registry_path={}", reference.path.unwrap_or_default());
+            Ok(())
+        }
+        RegistryCommands::Migrate(migrate_args) => {
+            registry_migrate_v0_v1(&migrate_args.input, &migrate_args.out)
+                .map_err(|err| err.to_string())?;
+            println!("registry_migrated_from={}", migrate_args.input.display());
+            println!("registry_migrated_to={}", migrate_args.out.display());
             Ok(())
         }
         RegistryCommands::Verify(verify_args) => {
@@ -4615,7 +5448,7 @@ fn build_trace_for_cost_declared(
     if let Some(registry_hash) = event.registry_hash.as_ref() {
         let authority_node = DagNode::new(
             NodeKind::AuthorityRoot {
-                authority_id: "meta_registry/0".to_string(),
+                authority_id: "meta_registry/1".to_string(),
                 authority_hash: registry_hash.clone(),
             },
             scope.clone(),
@@ -4627,7 +5460,7 @@ fn build_trace_for_cost_declared(
         trace.add_edge(DagEdge::authority_depends(
             authority_node.id,
             cost_node.id,
-            "meta_registry/0".to_string(),
+            "meta_registry/1".to_string(),
             registry_hash.clone(),
             scope,
             step,
@@ -4852,7 +5685,7 @@ fn build_trace_for_checked(
     if let Some(registry_hash) = event.registry_hash.as_ref() {
         let authority_node = DagNode::new(
             NodeKind::AuthorityRoot {
-                authority_id: "meta_registry/0".to_string(),
+                authority_id: "meta_registry/1".to_string(),
                 authority_hash: registry_hash.clone(),
             },
             scope.clone(),
@@ -4864,7 +5697,7 @@ fn build_trace_for_checked(
         trace.add_edge(DagEdge::authority_depends(
             authority_node.id,
             check_node.id,
-            "meta_registry/0".to_string(),
+            "meta_registry/1".to_string(),
             registry_hash.clone(),
             scope,
             step,
@@ -4949,7 +5782,7 @@ fn build_trace_for_executed(
     if let Some(registry_hash) = event.registry_hash.as_ref() {
         let authority_node = DagNode::new(
             NodeKind::AuthorityRoot {
-                authority_id: "meta_registry/0".to_string(),
+                authority_id: "meta_registry/1".to_string(),
                 authority_hash: registry_hash.clone(),
             },
             scope.clone(),
@@ -4961,7 +5794,7 @@ fn build_trace_for_executed(
         trace.add_edge(DagEdge::authority_depends(
             authority_node.id,
             executed_node.id,
-            "meta_registry/0".to_string(),
+            "meta_registry/1".to_string(),
             registry_hash.clone(),
             scope,
             step,
@@ -4993,7 +5826,7 @@ fn build_trace_for_plan_created(
     if let Some(registry_hash) = event.registry_hash.as_ref() {
         let authority_node = DagNode::new(
             NodeKind::AuthorityRoot {
-                authority_id: "meta_registry/0".to_string(),
+                authority_id: "meta_registry/1".to_string(),
                 authority_hash: registry_hash.clone(),
             },
             scope.clone(),
@@ -5005,7 +5838,7 @@ fn build_trace_for_plan_created(
         trace.add_edge(DagEdge::authority_depends(
             authority_node.id,
             plan_node.id,
-            "meta_registry/0".to_string(),
+            "meta_registry/1".to_string(),
             registry_hash.clone(),
             scope,
             step,

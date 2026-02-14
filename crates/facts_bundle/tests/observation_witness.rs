@@ -143,7 +143,10 @@ fn dump_observation_goldens() {
     let hash = canonical_hash(&witness);
     std::fs::write(golden_fixture_path("facts-prescriptive-count.json"), &json)
         .expect("write golden json");
-    std::fs::write(golden_fixture_path("facts-prescriptive-count.cbor.sha256"), &hash)
-        .expect("write golden hash");
+    std::fs::write(
+        golden_fixture_path("facts-prescriptive-count.cbor.sha256"),
+        &hash,
+    )
+    .expect("write golden hash");
     println!("WROTE facts-prescriptive-count: hash={}", hash);
 }

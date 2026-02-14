@@ -9,11 +9,12 @@ use super::types::{ArtifactRef, DeclareCostError};
 // Shared constants
 // ---------------------------------------------------------------------------
 
-pub(crate) const DEFAULT_WITNESS_SCHEMA_ID: &str = "admissibility-witness/1";
+pub(crate) const DEFAULT_WITNESS_SCHEMA_ID: &str = "admissibility-witness/2";
 pub(crate) const DEFAULT_ARTIFACT_ROOT: &str = "out/artifacts";
-pub(crate) const META_REGISTRY_SCHEMA_ID: &str = "meta-registry/0";
+pub(crate) const META_REGISTRY_SCHEMA_ID: &str = "meta-registry/1";
 pub(crate) const META_REGISTRY_KIND: &str = "meta_registry";
 pub(crate) const META_REGISTRY_ENV: &str = "ADMIT_META_REGISTRY";
+pub(crate) const LENS_DELTA_WITNESS_SCHEMA_ID: &str = "lens-delta-witness/0";
 pub(crate) const PLAN_WITNESS_SCHEMA_ID: &str = "plan-witness/2";
 pub(crate) const PLAN_WITNESS_SCHEMA_ID_V1: &str = "plan-witness/1";
 pub(crate) const PLAN_WITNESS_SCHEMA_IDS: [&str; 2] =

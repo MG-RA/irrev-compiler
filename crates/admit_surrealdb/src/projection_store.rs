@@ -199,7 +199,9 @@ pub trait ProjectionStoreOps {
         _doc_filter: Option<&BTreeSet<String>>,
         _run_id: Option<&str>,
     ) -> ProjectionResult<PhaseResult> {
-        Err(ProjectionError::new("obsidian vault links projection not configured; enable via scope adapter"))
+        Err(ProjectionError::new(
+            "obsidian vault links projection not configured; enable via scope adapter",
+        ))
     }
 
     // =========================================================================

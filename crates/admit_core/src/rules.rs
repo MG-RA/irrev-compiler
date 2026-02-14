@@ -129,7 +129,11 @@ pub fn evaluate_ruleset_with_inputs(
     }
 
     let enabled: BTreeSet<&str> = if ruleset.enabled_rules.is_empty() {
-        ruleset.bindings.iter().map(|b| b.rule_id.as_str()).collect()
+        ruleset
+            .bindings
+            .iter()
+            .map(|b| b.rule_id.as_str())
+            .collect()
     } else {
         ruleset.enabled_rules.iter().map(|r| r.as_str()).collect()
     };
@@ -206,7 +210,10 @@ pub fn evaluate_ruleset_with_inputs(
         });
 
         facts.push(Fact::PredicateEvaluated {
-            predicate: format!("provider:{}::{}", binding.when.scope_id.0, binding.when.predicate),
+            predicate: format!(
+                "provider:{}::{}",
+                binding.when.scope_id.0, binding.when.predicate
+            ),
             result: result.triggered,
             span: ruleset_span(&ruleset.ruleset_id, &binding.rule_id),
         });
@@ -306,7 +313,11 @@ pub fn evaluate_ruleset_with_inputs(
 pub fn scope_rule_bindings(ruleset: &RuleSet) -> BTreeMap<ScopeId, Vec<String>> {
     let mut out: BTreeMap<ScopeId, Vec<String>> = BTreeMap::new();
     let enabled: BTreeSet<&str> = if ruleset.enabled_rules.is_empty() {
-        ruleset.bindings.iter().map(|b| b.rule_id.as_str()).collect()
+        ruleset
+            .bindings
+            .iter()
+            .map(|b| b.rule_id.as_str())
+            .collect()
     } else {
         ruleset.enabled_rules.iter().map(|r| r.as_str()).collect()
     };
@@ -504,9 +515,6 @@ mod tests {
             },
         );
         let out = evaluate_ruleset_with_inputs(&ruleset, &reg, Some(&bundles)).unwrap();
-        assert_eq!(
-            out.witness.program.snapshot_hash.as_deref(),
-            Some("abc123")
-        );
+        assert_eq!(out.witness.program.snapshot_hash.as_deref(), Some("abc123"));
     }
 }

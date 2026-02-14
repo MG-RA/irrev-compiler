@@ -197,6 +197,23 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
                 }))
             });
 
+    let lens_stmt = just(Token::KwLens)
+        .ignore_then(ident.clone())
+        .then_ignore(just(Token::KwHash))
+        .then(choice::<_, Simple<Token>>((string.clone(), ident.clone())))
+        .try_map(|(id_raw, hash): (String, String), span| {
+            let id = resolve_prefixed("lens", &id_raw)
+                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+            if hash.trim().is_empty() {
+                return Err(Simple::custom(span.clone(), "lens hash cannot be empty"));
+            }
+            Ok(Stmt::Lens(LensDecl {
+                id,
+                hash,
+                span: make_span(file, span, &line_index),
+            }))
+        });
+
     let scope_mode = ident
         .clone()
         .then(ident.clone().or_not())
@@ -366,6 +383,57 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             },
         );
 
+    let meta_change_route = just(Token::KwRoute)
+        .ignore_then(ident.clone())
+        .then_ignore(just(Token::KwCost))
+        .then(number.clone())
+        .then(string.clone())
+        .try_map(
+            |((bucket_raw, cost_value), cost_unit): ((String, f64), String), span| {
+                let bucket = resolve_prefixed("bucket", &bucket_raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                if cost_unit.trim().is_empty() {
+                    return Err(Simple::custom(
+                        span.clone(),
+                        "route cost unit cannot be empty",
+                    ));
+                }
+                Ok(MetaRoute {
+                    bucket,
+                    cost_value,
+                    cost_unit,
+                    span: make_span(file, span, &line_index),
+                })
+            },
+        );
+
+    let meta_change_stmt = just(Token::KwMetaChange)
+        .ignore_then(ident.clone())
+        .then_ignore(just(Token::KwFrom))
+        .then(ident.clone())
+        .then_ignore(just(Token::KwPayload))
+        .then(choice::<_, Simple<Token>>((string.clone(), ident.clone())))
+        .then(meta_change_route.repeated())
+        .then(just(Token::KwTo).ignore_then(ident.clone()).or_not())
+        .try_map(
+            |((((kind, from_lens_raw), payload_ref), routes), to_lens_raw), span| {
+                let from_lens = resolve_prefixed("lens", &from_lens_raw)
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                let to_lens = to_lens_raw
+                    .map(|raw| resolve_prefixed("lens", &raw))
+                    .transpose()
+                    .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                Ok(Stmt::MetaChange(MetaChangeStmt {
+                    kind,
+                    from_lens,
+                    to_lens,
+                    payload_ref,
+                    routes,
+                    span: make_span(file, span, &line_index),
+                }))
+            },
+        );
+
     let difference_stmt = just(Token::KwDifference)
         .ignore_then(ident.clone())
         .then(just(Token::KwUnit).ignore_then(string.clone()).or_not())
@@ -522,6 +590,27 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             just(Token::KwAdmissible).to(QueryKind::Admissible),
             just(Token::KwWitness).to(QueryKind::Witness),
             just(Token::KwDelta).to(QueryKind::Delta),
+            just(Token::KwInterpretationDelta)
+                .ignore_then(
+                    just(Token::KwFrom)
+                        .ignore_then(ident.clone())
+                        .then_ignore(just(Token::KwTo))
+                        .then(ident.clone())
+                        .or_not(),
+                )
+                .try_map(|lenses: Option<(String, String)>, span| {
+                    let (from_lens, to_lens) = match lenses {
+                        Some((from_raw, to_raw)) => {
+                            let from = resolve_prefixed("lens", &from_raw)
+                                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                            let to = resolve_prefixed("lens", &to_raw)
+                                .map_err(|msg| Simple::custom(span.clone(), msg))?;
+                            (Some(from), Some(to))
+                        }
+                        None => (None, None),
+                    };
+                    Ok(QueryKind::InterpretationDelta { from_lens, to_lens })
+                }),
             just(Token::KwLint)
                 .ignore_then(just(Token::KwFailOn).ignore_then(ident.clone()).or_not())
                 .try_map(|fail_on: Option<String>, span| {
@@ -562,9 +651,11 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
         module_stmt.map(|s| vec![s]),
         depends_stmt.map(|s| vec![s]),
         scope_stmt.map(|s| vec![s]),
+        lens_stmt.map(|s| vec![s]),
         scope_change_stmt,
         allow_scope_change_stmt.map(|s| vec![s]),
         scope_change_rule_stmt.map(|s| vec![s]),
+        meta_change_stmt.map(|s| vec![s]),
         difference_stmt.map(|s| vec![s]),
         transform_stmt.map(|s| vec![s]),
         bucket_stmt.map(|s| vec![s]),

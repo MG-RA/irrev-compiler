@@ -214,6 +214,26 @@ pub enum NodeKind {
         witness_sha256: String,
         schema_id: String,
     },
+    LensDeclaration {
+        lens_id: String,
+        lens_hash: String,
+    },
+    LensActivation {
+        lens_id: String,
+        lens_hash: String,
+        activation_event_id: String,
+    },
+    MetaChange {
+        kind: String,
+        from_lens_hash: String,
+        to_lens_hash: String,
+        synthetic_diff_id: String,
+    },
+    LensDelta {
+        from_lens_hash: String,
+        to_lens_hash: String,
+        snapshot_hash: String,
+    },
     CostDeclaration {
         content_hash: String,
     },
@@ -253,6 +273,10 @@ impl NodeKind {
             | NodeKind::Approval { .. }
             | NodeKind::ExecutionLog { .. }
             | NodeKind::Witness { .. }
+            | NodeKind::LensDeclaration { .. }
+            | NodeKind::LensActivation { .. }
+            | NodeKind::MetaChange { .. }
+            | NodeKind::LensDelta { .. }
             | NodeKind::CostDeclaration { .. }
             | NodeKind::AdmissibilityCheck { .. }
             | NodeKind::AdmissibilityExecution { .. }

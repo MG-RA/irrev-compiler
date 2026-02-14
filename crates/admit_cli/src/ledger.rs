@@ -6,7 +6,9 @@ use serde::Serialize;
 use super::internal::payload_hash;
 use super::types::{
     AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, CostDeclaredEvent, DeclareCostError,
-    EngineEvent, EngineEventPayload, IngestEvent, IngestEventPayload, ProjectionEvent,
+    EngineEvent, EngineEventPayload, IngestEvent, IngestEventPayload, LensActivatedEvent,
+    LensActivatedPayload, MetaChangeCheckedEvent, MetaChangeCheckedPayload,
+    MetaInterpretationDeltaEvent, MetaInterpretationDeltaPayload, ProjectionEvent,
     ProjectionEventPayload,
 };
 
@@ -150,6 +152,114 @@ pub fn build_engine_event(
     })
 }
 
+pub fn build_lens_activated_event(
+    timestamp: String,
+    lens_id: String,
+    lens_hash: String,
+    activation_reason: Option<String>,
+    program: super::types::ProgramRef,
+    registry_hash: Option<String>,
+) -> Result<LensActivatedEvent, DeclareCostError> {
+    let payload = LensActivatedPayload {
+        event_type: "lens.activated".to_string(),
+        timestamp: timestamp.clone(),
+        lens_id: lens_id.clone(),
+        lens_hash: lens_hash.clone(),
+        activation_reason: activation_reason.clone(),
+        program: program.clone(),
+        registry_hash: registry_hash.clone(),
+    };
+    let event_id = payload_hash(&payload)?;
+    Ok(LensActivatedEvent {
+        event_type: payload.event_type,
+        event_id,
+        timestamp,
+        lens_id,
+        lens_hash,
+        activation_reason,
+        program,
+        registry_hash,
+    })
+}
+
+pub fn build_meta_change_checked_event(
+    timestamp: String,
+    kind: String,
+    from_lens_id: String,
+    from_lens_hash: String,
+    to_lens_id: String,
+    to_lens_hash: String,
+    payload_ref: String,
+    synthetic_diff_id: String,
+    routes: Vec<String>,
+    registry_hash: Option<String>,
+) -> Result<MetaChangeCheckedEvent, DeclareCostError> {
+    let payload = MetaChangeCheckedPayload {
+        event_type: "meta.change.checked".to_string(),
+        timestamp: timestamp.clone(),
+        kind: kind.clone(),
+        from_lens_id: from_lens_id.clone(),
+        from_lens_hash: from_lens_hash.clone(),
+        to_lens_id: to_lens_id.clone(),
+        to_lens_hash: to_lens_hash.clone(),
+        payload_ref: payload_ref.clone(),
+        synthetic_diff_id: synthetic_diff_id.clone(),
+        routes: routes.clone(),
+        registry_hash: registry_hash.clone(),
+    };
+    let event_id = payload_hash(&payload)?;
+    Ok(MetaChangeCheckedEvent {
+        event_type: payload.event_type,
+        event_id,
+        timestamp,
+        kind,
+        from_lens_id,
+        from_lens_hash,
+        to_lens_id,
+        to_lens_hash,
+        payload_ref,
+        synthetic_diff_id,
+        routes,
+        registry_hash,
+    })
+}
+
+pub fn build_meta_interpretation_delta_event(
+    timestamp: String,
+    from_lens_id: String,
+    from_lens_hash: String,
+    to_lens_id: String,
+    to_lens_hash: String,
+    witness: super::types::ArtifactRef,
+    snapshot_hash: String,
+    registry_hash: Option<String>,
+) -> Result<MetaInterpretationDeltaEvent, DeclareCostError> {
+    let payload = MetaInterpretationDeltaPayload {
+        event_type: "meta.interpretation.delta".to_string(),
+        timestamp: timestamp.clone(),
+        from_lens_id: from_lens_id.clone(),
+        from_lens_hash: from_lens_hash.clone(),
+        to_lens_id: to_lens_id.clone(),
+        to_lens_hash: to_lens_hash.clone(),
+        witness: witness.clone(),
+        snapshot_hash: snapshot_hash.clone(),
+        registry_hash: registry_hash.clone(),
+    };
+    let event_id = payload_hash(&payload)?;
+    Ok(MetaInterpretationDeltaEvent {
+        event_type: payload.event_type,
+        event_id,
+        timestamp,
+        from_lens_id,
+        from_lens_hash,
+        to_lens_id,
+        to_lens_hash,
+        witness,
+        snapshot_hash,
+        registry_hash,
+    })
+}
+
 fn append_serialized_event<T: Serialize>(
     ledger_path: &Path,
     event_id: &str,
@@ -230,6 +340,27 @@ pub fn append_ingest_event(
 pub fn append_engine_event(
     ledger_path: &Path,
     event: &EngineEvent,
+) -> Result<(), DeclareCostError> {
+    append_serialized_event(ledger_path, &event.event_id, event)
+}
+
+pub fn append_lens_activated_event(
+    ledger_path: &Path,
+    event: &LensActivatedEvent,
+) -> Result<(), DeclareCostError> {
+    append_serialized_event(ledger_path, &event.event_id, event)
+}
+
+pub fn append_meta_change_checked_event(
+    ledger_path: &Path,
+    event: &MetaChangeCheckedEvent,
+) -> Result<(), DeclareCostError> {
+    append_serialized_event(ledger_path, &event.event_id, event)
+}
+
+pub fn append_meta_interpretation_delta_event(
+    ledger_path: &Path,
+    event: &MetaInterpretationDeltaEvent,
 ) -> Result<(), DeclareCostError> {
     append_serialized_event(ledger_path, &event.event_id, event)
 }

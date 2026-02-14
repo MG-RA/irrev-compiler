@@ -134,15 +134,18 @@ impl Provider for RustStructureProvider {
         };
 
         // Snapshot is observation, not judgment — always admissible.
-        let witness =
-            WitnessBuilder::new(witness_program, Verdict::Admissible, "structural snapshot complete")
-                .with_facts(facts)
-                .with_displacement_trace(DisplacementTrace {
-                    mode: DisplacementMode::Potential,
-                    totals: vec![],
-                    contributions: vec![],
-                })
-                .build();
+        let witness = WitnessBuilder::new(
+            witness_program,
+            Verdict::Admissible,
+            "structural snapshot complete",
+        )
+        .with_facts(facts)
+        .with_displacement_trace(DisplacementTrace {
+            mode: DisplacementMode::Potential,
+            totals: vec![],
+            contributions: vec![],
+        })
+        .build();
 
         Ok(SnapshotResult {
             facts_bundle,
@@ -177,7 +180,10 @@ impl Provider for RustStructureProvider {
                 let mut justified_keys = std::collections::BTreeSet::new();
                 for fact in &facts {
                     if let Fact::LintFinding {
-                        rule_id, path, span, ..
+                        rule_id,
+                        path,
+                        span,
+                        ..
                     } = fact
                     {
                         if rule_id == justification_rule {
@@ -256,7 +262,9 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { .. } => 5,
         Fact::ScopeChangeUsed { .. } => 6,
         Fact::UnaccountedBoundaryChange { .. } => 7,
-        Fact::LintFinding { .. } => 8,
+        Fact::LensActivated { .. } => 8,
+        Fact::MetaChangeChecked { .. } => 9,
+        Fact::LintFinding { .. } => 10,
     };
     let aux = match fact {
         Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
@@ -272,6 +280,8 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         | Fact::RuleEvaluated { span, .. }
         | Fact::ScopeChangeUsed { span, .. }
         | Fact::UnaccountedBoundaryChange { span, .. }
+        | Fact::LensActivated { span, .. }
+        | Fact::MetaChangeChecked { span, .. }
         | Fact::LintFinding { span, .. } => span,
     };
     (

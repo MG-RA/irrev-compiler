@@ -159,11 +159,12 @@ impl Provider for GitWorkingTreeProvider {
             phase: ProviderPhase::Snapshot,
             message: format!("facts serialization failed: {}", err),
         })?;
-        let cbor = admit_core::encode_canonical_value(&facts_value).map_err(|err| ProviderError {
-            scope: scope_id.clone(),
-            phase: ProviderPhase::Snapshot,
-            message: format!("facts canonical encoding failed: {}", err),
-        })?;
+        let cbor =
+            admit_core::encode_canonical_value(&facts_value).map_err(|err| ProviderError {
+                scope: scope_id.clone(),
+                phase: ProviderPhase::Snapshot,
+                message: format!("facts canonical encoding failed: {}", err),
+            })?;
         let mut hasher = Sha256::new();
         hasher.update(cbor);
         let snapshot_hash = Sha256Hex::new(format!("{:x}", hasher.finalize()));
@@ -194,14 +195,15 @@ impl Provider for GitWorkingTreeProvider {
             facts_bundle_hash: None,
             ruleset_hash: None,
         };
-        let witness = WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
-            .with_facts(facts)
-            .with_displacement_trace(DisplacementTrace {
-                mode: DisplacementMode::Potential,
-                totals: vec![],
-                contributions: vec![],
-            })
-            .build();
+        let witness =
+            WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
+                .with_facts(facts)
+                .with_displacement_trace(DisplacementTrace {
+                    mode: DisplacementMode::Potential,
+                    totals: vec![],
+                    contributions: vec![],
+                })
+                .build();
 
         Ok(SnapshotResult {
             facts_bundle,
@@ -578,7 +580,10 @@ fn span_for_path(path: &str) -> Span {
     }
 }
 
-fn git_status_snapshot(root: &Path, scope_id: &ScopeId) -> Result<GitStatusSnapshot, ProviderError> {
+fn git_status_snapshot(
+    root: &Path,
+    scope_id: &ScopeId,
+) -> Result<GitStatusSnapshot, ProviderError> {
     let repo_toplevel = git_repo_toplevel(root, scope_id)?;
     let output = Command::new("git")
         .arg("-C")
@@ -619,7 +624,9 @@ fn git_status_snapshot(root: &Path, scope_id: &ScopeId) -> Result<GitStatusSnaps
     for line in stdout.lines() {
         parse_status_line(line, &mut snapshot);
     }
-    snapshot.entries.sort_by(|a, b| status_entry_sort_key(a).cmp(&status_entry_sort_key(b)));
+    snapshot
+        .entries
+        .sort_by(|a, b| status_entry_sort_key(a).cmp(&status_entry_sort_key(b)));
     Ok(snapshot)
 }
 
@@ -795,7 +802,9 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { .. } => 5,
         Fact::ScopeChangeUsed { .. } => 6,
         Fact::UnaccountedBoundaryChange { .. } => 7,
-        Fact::LintFinding { .. } => 8,
+        Fact::LensActivated { .. } => 8,
+        Fact::MetaChangeChecked { .. } => 9,
+        Fact::LintFinding { .. } => 10,
     };
     let aux = match fact {
         Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
@@ -811,6 +820,8 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         | Fact::RuleEvaluated { span, .. }
         | Fact::ScopeChangeUsed { span, .. }
         | Fact::UnaccountedBoundaryChange { span, .. }
+        | Fact::LensActivated { span, .. }
+        | Fact::MetaChangeChecked { span, .. }
         | Fact::LintFinding { span, .. } => span,
     };
     (
@@ -869,7 +880,12 @@ mod tests {
             .args(args)
             .status()
             .expect("run git");
-        assert!(status.success(), "git command failed: git -C {:?} {:?}", root, args);
+        assert!(
+            status.success(),
+            "git command failed: git -C {:?} {:?}",
+            root,
+            args
+        );
     }
 
     #[test]
@@ -890,7 +906,9 @@ mod tests {
             scope_id: ScopeId(GIT_WORKING_TREE_SCOPE_ID.to_string()),
             params: serde_json::Value::Null,
         };
-        let err = provider.snapshot(&req).expect_err("missing root should fail");
+        let err = provider
+            .snapshot(&req)
+            .expect_err("missing root should fail");
         assert_eq!(err.phase, ProviderPhase::Snapshot);
         assert!(err.message.contains("params.root"));
     }
@@ -953,25 +971,21 @@ mod tests {
         let out = provider.snapshot(&req).expect("snapshot");
 
         assert_eq!(out.facts_bundle.created_at.0, "2026-02-11T00:00:00Z");
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_MODIFIED))
-        );
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_UNTRACKED))
-        );
-        assert!(
-            out.facts_bundle.facts.iter().any(|f| matches!(
-                f,
-                Fact::LintFinding { rule_id, evidence: Some(e), .. }
-                    if rule_id == RULE_DIRTY && e.get("dirty").and_then(|v| v.as_bool()) == Some(true)
-            ))
-        );
+        assert!(out
+            .facts_bundle
+            .facts
+            .iter()
+            .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_MODIFIED)));
+        assert!(out
+            .facts_bundle
+            .facts
+            .iter()
+            .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_UNTRACKED)));
+        assert!(out.facts_bundle.facts.iter().any(|f| matches!(
+            f,
+            Fact::LintFinding { rule_id, evidence: Some(e), .. }
+                if rule_id == RULE_DIRTY && e.get("dirty").and_then(|v| v.as_bool()) == Some(true)
+        )));
         assert!(
             out.facts_bundle.facts.iter().any(|f| matches!(
                 f,

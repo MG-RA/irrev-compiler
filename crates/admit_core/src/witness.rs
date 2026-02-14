@@ -8,7 +8,8 @@ use crate::span::Span;
 use crate::symbols::{ModuleId, ScopeId, SymbolRef};
 use crate::trace::Trace;
 
-pub const DEFAULT_WITNESS_SCHEMA_ID: &str = "admissibility-witness/1";
+pub const DEFAULT_WITNESS_SCHEMA_ID: &str = "admissibility-witness/2";
+pub const DEFAULT_LENS_DELTA_SCHEMA_ID: &str = "lens-delta-witness/0";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Witness {
@@ -16,12 +17,22 @@ pub struct Witness {
     pub schema_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "court_version")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "court_version"
+    )]
     pub engine_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lens_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lens_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lens_activation_event_id: String,
     pub verdict: Verdict,
     pub program: WitnessProgram,
     pub reason: String,
@@ -29,6 +40,68 @@ pub struct Witness {
     pub displacement_trace: DisplacementTrace,
     #[serde(default, skip_serializing_if = "InvariantProfile::is_empty")]
     pub invariant_profile: InvariantProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LensHandle {
+    pub lens_id: String,
+    pub lens_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LensDeltaRow {
+    pub section: String,
+    pub stable_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
+    pub before: String,
+    pub after: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LensDeltaWitness {
+    pub schema_id: String,
+    pub from_lens: LensHandle,
+    pub to_lens: LensHandle,
+    pub snapshot_hash: String,
+    pub rows: Vec<LensDeltaRow>,
+}
+
+impl LensDeltaWitness {
+    pub fn new(
+        from_lens: LensHandle,
+        to_lens: LensHandle,
+        snapshot_hash: String,
+        mut rows: Vec<LensDeltaRow>,
+    ) -> Self {
+        rows.sort_by(|a, b| {
+            (
+                &a.section,
+                &a.stable_id,
+                &a.source_file,
+                a.line.unwrap_or(0),
+                a.col.unwrap_or(0),
+            )
+                .cmp(&(
+                    &b.section,
+                    &b.stable_id,
+                    &b.source_file,
+                    b.line.unwrap_or(0),
+                    b.col.unwrap_or(0),
+                ))
+        });
+        Self {
+            schema_id: DEFAULT_LENS_DELTA_SCHEMA_ID.to_string(),
+            from_lens,
+            to_lens,
+            snapshot_hash,
+            rows,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -127,6 +200,23 @@ pub enum Fact {
         invariant: Option<String>,
         span: Span,
     },
+    #[serde(rename = "lens_activated")]
+    LensActivated {
+        lens_id: String,
+        lens_hash: String,
+        lens_activation_event_id: String,
+        span: Span,
+    },
+    #[serde(rename = "meta_change_checked")]
+    MetaChangeChecked {
+        kind: String,
+        from_lens_id: String,
+        from_lens_hash: String,
+        to_lens_id: String,
+        to_lens_hash: String,
+        synthetic_diff_id: String,
+        span: Span,
+    },
     #[serde(rename = "lint_finding")]
     LintFinding {
         rule_id: String,
@@ -219,6 +309,12 @@ impl Witness {
             .with_displacement_trace(displacement_trace)
             .build()
     }
+
+    pub fn has_activation_metadata(&self) -> bool {
+        !self.lens_id.trim().is_empty()
+            && !self.lens_hash.trim().is_empty()
+            && !self.lens_activation_event_id.trim().is_empty()
+    }
 }
 
 pub struct WitnessBuilder {
@@ -307,6 +403,9 @@ impl WitnessBuilder {
             engine_version: None,
             input_id: None,
             config_hash: None,
+            lens_id: runtime_default_lens_id(),
+            lens_hash: runtime_default_lens_hash(),
+            lens_activation_event_id: runtime_default_lens_activation_event_id(),
             verdict: self.verdict,
             program: self.program,
             reason: self.reason,
@@ -383,7 +482,9 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { .. } => 5,
         Fact::ScopeChangeUsed { .. } => 6,
         Fact::UnaccountedBoundaryChange { .. } => 7,
-        Fact::LintFinding { .. } => 8,
+        Fact::LensActivated { .. } => 8,
+        Fact::MetaChangeChecked { .. } => 9,
+        Fact::LintFinding { .. } => 10,
     };
     let aux = match fact {
         Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
@@ -399,6 +500,8 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { span, .. } => span,
         Fact::ScopeChangeUsed { span, .. } => span,
         Fact::UnaccountedBoundaryChange { span, .. } => span,
+        Fact::LensActivated { span, .. } => span,
+        Fact::MetaChangeChecked { span, .. } => span,
         Fact::LintFinding { span, .. } => span,
     };
     (
@@ -408,4 +511,16 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         span.line.unwrap_or(0),
         span.col.unwrap_or(0),
     )
+}
+
+fn runtime_default_lens_id() -> String {
+    "lens:default@0".to_string()
+}
+
+fn runtime_default_lens_hash() -> String {
+    "lens:default:pending".to_string()
+}
+
+fn runtime_default_lens_activation_event_id() -> String {
+    "pending:lens_activation".to_string()
 }

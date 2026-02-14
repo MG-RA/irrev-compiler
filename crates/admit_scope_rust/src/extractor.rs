@@ -7,9 +7,7 @@
 use admit_core::witness::{Fact, Severity};
 use admit_core::Span;
 use serde_json::{Map, Value};
-use syn::{
-    Attribute, Fields, ImplItem, Item, Meta, TraitItem, Type, UseTree, Visibility,
-};
+use syn::{Attribute, Fields, ImplItem, Item, Meta, TraitItem, Type, UseTree, Visibility};
 
 use crate::file_walker::RustSourceFile;
 
@@ -178,11 +176,8 @@ fn extract_item_facts(
                     .iter()
                     .filter(|i| matches!(i, TraitItem::Fn(_)))
                     .count();
-                let mut supertraits: Vec<String> = t
-                    .supertraits
-                    .iter()
-                    .map(quote_to_string)
-                    .collect();
+                let mut supertraits: Vec<String> =
+                    t.supertraits.iter().map(quote_to_string).collect();
                 supertraits.sort();
                 facts.push(Fact::LintFinding {
                     rule_id: "rust/pub_trait".to_string(),
@@ -217,10 +212,7 @@ fn extract_item_facts(
         }
         Item::Impl(i) => {
             let self_type = type_to_string(&i.self_ty);
-            let trait_name = i
-                .trait_
-                .as_ref()
-                .map(|(_, path, _)| quote_to_string(path));
+            let trait_name = i.trait_.as_ref().map(|(_, path, _)| quote_to_string(path));
             let method_count = i
                 .items
                 .iter()
@@ -334,7 +326,10 @@ fn extract_unsafe_blocks(
             syn::Stmt::Expr(expr, _) => {
                 find_unsafe_in_expr(expr, file_path, enclosing_fn_name, facts);
             }
-            syn::Stmt::Local(syn::Local { init: Some(syn::LocalInit { expr, .. }), .. }) => {
+            syn::Stmt::Local(syn::Local {
+                init: Some(syn::LocalInit { expr, .. }),
+                ..
+            }) => {
                 find_unsafe_in_expr(expr, file_path, enclosing_fn_name, facts);
             }
             _ => {}
@@ -529,7 +524,9 @@ mod tests {
 
     fn evidence_of(fact: &Fact) -> serde_json::Value {
         match fact {
-            Fact::LintFinding { evidence, .. } => evidence.clone().unwrap_or(serde_json::Value::Null),
+            Fact::LintFinding { evidence, .. } => {
+                evidence.clone().unwrap_or(serde_json::Value::Null)
+            }
             _ => serde_json::Value::Null,
         }
     }
@@ -556,7 +553,9 @@ mod tests {
 
     #[test]
     fn extracts_pub_struct_with_derives() {
-        let file = source_file("#[derive(Debug, Clone, Serialize)]\npub struct Foo {\n    x: i32,\n    y: String,\n}");
+        let file = source_file(
+            "#[derive(Debug, Clone, Serialize)]\npub struct Foo {\n    x: i32,\n    y: String,\n}",
+        );
         let facts = extract_facts(&file);
 
         let structs = find_facts_by_rule(&facts, "rust/pub_struct");
@@ -590,7 +589,8 @@ mod tests {
 
     #[test]
     fn extracts_pub_trait_with_supertraits() {
-        let file = source_file("pub trait Foo: Send + Sync {\n    fn bar(&self);\n    fn baz(&self);\n}");
+        let file =
+            source_file("pub trait Foo: Send + Sync {\n    fn bar(&self);\n    fn baz(&self);\n}");
         let facts = extract_facts(&file);
 
         let traits = find_facts_by_rule(&facts, "rust/pub_trait");
@@ -624,7 +624,9 @@ mod tests {
 
     #[test]
     fn extracts_trait_impl() {
-        let file = source_file("struct X;\ntrait T { fn f(&self); }\nimpl T for X {\n    fn f(&self) {}\n}");
+        let file = source_file(
+            "struct X;\ntrait T { fn f(&self); }\nimpl T for X {\n    fn f(&self) {}\n}",
+        );
         let facts = extract_facts(&file);
 
         let impls = find_facts_by_rule(&facts, "rust/impl_block");
@@ -637,7 +639,9 @@ mod tests {
 
     #[test]
     fn extracts_unsafe_fn_and_block() {
-        let file = source_file("pub unsafe fn danger() {\n    unsafe { std::ptr::null::<u8>().read() };\n}");
+        let file = source_file(
+            "pub unsafe fn danger() {\n    unsafe { std::ptr::null::<u8>().read() };\n}",
+        );
         let facts = extract_facts(&file);
 
         let unsafes = find_facts_by_rule(&facts, "rust/unsafe_block");
@@ -711,7 +715,9 @@ mod tests {
         let errors = find_facts_by_rule(&facts, "rust/parse_error");
         assert_eq!(errors.len(), 1);
         match errors[0] {
-            Fact::LintFinding { severity, evidence, .. } => {
+            Fact::LintFinding {
+                severity, evidence, ..
+            } => {
                 assert_eq!(*severity, Severity::Warning);
                 let ev = evidence.as_ref().unwrap();
                 assert!(ev["error_message"].is_string());

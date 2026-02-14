@@ -73,10 +73,7 @@ pub fn eval_pred_with_provider(
                 ))
             })?;
             let provider = registry.get(scope_id).ok_or_else(|| {
-                EvalError(format!(
-                    "no provider registered for scope '{}'",
-                    scope_id.0
-                ))
+                EvalError(format!("no provider registered for scope '{}'", scope_id.0))
             })?;
             let result = provider
                 .eval_predicate(name, params)

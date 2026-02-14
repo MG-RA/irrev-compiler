@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use admit_cli::{registry_build, registry_init, DeclareCostError, MetaRegistryV0};
+use sha2::Digest;
 
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = std::time::SystemTime::now()
@@ -252,8 +253,8 @@ fn registry_canonical_hash_is_pinned() {
     let artifact_ref = registry_build(&path, &artifacts_dir).expect("build shipped registry");
 
     assert_eq!(
-        artifact_ref.sha256, "f8f6e0396a2d8e103985f2ae9f8fab5798e95ad46dcc0e0a6ccbcbeba7eedca7",
-        "pinned registry hash changed — update pin or bump registry_version"
+        artifact_ref.sha256, "78737229c3737c4a2fcaa7c0f04f22159bcd1c0e15fbf8c3f1648675b153e3ba",
+        "pinned registry hash changed - update pin or bump registry_version"
     );
 }
 
@@ -319,4 +320,36 @@ fn registry_schema_gate_refuses_unknown_schema() {
         .schemas
         .iter()
         .any(|s| s.id == "nonexistent-schema/99"));
+}
+
+#[test]
+fn registry_v1_canonical_hash_from_init_is_pinned() {
+    let dir = temp_dir("pin-v1");
+    let artifacts_dir = dir.join("artifacts");
+    let path = dir.join("meta-registry.json");
+    registry_init(&path).expect("registry init");
+
+    let artifact_ref = registry_build(&path, &artifacts_dir).expect("build v1 registry");
+    assert_eq!(
+        artifact_ref.sha256,
+        "77b89745cecd4352898fe67dca13ca872caa6a8a6dcab56b401f20cc947123e4",
+        "pinned v1 registry hash changed - update pin or bump registry_version"
+    );
+}
+
+#[test]
+fn default_lens_v0_canonical_hash_is_pinned() {
+    let lens_value = serde_json::json!({
+        "lens_id": "lens:default@0",
+        "version": 0,
+        "kind": "default",
+    });
+    let canonical =
+        admit_core::encode_canonical_value(&lens_value).expect("encode default lens canonical");
+    let hash = hex::encode(sha2::Sha256::digest(&canonical));
+    assert_eq!(
+        hash,
+        "29fa7bf20f869e1cfbbf0b0299a5a6567262d560133c5f38d9a6502c5b279702",
+        "default lens canonical hash changed - this is a governance-level breaking change"
+    );
 }

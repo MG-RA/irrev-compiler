@@ -14,8 +14,8 @@ use admit_core::{ModuleId, ScopeId, Span};
 
 use crate::backend::INGEST_DIR_SCOPE_ID;
 use crate::{
-    chunk_file_by_format, infer_format_from_path, is_chunked_text_format, sha256_hex,
-    to_rel_path, walk_files,
+    chunk_file_by_format, infer_format_from_path, is_chunked_text_format, sha256_hex, to_rel_path,
+    walk_files,
 };
 
 /// Provider for directory ingestion. Pure filesystem observation — no DB, no network.
@@ -234,14 +234,15 @@ impl Provider for IngestDirProvider {
             facts_bundle_hash: None,
             ruleset_hash: None,
         };
-        let witness = WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
-            .with_facts(facts)
-            .with_displacement_trace(DisplacementTrace {
-                mode: DisplacementMode::Potential,
-                totals: vec![],
-                contributions: vec![],
-            })
-            .build();
+        let witness =
+            WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
+                .with_facts(facts)
+                .with_displacement_trace(DisplacementTrace {
+                    mode: DisplacementMode::Potential,
+                    totals: vec![],
+                    contributions: vec![],
+                })
+                .build();
 
         Ok(SnapshotResult {
             facts_bundle,
@@ -257,14 +258,15 @@ impl Provider for IngestDirProvider {
         let scope_id = ScopeId(INGEST_DIR_SCOPE_ID.to_string());
         match name {
             "missing_path" => {
-                let path = params
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ProviderError {
-                        scope: scope_id.clone(),
-                        phase: ProviderPhase::Snapshot,
-                        message: "missing_path requires params.path (string)".to_string(),
-                    })?;
+                let path =
+                    params
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| ProviderError {
+                            scope: scope_id.clone(),
+                            phase: ProviderPhase::Snapshot,
+                            message: "missing_path requires params.path (string)".to_string(),
+                        })?;
                 let missing = !Path::new(path).exists();
                 let findings = if missing {
                     vec![admit_core::LintFinding {
@@ -310,7 +312,9 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { .. } => 5,
         Fact::ScopeChangeUsed { .. } => 6,
         Fact::UnaccountedBoundaryChange { .. } => 7,
-        Fact::LintFinding { .. } => 8,
+        Fact::LensActivated { .. } => 8,
+        Fact::MetaChangeChecked { .. } => 9,
+        Fact::LintFinding { .. } => 10,
     };
     let aux = match fact {
         Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
@@ -326,6 +330,8 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         | Fact::RuleEvaluated { span, .. }
         | Fact::ScopeChangeUsed { span, .. }
         | Fact::UnaccountedBoundaryChange { span, .. }
+        | Fact::LensActivated { span, .. }
+        | Fact::MetaChangeChecked { span, .. }
         | Fact::LintFinding { span, .. } => span,
     };
     (

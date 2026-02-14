@@ -58,6 +58,18 @@ pub enum ScopeMode {
     Translate,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LensRef {
+    pub lens_id: String,
+    pub lens_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MetaRoute {
+    pub bucket: SymbolRef,
+    pub cost: Quantity,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum Stmt {
@@ -92,6 +104,19 @@ pub enum Stmt {
         from: ScopeId,
         to: ScopeId,
         mode: ScopeMode,
+        span: Span,
+    },
+    #[serde(rename = "LensDeclaration")]
+    LensDeclaration { lens: LensRef, span: Span },
+    #[serde(rename = "MetaChange")]
+    MetaChange {
+        kind: String,
+        from_lens: LensRef,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_lens_id: Option<String>,
+        payload_ref: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<MetaRoute>,
         span: Span,
     },
     #[serde(rename = "Constraint")]
@@ -132,7 +157,15 @@ pub enum Query {
     Admissible,
     Witness,
     Delta,
-    Lint { fail_on: LintFailOn },
+    InterpretationDelta {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_lens: Option<LensRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_lens: Option<LensRef>,
+    },
+    Lint {
+        fail_on: LintFailOn,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

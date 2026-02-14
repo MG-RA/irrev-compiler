@@ -579,10 +579,37 @@ mod tests {
 
     fn minimal_registry() -> MetaRegistryV0 {
         MetaRegistryV0 {
-            schema_id: "meta-registry/0".to_string(),
-            schema_version: 0,
+            schema_id: "meta-registry/1".to_string(),
+            schema_version: 1,
             registry_version: 0,
             generated_at: None,
+            default_lens: crate::types::MetaRegistryDefaultLens {
+                lens_id: "lens:default@0".to_string(),
+                lens_hash: "default-hash".to_string(),
+            },
+            lenses: vec![crate::types::MetaRegistryLens {
+                lens_id: "lens:default@0".to_string(),
+                lens_hash: "default-hash".to_string(),
+                description: None,
+            }],
+            meta_change_kinds: vec![],
+            meta_buckets: vec![
+                crate::types::MetaRegistryMetaBucket {
+                    bucket_id: "bucket:trust_debt".to_string(),
+                    unit: None,
+                    description: None,
+                },
+                crate::types::MetaRegistryMetaBucket {
+                    bucket_id: "bucket:compatibility_debt".to_string(),
+                    unit: None,
+                    description: None,
+                },
+                crate::types::MetaRegistryMetaBucket {
+                    bucket_id: "bucket:explanation_debt".to_string(),
+                    unit: None,
+                    description: None,
+                },
+            ],
             stdlib: vec![],
             schemas: vec![],
             scopes: vec![],
@@ -591,10 +618,37 @@ mod tests {
 
     fn registry_with_scopes(scopes: Vec<MetaRegistryScope>) -> MetaRegistryV0 {
         MetaRegistryV0 {
-            schema_id: "meta-registry/0".to_string(),
-            schema_version: 0,
+            schema_id: "meta-registry/1".to_string(),
+            schema_version: 1,
             registry_version: 0,
             generated_at: None,
+            default_lens: crate::types::MetaRegistryDefaultLens {
+                lens_id: "lens:default@0".to_string(),
+                lens_hash: "default-hash".to_string(),
+            },
+            lenses: vec![crate::types::MetaRegistryLens {
+                lens_id: "lens:default@0".to_string(),
+                lens_hash: "default-hash".to_string(),
+                description: None,
+            }],
+            meta_change_kinds: vec![],
+            meta_buckets: vec![
+                crate::types::MetaRegistryMetaBucket {
+                    bucket_id: "bucket:trust_debt".to_string(),
+                    unit: None,
+                    description: None,
+                },
+                crate::types::MetaRegistryMetaBucket {
+                    bucket_id: "bucket:compatibility_debt".to_string(),
+                    unit: None,
+                    description: None,
+                },
+                crate::types::MetaRegistryMetaBucket {
+                    bucket_id: "bucket:explanation_debt".to_string(),
+                    unit: None,
+                    description: None,
+                },
+            ],
             stdlib: vec![],
             schemas: vec![],
             scopes,

@@ -150,11 +150,14 @@ mod tests {
             scope_id: ScopeId("test".into()),
         };
         let plan_err = p
-            .plan(&PlanIntent {
-                scope_id: ScopeId("test".into()),
-                description: "test".into(),
-                params: serde_json::Value::Null,
-            }, &[])
+            .plan(
+                &PlanIntent {
+                    scope_id: ScopeId("test".into()),
+                    description: "test".into(),
+                    params: serde_json::Value::Null,
+                },
+                &[],
+            )
             .unwrap_err();
         assert_eq!(plan_err.phase, ProviderPhase::Plan);
 

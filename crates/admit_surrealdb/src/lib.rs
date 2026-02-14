@@ -1301,7 +1301,10 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
         Ok(())
     }
 
-    pub fn select_rows_from_single_select(&self, sql: &str) -> Result<Vec<serde_json::Value>, String> {
+    pub fn select_rows_from_single_select(
+        &self,
+        sql: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
         let output = self.run_sql_output(sql)?;
         check_surreal_json_stream(&output.values).map_err(|msg| {
             format!(
@@ -1393,7 +1396,6 @@ DELETE projection_run WHERE run_id IN $runs RETURN NONE;",
 
         Ok(())
     }
-
 }
 
 struct SqlRunOutput {

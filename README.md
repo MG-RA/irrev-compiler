@@ -2,6 +2,16 @@
 
 **A Rust-based compiler for expressing, tracking, and verifying irreversible computational actions through scope-governed witnesses and displacement cost accounting.**
 
+Current runtime defaults (V2 transition):
+- witness schema writer default: `admissibility-witness/2`
+- registry schema writer default: `meta-registry/1`
+- lens delta schema: `lens-delta-witness/0`
+- explicit lens activation ledger event: `lens.activated`
+- governed lens amendment ledger event: `meta.change.checked` (`admit lens update`)
+- canonical hash pins enforced for V2 core artifacts in test suite
+
+See `meta/design/v2/adjudicator-transition.md` for the adjudicator/lens transition plan.
+
 [![Status](https://img.shields.io/badge/status-active%20development-yellow)]()
 [![Language](https://img.shields.io/badge/language-Rust-orange)]()
 [![License](https://img.shields.io/badge/license-check%20repo-blue)]()

@@ -1015,13 +1015,7 @@ fn decode_payload_bytes(bytes: &[u8]) -> Result<DecodedPayload, String> {
             (value.clone(), schema_id_from_value(&value))
         };
 
-    let schema_id = schema_id.or_else(|| {
-        if looks_like_witness(&payload) {
-            Some("admissibility-witness/1".to_string())
-        } else {
-            None
-        }
-    });
+    let schema_id = schema_id.or_else(|| infer_witness_schema(&payload));
 
     let canonical_cbor = admit_core::encode_canonical_value(&payload).map_err(|err| err.0)?;
     let canonical_sha256 = hex::encode(sha2::Sha256::digest(&canonical_cbor));
@@ -1047,6 +1041,35 @@ fn extract_witness_wrapper_payload(
         .map(|s| s.to_string())
         .or_else(|| schema_id_from_value(witness));
     Some((witness.clone(), schema_id))
+}
+
+fn infer_witness_schema(payload: &serde_json::Value) -> Option<String> {
+    if !looks_like_witness(payload) {
+        return None;
+    }
+    let has_v2_lens_fields = payload.as_object().is_some_and(|obj| {
+        let lens_id = obj
+            .get("lens_id")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let lens_hash = obj
+            .get("lens_hash")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let activation_id = obj
+            .get("lens_activation_event_id")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        lens_id && lens_hash && activation_id
+    });
+    if has_v2_lens_fields {
+        Some("admissibility-witness/2".to_string())
+    } else {
+        Some("admissibility-witness/1".to_string())
+    }
 }
 
 fn schema_id_from_value(value: &serde_json::Value) -> Option<String> {
@@ -1698,7 +1721,7 @@ mod tests {
     #[test]
     fn decode_payload_detects_witness_wrapper() {
         let value = serde_json::json!({
-            "schema_id": "admissibility-witness/1",
+            "schema_id": "admissibility-witness/2",
             "sha256": "abcd",
             "witness": {
                 "verdict": "inadmissible",
@@ -1719,7 +1742,7 @@ mod tests {
         let decoded = decode_payload_bytes(&bytes).expect("decode");
         assert_eq!(
             decoded.schema_id.as_deref(),
-            Some("admissibility-witness/1")
+            Some("admissibility-witness/2")
         );
         assert!(looks_like_witness(&decoded.payload));
     }

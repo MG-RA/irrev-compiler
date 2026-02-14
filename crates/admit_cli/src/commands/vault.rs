@@ -162,10 +162,7 @@ fn extract_role(fm: &BTreeMap<String, serde_json::Value>, rel_path: &str) -> Opt
     Some(role.to_string())
 }
 
-fn extract_string(
-    fm: &BTreeMap<String, serde_json::Value>,
-    key: &str,
-) -> Option<String> {
+fn extract_string(fm: &BTreeMap<String, serde_json::Value>, key: &str) -> Option<String> {
     fm.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
 }
 
@@ -402,7 +399,10 @@ fn build_term_to_target(
                 if term.is_empty() {
                     continue;
                 }
-                term_to_targets.entry(term).or_default().insert(target.clone());
+                term_to_targets
+                    .entry(term)
+                    .or_default()
+                    .insert(target.clone());
             }
         }
 
@@ -410,7 +410,10 @@ fn build_term_to_target(
             if let Some(inv) = note.invariant_id.as_ref() {
                 let term = norm_key(inv);
                 if !term.is_empty() {
-                    term_to_targets.entry(term).or_default().insert(target.clone());
+                    term_to_targets
+                        .entry(term)
+                        .or_default()
+                        .insert(target.clone());
                 }
             }
         }
@@ -436,7 +439,10 @@ fn build_term_to_target(
     (term_to_target, terms_by_target, collisions)
 }
 
-fn resolve_explicit_targets(note: &VaultNote, term_to_target: &HashMap<String, String>) -> HashSet<String> {
+fn resolve_explicit_targets(
+    note: &VaultNote,
+    term_to_target: &HashMap<String, String>,
+) -> HashSet<String> {
     let mut out: HashSet<String> = HashSet::new();
     for link in extract_obsidian_links(&note.body) {
         let key = normalize_obsidian_target_to_key(&link.target);
@@ -465,7 +471,8 @@ fn run_links_implicit(args: VaultLinksImplicitArgs) -> Result<(), String> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    let (term_to_target, _terms_by_target, collisions) = build_term_to_target(&notes, &target_roles);
+    let (term_to_target, _terms_by_target, collisions) =
+        build_term_to_target(&notes, &target_roles);
 
     // Precompute normalized terms.
     let mut norm_terms: Vec<(String, String, String)> = Vec::new(); // (term, term_norm, target)
@@ -681,7 +688,11 @@ fn run_links_backlinks(args: VaultLinksBacklinksArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn write_output(payload: &serde_json::Value, json: bool, out: Option<&PathBuf>) -> Result<(), String> {
+fn write_output(
+    payload: &serde_json::Value,
+    json: bool,
+    out: Option<&PathBuf>,
+) -> Result<(), String> {
     let text = if json {
         serde_json::to_string_pretty(payload).map_err(|e| format!("json encode: {e}"))? + "\n"
     } else {
@@ -690,10 +701,7 @@ fn write_output(payload: &serde_json::Value, json: bool, out: Option<&PathBuf>) 
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("Vault output");
-        let vault = payload
-            .get("vault")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let vault = payload.get("vault").and_then(|v| v.as_str()).unwrap_or("");
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!("# {title}"));
         if !vault.is_empty() {
@@ -702,9 +710,7 @@ fn write_output(payload: &serde_json::Value, json: bool, out: Option<&PathBuf>) 
         }
         lines.push(String::new());
         lines.push("```json".to_string());
-        lines.push(
-            serde_json::to_string_pretty(payload).map_err(|e| format!("json encode: {e}"))?,
-        );
+        lines.push(serde_json::to_string_pretty(payload).map_err(|e| format!("json encode: {e}"))?);
         lines.push("```".to_string());
         lines.push(String::new());
         lines.join("\n")
@@ -736,15 +742,17 @@ fn extract_normative_lines(md: &str) -> Vec<String> {
         if in_fence {
             continue;
         }
-        if t.contains("MUST NOT") || t.contains("MUST") || t.contains("SHALL NOT") || t.contains("SHALL") {
+        if t.contains("MUST NOT")
+            || t.contains("MUST")
+            || t.contains("SHALL NOT")
+            || t.contains("SHALL")
+        {
             out.push(line.trim().to_string());
         }
     }
     // Dedup.
     let mut seen: HashSet<String> = HashSet::new();
-    out.into_iter()
-        .filter(|s| seen.insert(s.clone()))
-        .collect()
+    out.into_iter().filter(|s| seen.insert(s.clone())).collect()
 }
 
 fn extract_summary(md: &str) -> Option<String> {
@@ -845,11 +853,18 @@ fn run_docs_compiler_extract(args: VaultDocsCompilerExtractArgs) -> Result<(), S
         let src_sha = sha256_hex_bytes(&bytes);
         let src_text = String::from_utf8_lossy(&bytes).to_string();
 
-        let title = extract_title(&src_text, src_path.file_stem().and_then(|s| s.to_str()).unwrap_or("Doc"));
+        let title = extract_title(
+            &src_text,
+            src_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Doc"),
+        );
         let summary = extract_summary(&src_text);
         let normative = extract_normative_lines(&src_text);
 
-        let out_path = out_path_for_source(&vault_root, &out_dir, &compiler_root, &kind, &src_path)?;
+        let out_path =
+            out_path_for_source(&vault_root, &out_dir, &compiler_root, &kind, &src_path)?;
 
         if out_path.exists() && !args.force {
             let existing = fs::read_to_string(&out_path)
@@ -877,18 +892,11 @@ fn run_docs_compiler_extract(args: VaultDocsCompilerExtractArgs) -> Result<(), S
         }
 
         if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
         }
 
-        let note = render_extracted_support_note(
-            &title,
-            &kind,
-            &rel_source,
-            &src_sha,
-            summary,
-            normative,
-        );
+        let note =
+            render_extracted_support_note(&title, &kind, &rel_source, &src_sha, summary, normative);
         fs::write(&out_path, note).map_err(|e| format!("write {}: {e}", out_path.display()))?;
         written += 1;
     }
@@ -921,7 +929,9 @@ fn run_docs_compiler_extract(args: VaultDocsCompilerExtractArgs) -> Result<(), S
     }
 
     if blocked > 0 && !args.force {
-        Err(format!("{blocked} file(s) blocked (use --force to overwrite)"))
+        Err(format!(
+            "{blocked} file(s) blocked (use --force to overwrite)"
+        ))
     } else {
         Ok(())
     }
@@ -1130,10 +1140,11 @@ fn run_spines_generate(args: VaultSpinesGenerateArgs) -> Result<(), String> {
         .out_yaml
         .clone()
         .unwrap_or_else(|| vault_root.join("meta").join("concept_spines.generated.yml"));
-    let out_md = args
-        .out_md
-        .clone()
-        .unwrap_or_else(|| vault_root.join("meta").join("Concept Spine Index.generated.md"));
+    let out_md = args.out_md.clone().unwrap_or_else(|| {
+        vault_root
+            .join("meta")
+            .join("Concept Spine Index.generated.md")
+    });
 
     let (index, md) = build_concept_spine_index_and_markdown(&vault_root)?;
 
@@ -1178,12 +1189,10 @@ fn run_spines_generate(args: VaultSpinesGenerateArgs) -> Result<(), String> {
     }
 
     if let Some(parent) = out_yaml.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     if let Some(parent) = out_md.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
 
     let yaml = serde_yaml::to_string(&index).map_err(|e| format!("yaml encode: {e}"))?;
@@ -1219,13 +1228,14 @@ fn run_spines_render(args: VaultSpinesRenderArgs) -> Result<(), String> {
         .in_yaml
         .clone()
         .unwrap_or_else(|| vault_root.join("meta").join("concept_spines.generated.yml"));
-    let out_md = args
-        .out_md
-        .clone()
-        .unwrap_or_else(|| vault_root.join("meta").join("Concept Spine Index.generated.md"));
+    let out_md = args.out_md.clone().unwrap_or_else(|| {
+        vault_root
+            .join("meta")
+            .join("Concept Spine Index.generated.md")
+    });
 
-    let yaml = fs::read_to_string(&in_yaml)
-        .map_err(|e| format!("read {}: {e}", in_yaml.display()))?;
+    let yaml =
+        fs::read_to_string(&in_yaml).map_err(|e| format!("read {}: {e}", in_yaml.display()))?;
     let mut index: ConceptSpineIndex =
         serde_yaml::from_str(&yaml).map_err(|e| format!("yaml decode: {e}"))?;
     index.generated_at_utc = now_utc_rfc3339();
@@ -1264,8 +1274,7 @@ fn run_spines_render(args: VaultSpinesRenderArgs) -> Result<(), String> {
     }
 
     if let Some(parent) = out_md.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
     fs::write(&out_md, md).map_err(|e| format!("write {}: {e}", out_md.display()))?;
 
@@ -1407,10 +1416,14 @@ fn build_concept_spine_index_and_markdown(
             .collect::<Vec<_>>();
 
         let counts = refs.get(&id).cloned().unwrap_or_default();
-        let (primary_spine, confidence) =
-            infer_primary_spine(&core_in, &counts).unwrap_or((SpineId::Structural, Confidence::Low));
+        let (primary_spine, confidence) = infer_primary_spine(&core_in, &counts)
+            .unwrap_or((SpineId::Structural, Confidence::Low));
 
-        let tier = if core_in.len() == 1 { ConceptTier::Core } else { ConceptTier::Support };
+        let tier = if core_in.len() == 1 {
+            ConceptTier::Core
+        } else {
+            ConceptTier::Support
+        };
 
         let mut refs_out: BTreeMap<String, RefCounts> = BTreeMap::new();
         for (sp, cts) in &counts {
@@ -1424,7 +1437,10 @@ fn build_concept_spine_index_and_markdown(
             primary_spine: primary_spine.as_str().to_string(),
             tier,
             confidence,
-            evidence: ConceptEvidence { core_in, refs: refs_out },
+            evidence: ConceptEvidence {
+                core_in,
+                refs: refs_out,
+            },
         });
     }
 
@@ -1494,7 +1510,10 @@ fn extract_concept_refs(body: &str, concept_key_to_id: &HashMap<String, String>)
     out
 }
 
-fn resolve_concept_id(target_key: &str, concept_key_to_id: &HashMap<String, String>) -> Option<String> {
+fn resolve_concept_id(
+    target_key: &str,
+    concept_key_to_id: &HashMap<String, String>,
+) -> Option<String> {
     if let Some(id) = concept_key_to_id.get(target_key) {
         return Some(id.clone());
     }
@@ -1572,10 +1591,12 @@ fn infer_primary_spine(
     Some((SpineId::Structural, Confidence::Low))
 }
 
-fn concept_layer_from_file(concepts_dir: &Path, concept_id: &str) -> Result<Option<String>, String> {
+fn concept_layer_from_file(
+    concepts_dir: &Path,
+    concept_id: &str,
+) -> Result<Option<String>, String> {
     let path = concepts_dir.join(format!("{concept_id}.md"));
-    let bytes = fs::read(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let bytes = fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let content = String::from_utf8_lossy(&bytes).to_string();
     let (fm, _body) = split_frontmatter(&content);
     Ok(extract_string(&fm, "layer"))
@@ -1673,7 +1694,10 @@ fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
                     continue;
                 };
                 if ct.invariant + ct.diagnostic > 0 {
-                    nonzero.push(format!("{key}: inv={}, diag={}", ct.invariant, ct.diagnostic));
+                    nonzero.push(format!(
+                        "{key}: inv={}, diag={}",
+                        ct.invariant, ct.diagnostic
+                    ));
                 }
             }
             let evidence = if nonzero.is_empty() {
@@ -1802,7 +1826,10 @@ fn build_spines_audit_report(vault_root: &Path, json: bool) -> Result<String, St
                 };
                 let v = ct.invariant + ct.diagnostic;
                 if v > 0 {
-                    parts.push(format!("{key}: inv={}, diag={}", ct.invariant, ct.diagnostic));
+                    parts.push(format!(
+                        "{key}: inv={}, diag={}",
+                        ct.invariant, ct.diagnostic
+                    ));
                 }
             }
             out.push_str(&format!("- [[{}]] ({})\n", c.id, parts.join("; ")));
@@ -1991,7 +2018,11 @@ struct BookBuild {
     cycle_nodes: Vec<String>,
 }
 
-fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) -> Result<BookBuild, String> {
+fn build_concept_book(
+    vault_root: &Path,
+    out_path: PathBuf,
+    all_concepts: bool,
+) -> Result<BookBuild, String> {
     let notes = load_vault_notes(vault_root)?;
     let concepts: Vec<VaultNote> = notes.into_iter().filter(is_concept_note).collect();
     if concepts.is_empty() {
@@ -2110,7 +2141,9 @@ fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) 
     // Group in reading order by declared layer buckets.
     let mut by_label: HashMap<&'static str, Vec<String>> = HashMap::new();
     for id in &ordered {
-        let note = concepts_by_id.get(id).ok_or_else(|| format!("missing concept: {}", id))?;
+        let note = concepts_by_id
+            .get(id)
+            .ok_or_else(|| format!("missing concept: {}", id))?;
         let label = layer_label(note.layer.as_deref());
         by_label.entry(label).or_default().push(id.clone());
     }
@@ -2135,7 +2168,9 @@ fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) 
         };
         md.push_str(&format!("- {}\n", label));
         for id in items {
-            let note = concepts_by_id.get(id).ok_or_else(|| format!("missing concept: {}", id))?;
+            let note = concepts_by_id
+                .get(id)
+                .ok_or_else(|| format!("missing concept: {}", id))?;
             md.push_str(&format!(
                 "  - [{}](#{})\n",
                 note.name,
@@ -2146,7 +2181,9 @@ fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) 
     if let Some(items) = by_label.get("Unclassified") {
         md.push_str("- Unclassified\n");
         for id in items {
-            let note = concepts_by_id.get(id).ok_or_else(|| format!("missing concept: {}", id))?;
+            let note = concepts_by_id
+                .get(id)
+                .ok_or_else(|| format!("missing concept: {}", id))?;
             md.push_str(&format!(
                 "  - [{}](#{})\n",
                 note.name,
@@ -2163,8 +2200,11 @@ fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) 
         };
         md.push_str(&format!("## {}\n\n", label));
         for id in items {
-            let note = concepts_by_id.get(id).ok_or_else(|| format!("missing concept: {}", id))?;
-            let mut body = rewrite_wikilinks_to_book_anchors(&note.body, &included, &concept_key_to_id);
+            let note = concepts_by_id
+                .get(id)
+                .ok_or_else(|| format!("missing concept: {}", id))?;
+            let mut body =
+                rewrite_wikilinks_to_book_anchors(&note.body, &included, &concept_key_to_id);
             body = demote_markdown_headings(&body, 2);
             md.push_str(&format!("<a id=\"{}\"></a>\n\n", concept_anchor_id(id)));
             md.push_str(body.trim_end());
@@ -2174,8 +2214,11 @@ fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) 
     if let Some(items) = by_label.get("Unclassified") {
         md.push_str("## Unclassified\n\n");
         for id in items {
-            let note = concepts_by_id.get(id).ok_or_else(|| format!("missing concept: {}", id))?;
-            let mut body = rewrite_wikilinks_to_book_anchors(&note.body, &included, &concept_key_to_id);
+            let note = concepts_by_id
+                .get(id)
+                .ok_or_else(|| format!("missing concept: {}", id))?;
+            let mut body =
+                rewrite_wikilinks_to_book_anchors(&note.body, &included, &concept_key_to_id);
             body = demote_markdown_headings(&body, 2);
             md.push_str(&format!("<a id=\"{}\"></a>\n\n", concept_anchor_id(id)));
             md.push_str(body.trim_end());
@@ -2195,7 +2238,10 @@ fn build_concept_book(vault_root: &Path, out_path: PathBuf, all_concepts: bool) 
 
 fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
     let vault_root = resolve_vault_root_for_book(&args.path)?;
-    let out = args.out.clone().unwrap_or_else(|| default_book_out_path(&vault_root));
+    let out = args
+        .out
+        .clone()
+        .unwrap_or_else(|| default_book_out_path(&vault_root));
 
     let build = build_concept_book(&vault_root, out.clone(), args.all_concepts)?;
     let bytes = build.markdown.as_bytes().len();

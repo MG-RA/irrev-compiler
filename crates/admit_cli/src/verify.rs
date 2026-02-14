@@ -10,7 +10,9 @@ use super::registry::{load_registry_cached, registry_allows_schema, registry_all
 use super::types::{
     AdmissibilityCheckedEvent, AdmissibilityExecutedEvent, ArtifactRef, CheckedPayload,
     CostDeclaredEvent, DeclareCostError, EngineEvent, EngineEventPayload, ExecutedPayload,
-    IngestEvent, IngestEventPayload, LedgerIssue, LedgerReport, PlanCreatedEvent,
+    IngestEvent, IngestEventPayload, LedgerIssue, LedgerReport, LensActivatedEvent,
+    LensActivatedPayload, MetaChangeCheckedEvent, MetaChangeCheckedPayload,
+    MetaInterpretationDeltaEvent, MetaInterpretationDeltaPayload, PlanCreatedEvent,
     PlanCreatedPayload, ProjectionEvent, ProjectionEventPayload, RustIrLintEvent,
     RustIrLintPayload, RustIrLintWitness,
 };
@@ -109,6 +111,8 @@ pub fn verify_ledger(
     let mut checked_by_id: std::collections::HashMap<String, AdmissibilityCheckedEvent> =
         Default::default();
     let mut executed_by_id: std::collections::HashMap<String, AdmissibilityExecutedEvent> =
+        Default::default();
+    let mut lens_activated_by_id: std::collections::HashMap<String, LensActivatedEvent> =
         Default::default();
     let mut registry_cache: std::collections::HashMap<String, super::types::MetaRegistryV0> =
         Default::default();
@@ -372,6 +376,9 @@ pub fn verify_ledger(
                             program_bundle_ref: event.program_bundle_ref.clone(),
                             facts_bundle_ref: event.facts_bundle_ref.clone(),
                             facts_bundle_hash: event.facts_bundle_hash.clone(),
+                            lens_id: event.lens_id.clone(),
+                            lens_hash: event.lens_hash.clone(),
+                            lens_activation_event_id: event.lens_activation_event_id.clone(),
                             program: event.program.clone(),
                             registry_hash: event.registry_hash.clone(),
                         };
@@ -522,6 +529,9 @@ pub fn verify_ledger(
                             program_bundle_ref: event.program_bundle_ref.clone(),
                             facts_bundle_ref: event.facts_bundle_ref.clone(),
                             facts_bundle_hash: event.facts_bundle_hash.clone(),
+                            lens_id: event.lens_id.clone(),
+                            lens_hash: event.lens_hash.clone(),
+                            lens_activation_event_id: event.lens_activation_event_id.clone(),
                             program: event.program.clone(),
                             registry_hash: event.registry_hash.clone(),
                         };
@@ -633,6 +643,113 @@ pub fn verify_ledger(
                         event_id: event_id.clone(),
                         event_type: event_type.clone(),
                         message: format!("admissibility.executed decode failed: {}", err),
+                    }),
+                }
+            }
+            Some("lens.activated") => match serde_json::from_value::<LensActivatedEvent>(value) {
+                Ok(event) => {
+                    let payload = LensActivatedPayload {
+                        event_type: event.event_type.clone(),
+                        timestamp: event.timestamp.clone(),
+                        lens_id: event.lens_id.clone(),
+                        lens_hash: event.lens_hash.clone(),
+                        activation_reason: event.activation_reason.clone(),
+                        program: event.program.clone(),
+                        registry_hash: event.registry_hash.clone(),
+                    };
+                    if let Ok(hash) = payload_hash(&payload) {
+                        if hash != event.event_id {
+                            issues.push(LedgerIssue {
+                                line: line_no,
+                                event_id: event_id.clone(),
+                                event_type: event_type.clone(),
+                                message: format!(
+                                    "event_id mismatch (expected {}, computed {})",
+                                    event.event_id, hash
+                                ),
+                            });
+                        }
+                    }
+                    lens_activated_by_id.insert(event.event_id.clone(), event);
+                }
+                Err(err) => issues.push(LedgerIssue {
+                    line: line_no,
+                    event_id: event_id.clone(),
+                    event_type: event_type.clone(),
+                    message: format!("lens.activated decode failed: {}", err),
+                }),
+            },
+            Some("meta.change.checked") => {
+                match serde_json::from_value::<MetaChangeCheckedEvent>(value) {
+                    Ok(event) => {
+                        let payload = MetaChangeCheckedPayload {
+                            event_type: event.event_type.clone(),
+                            timestamp: event.timestamp.clone(),
+                            kind: event.kind.clone(),
+                            from_lens_id: event.from_lens_id.clone(),
+                            from_lens_hash: event.from_lens_hash.clone(),
+                            to_lens_id: event.to_lens_id.clone(),
+                            to_lens_hash: event.to_lens_hash.clone(),
+                            payload_ref: event.payload_ref.clone(),
+                            synthetic_diff_id: event.synthetic_diff_id.clone(),
+                            routes: event.routes.clone(),
+                            registry_hash: event.registry_hash.clone(),
+                        };
+                        if let Ok(hash) = payload_hash(&payload) {
+                            if hash != event.event_id {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "event_id mismatch (expected {}, computed {})",
+                                        event.event_id, hash
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    Err(err) => issues.push(LedgerIssue {
+                        line: line_no,
+                        event_id: event_id.clone(),
+                        event_type: event_type.clone(),
+                        message: format!("meta.change.checked decode failed: {}", err),
+                    }),
+                }
+            }
+            Some("meta.interpretation.delta") => {
+                match serde_json::from_value::<MetaInterpretationDeltaEvent>(value) {
+                    Ok(event) => {
+                        let payload = MetaInterpretationDeltaPayload {
+                            event_type: event.event_type.clone(),
+                            timestamp: event.timestamp.clone(),
+                            from_lens_id: event.from_lens_id.clone(),
+                            from_lens_hash: event.from_lens_hash.clone(),
+                            to_lens_id: event.to_lens_id.clone(),
+                            to_lens_hash: event.to_lens_hash.clone(),
+                            witness: event.witness.clone(),
+                            snapshot_hash: event.snapshot_hash.clone(),
+                            registry_hash: event.registry_hash.clone(),
+                        };
+                        if let Ok(hash) = payload_hash(&payload) {
+                            if hash != event.event_id {
+                                issues.push(LedgerIssue {
+                                    line: line_no,
+                                    event_id: event_id.clone(),
+                                    event_type: event_type.clone(),
+                                    message: format!(
+                                        "event_id mismatch (expected {}, computed {})",
+                                        event.event_id, hash
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    Err(err) => issues.push(LedgerIssue {
+                        line: line_no,
+                        event_id: event_id.clone(),
+                        event_type: event_type.clone(),
+                        message: format!("meta.interpretation.delta decode failed: {}", err),
                     }),
                 }
             }
@@ -1181,6 +1298,44 @@ pub fn verify_ledger(
                     }
                 }
             }
+            let requires_lens_activation = checked.witness.schema_id == "admissibility-witness/2";
+            if requires_lens_activation
+                && (checked.lens_id.is_none()
+                    || checked.lens_hash.is_none()
+                    || checked.lens_activation_event_id.is_none())
+            {
+                issues.push(LedgerIssue {
+                    line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
+                    event_id: Some(checked.event_id.clone()),
+                    event_type: Some("admissibility.checked".to_string()),
+                    message: "missing lens activation metadata".to_string(),
+                });
+            }
+            if requires_lens_activation {
+                if let Some(activation_id) = &checked.lens_activation_event_id {
+                    if !lens_activated_by_id.contains_key(activation_id) {
+                        issues.push(LedgerIssue {
+                            line: index_by_id.get(&checked.event_id).copied().unwrap_or(0),
+                            event_id: Some(checked.event_id.clone()),
+                            event_type: Some("admissibility.checked".to_string()),
+                            message: "missing lens.activated reference".to_string(),
+                        });
+                    } else if let (Some(checked_line), Some(activation_line)) = (
+                        index_by_id.get(&checked.event_id),
+                        index_by_id.get(activation_id),
+                    ) {
+                        if activation_line >= checked_line {
+                            issues.push(LedgerIssue {
+                                line: *checked_line,
+                                event_id: Some(checked.event_id.clone()),
+                                event_type: Some("admissibility.checked".to_string()),
+                                message: "lens.activated appears after admissibility.checked"
+                                    .to_string(),
+                            });
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1281,6 +1436,17 @@ pub fn verify_ledger(
                     event_id: Some(executed.event_id.clone()),
                     event_type: Some("admissibility.executed".to_string()),
                     message: "facts bundle hash mismatch vs admissibility.checked".to_string(),
+                });
+            }
+            if executed.lens_id != checked.lens_id
+                || executed.lens_hash != checked.lens_hash
+                || executed.lens_activation_event_id != checked.lens_activation_event_id
+            {
+                issues.push(LedgerIssue {
+                    line: idx,
+                    event_id: Some(executed.event_id.clone()),
+                    event_type: Some("admissibility.executed".to_string()),
+                    message: "lens metadata mismatch vs admissibility.checked".to_string(),
                 });
             }
         }

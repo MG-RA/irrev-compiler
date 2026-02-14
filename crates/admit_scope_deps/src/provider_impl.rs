@@ -205,10 +205,12 @@ impl Provider for DepsManifestProvider {
                         kind: "cargo_lock".to_string(),
                         path: rel.clone(),
                     });
-                    parse_cargo_lock(&text, &rel, &mut lock_entries).map_err(|err| ProviderError {
-                        scope: scope_id.clone(),
-                        phase: ProviderPhase::Snapshot,
-                        message: err,
+                    parse_cargo_lock(&text, &rel, &mut lock_entries).map_err(|err| {
+                        ProviderError {
+                            scope: scope_id.clone(),
+                            phase: ProviderPhase::Snapshot,
+                            message: err,
+                        }
                     })?;
                 }
                 "package.json" => {
@@ -274,11 +276,12 @@ impl Provider for DepsManifestProvider {
             phase: ProviderPhase::Snapshot,
             message: format!("facts serialization failed: {}", err),
         })?;
-        let cbor = admit_core::encode_canonical_value(&facts_value).map_err(|err| ProviderError {
-            scope: scope_id.clone(),
-            phase: ProviderPhase::Snapshot,
-            message: format!("facts canonical encoding failed: {}", err),
-        })?;
+        let cbor =
+            admit_core::encode_canonical_value(&facts_value).map_err(|err| ProviderError {
+                scope: scope_id.clone(),
+                phase: ProviderPhase::Snapshot,
+                message: format!("facts canonical encoding failed: {}", err),
+            })?;
         let mut hasher = Sha256::new();
         hasher.update(cbor);
         let snapshot_hash = Sha256Hex::new(format!("{:x}", hasher.finalize()));
@@ -309,14 +312,15 @@ impl Provider for DepsManifestProvider {
             facts_bundle_hash: None,
             ruleset_hash: None,
         };
-        let witness = WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
-            .with_facts(facts)
-            .with_displacement_trace(DisplacementTrace {
-                mode: DisplacementMode::Potential,
-                totals: vec![],
-                contributions: vec![],
-            })
-            .build();
+        let witness =
+            WitnessBuilder::new(witness_program, Verdict::Admissible, "snapshot complete")
+                .with_facts(facts)
+                .with_displacement_trace(DisplacementTrace {
+                    mode: DisplacementMode::Potential,
+                    totals: vec![],
+                    contributions: vec![],
+                })
+                .build();
 
         Ok(SnapshotResult {
             facts_bundle,
@@ -391,7 +395,9 @@ fn parse_allowed_names(
     Ok(out)
 }
 
-fn eval_git_dependency_present(deps: &[DependencyRecord]) -> Result<PredicateResult, ProviderError> {
+fn eval_git_dependency_present(
+    deps: &[DependencyRecord],
+) -> Result<PredicateResult, ProviderError> {
     let mut findings = Vec::new();
     for dep in deps {
         if dep.source_kind == "git" {
@@ -440,8 +446,10 @@ fn eval_lockfile_missing(
 ) -> Result<PredicateResult, ProviderError> {
     let mut findings = Vec::new();
 
-    let cargo_manifests: Vec<&ManifestRecord> =
-        manifests.iter().filter(|m| m.kind == "cargo_toml").collect();
+    let cargo_manifests: Vec<&ManifestRecord> = manifests
+        .iter()
+        .filter(|m| m.kind == "cargo_toml")
+        .collect();
     let has_cargo_lock = locks.iter().any(|l| l.kind == "cargo_lock");
     if !cargo_manifests.is_empty() && !has_cargo_lock {
         for manifest in &cargo_manifests {
@@ -547,7 +555,12 @@ fn collect_cargo_dependency_tables(
         if is_supported_cargo_dependency_path(&next_path) {
             if let Some(dep_table) = child.as_table() {
                 for (name, spec) in dep_table {
-                    deps.push(parse_cargo_dependency(manifest_path, &next_path, name, spec));
+                    deps.push(parse_cargo_dependency(
+                        manifest_path,
+                        &next_path,
+                        name,
+                        spec,
+                    ));
                 }
             }
             continue;
@@ -561,10 +574,12 @@ fn is_supported_cargo_dependency_path(path: &str) -> bool {
         "dependencies" | "dev-dependencies" | "build-dependencies" | "workspace.dependencies" => {
             true
         }
-        _ => path.starts_with("target.")
-            && (path.ends_with(".dependencies")
-                || path.ends_with(".dev-dependencies")
-                || path.ends_with(".build-dependencies")),
+        _ => {
+            path.starts_with("target.")
+                && (path.ends_with(".dependencies")
+                    || path.ends_with(".dev-dependencies")
+                    || path.ends_with(".build-dependencies"))
+        }
     }
 }
 
@@ -620,8 +635,8 @@ fn parse_cargo_lock(
     lock_path: &str,
     entries: &mut Vec<LockEntryRecord>,
 ) -> Result<(), String> {
-    let value: toml::Value = toml::from_str(text)
-        .map_err(|err| format!("parse Cargo.lock '{}': {}", lock_path, err))?;
+    let value: toml::Value =
+        toml::from_str(text).map_err(|err| format!("parse Cargo.lock '{}': {}", lock_path, err))?;
     let Some(array) = value.get("package").and_then(|v| v.as_array()) else {
         return Ok(());
     };
@@ -1067,7 +1082,9 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         Fact::RuleEvaluated { .. } => 5,
         Fact::ScopeChangeUsed { .. } => 6,
         Fact::UnaccountedBoundaryChange { .. } => 7,
-        Fact::LintFinding { .. } => 8,
+        Fact::LensActivated { .. } => 8,
+        Fact::MetaChangeChecked { .. } => 9,
+        Fact::LintFinding { .. } => 10,
     };
     let aux = match fact {
         Fact::RuleEvaluated { rule_id, .. } => rule_id.clone(),
@@ -1083,6 +1100,8 @@ fn fact_sort_key(fact: &Fact) -> (u8, String, String, u32, u32) {
         | Fact::RuleEvaluated { span, .. }
         | Fact::ScopeChangeUsed { span, .. }
         | Fact::UnaccountedBoundaryChange { span, .. }
+        | Fact::LensActivated { span, .. }
+        | Fact::MetaChangeChecked { span, .. }
         | Fact::LintFinding { span, .. } => span,
     };
     (
@@ -1133,7 +1152,9 @@ mod tests {
             scope_id: ScopeId(DEPS_MANIFEST_SCOPE_ID.to_string()),
             params: serde_json::Value::Null,
         };
-        let err = provider.snapshot(&req).expect_err("missing root should fail");
+        let err = provider
+            .snapshot(&req)
+            .expect_err("missing root should fail");
         assert_eq!(err.phase, ProviderPhase::Snapshot);
         assert!(err.message.contains("params.root"));
     }
@@ -1178,30 +1199,24 @@ version = "1.0.0"
         };
         let out = provider.snapshot(&req).expect("snapshot");
         assert_eq!(out.facts_bundle.created_at.0, "2026-02-11T00:00:00Z");
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_MANIFEST_FILE))
-        );
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_LOCK_FILE))
-        );
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_DEP))
-        );
-        assert!(
-            out.facts_bundle
-                .facts
-                .iter()
-                .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_LOCK_ENTRY))
-        );
+        assert!(out.facts_bundle.facts.iter().any(
+            |f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_MANIFEST_FILE)
+        ));
+        assert!(out
+            .facts_bundle
+            .facts
+            .iter()
+            .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_LOCK_FILE)));
+        assert!(out
+            .facts_bundle
+            .facts
+            .iter()
+            .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_DEP)));
+        assert!(out
+            .facts_bundle
+            .facts
+            .iter()
+            .any(|f| matches!(f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_LOCK_ENTRY)));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1225,7 +1240,10 @@ version = "1.0.0"
             })),
         }];
         let out = provider
-            .eval_predicate("git_dependency_present", &serde_json::json!({ "facts": facts }))
+            .eval_predicate(
+                "git_dependency_present",
+                &serde_json::json!({ "facts": facts }),
+            )
             .expect("predicate");
         assert!(out.triggered);
         assert_eq!(out.findings.len(), 1);

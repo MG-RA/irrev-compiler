@@ -14,8 +14,8 @@ use sha2::Digest;
 use crate::{
     build_file_index, build_heading_index, choose_ambiguous_target, extract_obsidian_links,
     file_stem_title, normalize_heading, normalize_target, obsidian_heading_slug,
-    resolve_obsidian_asset_target, resolve_obsidian_target, sha256_hex_str,
-    ObsidianLink, ResolutionResult, VaultDoc,
+    resolve_obsidian_asset_target, resolve_obsidian_target, sha256_hex_str, ObsidianLink,
+    ResolutionResult, VaultDoc,
 };
 
 // ---------------------------------------------------------------------------
@@ -243,7 +243,11 @@ fn parse_frontmatter_yaml(raw_yaml: &str) -> Option<DocFrontmatter> {
                 let unquoted = val_str
                     .strip_prefix('"')
                     .and_then(|s| s.strip_suffix('"'))
-                    .or_else(|| val_str.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+                    .or_else(|| {
+                        val_str
+                            .strip_prefix('\'')
+                            .and_then(|s| s.strip_suffix('\''))
+                    })
                     .unwrap_or(val_str);
                 serde_json::Value::String(unquoted.to_string())
             };
@@ -326,8 +330,7 @@ fn doc_file_update_frontmatter_sql(doc: &VaultDoc, fm: Option<&DocFrontmatter>) 
         );
     };
     let json_val = serde_json::to_string(&fm.json).unwrap_or_else(|_| "null".to_string());
-    let facets_json =
-        serde_json::to_string(&fm.facets).unwrap_or_else(|_| "[]".to_string());
+    let facets_json = serde_json::to_string(&fm.facets).unwrap_or_else(|_| "[]".to_string());
     format!(
         "UPDATE {thing_id} SET fm_present = true, fm_role = {role}, fm_type = {doc_type}, fm_canonical = {canonical}, fm_status_date = {status_date}, fm_facets = {facets}, frontmatter = {frontmatter}, frontmatter_raw = {raw} RETURN NONE;",
         thing_id = thing("doc_file", &doc.doc_id),
@@ -974,9 +977,11 @@ pub fn project_obsidian_vault_links_from_artifacts(
                     }
 
                     if resolution.kind == "ambiguous" {
-                        if let Some((chosen, kind)) =
-                            choose_ambiguous_target(&doc.doc_path, &resolution.candidates, obsidian_vault_prefixes)
-                        {
+                        if let Some((chosen, kind)) = choose_ambiguous_target(
+                            &doc.doc_path,
+                            &resolution.candidates,
+                            obsidian_vault_prefixes,
+                        ) {
                             resolution.resolved = Some(chosen.clone());
                             resolution.kind = kind;
                             stats.ambiguous_out = stats.ambiguous_out.saturating_sub(1);

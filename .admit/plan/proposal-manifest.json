@@ -1,9 +1,9 @@
 {
   "schema_id": "proposal-manifest/0",
-  "manifest_id": "manifest:a2808fe135b710b8d2f493df5ac015ec909bef357ecac522c5524cd5c152baab",
-  "plan_id": "plan:80091fc8b8e18b28bb5897bcf0c0e4a9af657127317acc775c1266c868c5413c",
+  "manifest_id": "manifest:bb0ed02e89aa25effaf8fa320cd6a637bcb8ed61103abec691a3c2b3e55dc678",
+  "plan_id": "plan:768e8b1c79290bf4469e9c3a176800aa67e6f8797f718d13b60eda2e57034df5",
   "base_sha": "950f635014f79f5f133bc03fca111afdddc0d3a6",
-  "head_sha": "f6c8196db608114de3c18a312497fb8e1fba5150",
+  "head_sha": "2aa0420dd300f72d5969693709b770034b277ec6",
   "changed_paths": [
     ".admit/config.toml",
     ".admit/plan/plan-artifact.json",

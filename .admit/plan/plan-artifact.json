@@ -1,6 +1,6 @@
 {
   "schema_id": "plan-artifact/0",
-  "plan_id": "plan:80091fc8b8e18b28bb5897bcf0c0e4a9af657127317acc775c1266c868c5413c",
+  "plan_id": "plan:768e8b1c79290bf4469e9c3a176800aa67e6f8797f718d13b60eda2e57034df5",
   "intent": "Automated CI plan scaffold",
   "scope_targets": [
     "."
@@ -89,7 +89,7 @@
     "provider": "admit_cli",
     "model": "autogen/v1",
     "surface": "ci",
-    "timestamp": "2026-02-14T19:47:10Z",
+    "timestamp": "2026-02-14T19:56:11Z",
     "planner_prompt_hash": null,
     "implementer_prompt_hash": null
   }

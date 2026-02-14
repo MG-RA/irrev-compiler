@@ -175,6 +175,52 @@ runs:
         echo "requires_manual_approval=$REQUIRES_MANUAL_APPROVAL" >> "$GITHUB_OUTPUT"
         echo "plan_valid=$PLAN_VALID" >> "$GITHUB_OUTPUT"
 
+    - name: Resolve Manual Approval
+      id: manual_approval
+      if: ${{ github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        REQUIRES_MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        WITNESS_HASH=$(jq -r '.witness_hash // ""' out/ci-witness.json)
+        REPO="${{ github.repository }}"
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+
+        APPROVAL_GRANTED="false"
+        APPROVER=""
+        APPROVAL_COMMAND=""
+        if [ -n "$WITNESS_HASH" ]; then
+          APPROVAL_COMMAND="/admit approve $WITNESS_HASH"
+        fi
+
+        if [ "$REQUIRES_MANUAL_APPROVAL" = "true" ] && [ -n "$APPROVAL_COMMAND" ]; then
+          APPROVER=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq ".[] | select(.user.login == \"$PR_AUTHOR\" and (.body | contains(\"$APPROVAL_COMMAND\"))) | .user.login" | tail -n 1)
+          if [ -n "$APPROVER" ]; then
+            APPROVAL_GRANTED="true"
+          fi
+        fi
+
+        jq -n \
+          --arg witness_hash "$WITNESS_HASH" \
+          --arg command "$APPROVAL_COMMAND" \
+          --arg required "$REQUIRES_MANUAL_APPROVAL" \
+          --arg granted "$APPROVAL_GRANTED" \
+          --arg approver "$APPROVER" \
+          '{
+            schema_id: "manual-approval/0",
+            witness_hash: $witness_hash,
+            command: $command,
+            required: ($required == "true"),
+            granted: ($granted == "true"),
+            approver: (if $approver == "" then null else $approver end)
+          }' > out/manual-approval.json
+
+        echo "granted=$APPROVAL_GRANTED" >> "$GITHUB_OUTPUT"
+        echo "approver=$APPROVER" >> "$GITHUB_OUTPUT"
+        echo "command=$APPROVAL_COMMAND" >> "$GITHUB_OUTPUT"
+
     - name: Publish summary
       shell: bash
       run: |
@@ -198,6 +244,12 @@ runs:
         MANIFEST_VALID=$(jq -r '.plan_contract.manifest_valid // false' out/ci-witness.json)
         MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
         STOP_REASON_COUNT=$(jq -r '(.stop_reasons // []) | length' out/ci-witness.json)
+        MANUAL_APPROVAL_GRANTED="${{ steps.manual_approval.outputs.granted }}"
+        MANUAL_APPROVAL_APPROVER="${{ steps.manual_approval.outputs.approver }}"
+        MANUAL_APPROVAL_COMMAND="${{ steps.manual_approval.outputs.command }}"
+        if [ -z "$MANUAL_APPROVAL_GRANTED" ]; then
+          MANUAL_APPROVAL_GRANTED="false"
+        fi
 
         cat > out/ci-witness-comment.md <<EOF
         <!-- admit-ci-witness -->
@@ -215,8 +267,28 @@ runs:
         | plan_valid | \`$PLAN_VALID\` |
         | manifest_valid | \`$MANIFEST_VALID\` |
         | requires_manual_approval | \`$MANUAL_APPROVAL\` |
+        | manual_approval_granted | \`$MANUAL_APPROVAL_GRANTED\` |
         | stop_reasons | \`$STOP_REASON_COUNT\` |
 
+        EOF
+
+        if [ "$MANUAL_APPROVAL" = "true" ]; then
+          if [ "$MANUAL_APPROVAL_GRANTED" = "true" ]; then
+            cat >> out/ci-witness-comment.md <<EOF
+        Manual approval is recorded for witness \`$WITNESS_HASH\` by \`$MANUAL_APPROVAL_APPROVER\`.
+
+        EOF
+          else
+            cat >> out/ci-witness-comment.md <<EOF
+        Manual approval is required for witness \`$WITNESS_HASH\`.
+        PR author can approve by commenting:
+        \`$MANUAL_APPROVAL_COMMAND\`
+
+        EOF
+          fi
+        fi
+
+        cat >> out/ci-witness-comment.md <<EOF
         <details>
         <summary>Full Witness Summary (JSON)</summary>
 
@@ -249,5 +321,11 @@ runs:
       if: ${{ steps.run_witness.outputs.ci_exit_code != '0' }}
       shell: bash
       run: |
+        REQUIRES_MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        MANUAL_APPROVAL_GRANTED="${{ steps.manual_approval.outputs.granted }}"
+        if [ "$REQUIRES_MANUAL_APPROVAL" = "true" ] && [ "$MANUAL_APPROVAL_GRANTED" = "true" ] && grep -q "manual approval required" out/ci-witness.stderr; then
+          echo "manual approval granted for this witness; allowing CI pass"
+          exit 0
+        fi
         echo "admit ci failed (exit=${{ steps.run_witness.outputs.ci_exit_code }})"
         exit "${{ steps.run_witness.outputs.ci_exit_code }}"

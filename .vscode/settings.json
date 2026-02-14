@@ -1,0 +1,6 @@
+{
+  "terminal.integrated.inheritEnv": true,
+  "terminal.integrated.env.windows": {
+    "Path": "${env:USERPROFILE}\\.cargo\\bin;${env:Path}"
+  }
+}

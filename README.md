@@ -1010,6 +1010,7 @@ A PR to protected bases from any other head branch is inadmissible in enforce mo
 
 Current `.github/workflows/ci.yml` runs:
 - `enforce` mode on `pull_request`
+- sticky PR witness comment update on `pull_request`
 - `observe` mode on `push`
 
 The repository should also enable branch protection on `main`/`master` requiring this

@@ -71,12 +71,14 @@ Workflow: `.github/workflows/ci.yml`
 
 Current behavior:
 - `pull_request`: runs admissibility in `enforce` mode with `require-github=true`
+- `pull_request`: updates a sticky PR comment with witness summary/details
 - `push`: runs admissibility in `observe` mode
 
 Composite action: `action.yml`
 - builds `admit_cli`
 - runs `admit ci`
 - publishes witness summary
+- posts/updates PR witness comment when running on pull requests
 - uploads artifacts in workflow
 
 ## 5. Branch Protection (Required for Real Enforcement)

@@ -3,7 +3,7 @@
   "schema_version": 0,
   "sources": [
     {
-      "path": "testdata\\facts\\prescriptive.md",
+      "path": "testdata/facts/prescriptive.md",
       "sha256": "cb5c0de0a6ed929f9724c415fff1f19c6ac57668b12ff9b9bce6314537b849ea"
     }
   ],
@@ -15,7 +15,7 @@
         "unit": "count"
       },
       "span": {
-        "file": "testdata\\facts\\prescriptive.md",
+        "file": "testdata/facts/prescriptive.md",
         "start": 5,
         "end": 11,
         "line": 1,
@@ -23,10 +23,10 @@
       },
       "sources": [
         {
-          "path": "testdata\\facts\\prescriptive.md",
+          "path": "testdata/facts/prescriptive.md",
           "count": 3,
           "span": {
-            "file": "testdata\\facts\\prescriptive.md",
+            "file": "testdata/facts/prescriptive.md",
             "start": 5,
             "end": 11,
             "line": 1,

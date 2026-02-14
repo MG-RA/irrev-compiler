@@ -136,7 +136,8 @@ pub fn observe_regex(
         let path_str = source_root
             .and_then(|root| path.strip_prefix(root).ok())
             .map(|rel| rel.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string_lossy().to_string());
+            .unwrap_or_else(|| path.to_string_lossy().to_string())
+            .replace('\\', "/");
         sources.push(FactSource {
             path: path_str.clone(),
             sha256: sha,

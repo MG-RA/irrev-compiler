@@ -40,6 +40,11 @@ runs:
     - name: Run admissibility witness
       id: run_witness
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+        GH_PR_NUMBER: ${{ github.event.pull_request.number }}
+        GH_REPO: ${{ github.repository }}
       run: |
         mkdir -p out/artifacts
         CONFIG_ARG=""
@@ -71,6 +76,41 @@ runs:
         jq . out/ci-witness.json >> "$GITHUB_STEP_SUMMARY" || cat out/ci-witness.json >> "$GITHUB_STEP_SUMMARY"
         echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+    - name: Build PR comment body
+      if: ${{ inputs.comment == 'true' }}
+      shell: bash
+      run: |
+        VERDICT=$(jq -r '.verdict // "unknown"' out/ci-witness.json)
+        MODE=$(jq -r '.mode // "unknown"' out/ci-witness.json)
+        FAIL_THRESHOLD=$(jq -r '.fail_threshold // "unknown"' out/ci-witness.json)
+        WITNESS_HASH=$(jq -r '.witness_hash // ""' out/ci-witness.json)
+        WITNESS_PATH=$(jq -r '.witness_artifact_path // ""' out/ci-witness.json)
+        INTEGRITY_COUNT=$(jq -r '(.integrity_failures // []) | length' out/ci-witness.json)
+        SCOPE_WARNING_COUNT=$(jq -r '(.scope_warnings // []) | length' out/ci-witness.json)
+
+        cat > out/ci-witness-comment.md <<EOF
+        <!-- admit-ci-witness -->
+        ## Admissibility Witness
+
+        | key | value |
+        | --- | --- |
+        | mode | \`$MODE\` |
+        | verdict | \`$VERDICT\` |
+        | fail_threshold | \`$FAIL_THRESHOLD\` |
+        | witness_hash | \`$WITNESS_HASH\` |
+        | witness_artifact_path | \`$WITNESS_PATH\` |
+        | integrity_failures | \`$INTEGRITY_COUNT\` |
+        | scope_warnings | \`$SCOPE_WARNING_COUNT\` |
+
+        <details>
+        <summary>Full Witness Summary (JSON)</summary>
+
+        \`\`\`json
+        $(jq . out/ci-witness.json)
+        \`\`\`
+        </details>
+        EOF
+
     - name: Best-effort PR comment
       if: ${{ inputs.comment == 'true' }}
       shell: bash
@@ -79,5 +119,13 @@ runs:
       run: |
         PR_NUMBER="${{ github.event.pull_request.number }}"
         if [ -n "$PR_NUMBER" ]; then
-          gh pr comment "$PR_NUMBER" --body-file out/ci-witness.json || true
+          REPO="${{ github.repository }}"
+          MARKER="<!-- admit-ci-witness -->"
+          EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$MARKER\"))) | .id" | tail -n 1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING_ID" -f body="$(cat out/ci-witness-comment.md)" || true
+          else
+            gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$(cat out/ci-witness-comment.md)" || true
+          fi
         fi

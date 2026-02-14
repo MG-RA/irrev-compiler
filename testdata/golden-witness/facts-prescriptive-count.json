@@ -1,0 +1,60 @@
+{
+  "schema_id": "admissibility-witness/2",
+  "lens_id": "lens:default@0",
+  "lens_hash": "lens:default:pending",
+  "lens_activation_event_id": "pending:lens_activation:ffd380420daa144d2a99db59b85974fe2ff2f03b7e1b02073955dbbe644b72c3",
+  "verdict": "inadmissible",
+  "program": {
+    "module": "module:test@1",
+    "scope": "scope:main",
+    "facts_bundle_hash": "5c531ca6f01c82520ca184c61c0e120a6b8b0e778b5dcc5e2993ca5000a7a8ce"
+  },
+  "reason": "constraints triggered",
+  "facts": [
+    {
+      "type": "constraint_triggered",
+      "span": {
+        "file": "facts.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    },
+    {
+      "type": "commit_used",
+      "diff": {
+        "ns": "difference",
+        "name": "prescriptive_claims"
+      },
+      "value": {
+        "value": 3.0,
+        "unit": "count"
+      },
+      "span": {
+        "file": "facts.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    },
+    {
+      "type": "predicate_evaluated",
+      "predicate": "commit_cmp difference:prescriptive_claims > 2 count",
+      "result": true,
+      "span": {
+        "file": "facts.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "displacement_trace": {
+    "mode": "potential",
+    "totals": [],
+    "contributions": []
+  }
+}

@@ -19,6 +19,28 @@ fn compiler_root() -> PathBuf {
         .expect("canonicalize compiler root")
 }
 
+fn normalize_path_separators(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                if (key == "path" || key == "file") && val.is_string() {
+                    if let Some(s) = val.as_str() {
+                        *val = serde_json::Value::String(s.replace('\\', "/"));
+                    }
+                } else {
+                    normalize_path_separators(val);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                normalize_path_separators(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn facts_bundle_hash_matches_fixture() {
     let bundle_path = fixture_path("facts-bundle.json");
@@ -41,10 +63,12 @@ fn observe_regex_matches_fixture() {
     }];
     let bundle =
         observe_regex(&[input], &patterns, true, None, Some(&root)).expect("observe regex");
-    let expected: serde_json::Value = serde_json::from_str(
+    let mut expected: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(fixture_path("facts-bundle.json")).expect("read fixture"),
     )
     .expect("parse fixture");
-    let actual = serde_json::to_value(&bundle).expect("bundle to value");
+    let mut actual = serde_json::to_value(&bundle).expect("bundle to value");
+    normalize_path_separators(&mut expected);
+    normalize_path_separators(&mut actual);
     assert_eq!(actual, expected);
 }

@@ -7,7 +7,6 @@
 # Compiler outputs and intermediate directories
 /out/
 /out/*.md
-/testdata/
 
 # Editor/OS artifacts
 *.log

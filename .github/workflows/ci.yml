@@ -1,5 +1,9 @@
 name: CI
 on: [push, pull_request]
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,6 +18,7 @@ jobs:
         with:
           mode: ${{ github.event_name == 'pull_request' && 'enforce' || 'observe' }}
           require-github: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          comment: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
       - name: Upload witness artifacts
         if: always()
         uses: actions/upload-artifact@v4

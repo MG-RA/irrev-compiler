@@ -1,0 +1,115 @@
+{
+  "schema_id": "admissibility-witness/2",
+  "lens_id": "lens:default@0",
+  "lens_hash": "lens:default:pending",
+  "lens_activation_event_id": "pending:lens_activation:ffd380420daa144d2a99db59b85974fe2ff2f03b7e1b02073955dbbe644b72c3",
+  "verdict": "inadmissible",
+  "program": {
+    "module": "module:test@1",
+    "scope": "scope:main"
+  },
+  "reason": "constraints triggered",
+  "facts": [
+    {
+      "type": "constraint_triggered",
+      "constraint_id": {
+        "ns": "constraint",
+        "name": "over_limit"
+      },
+      "span": {
+        "file": "test.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    },
+    {
+      "type": "permission_used",
+      "kind": "allow",
+      "diff": {
+        "ns": "difference",
+        "name": "crew_fatigue"
+      },
+      "span": {
+        "file": "test.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    },
+    {
+      "type": "erasure_rule_used",
+      "diff": {
+        "ns": "difference",
+        "name": "crew_fatigue"
+      },
+      "bucket": {
+        "ns": "bucket",
+        "name": "safety_risk"
+      },
+      "cost": {
+        "value": 8.0,
+        "unit": "risk_points"
+      },
+      "span": {
+        "file": "test.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    },
+    {
+      "type": "predicate_evaluated",
+      "predicate": "displaced_total bucket:safety_risk > 3 risk_points",
+      "result": true,
+      "span": {
+        "file": "test.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "displacement_trace": {
+    "mode": "potential",
+    "totals": [
+      {
+        "bucket": {
+          "ns": "bucket",
+          "name": "safety_risk"
+        },
+        "total": {
+          "value": 8.0,
+          "unit": "risk_points"
+        }
+      }
+    ],
+    "contributions": [
+      {
+        "diff": {
+          "ns": "difference",
+          "name": "crew_fatigue"
+        },
+        "bucket": {
+          "ns": "bucket",
+          "name": "safety_risk"
+        },
+        "cost": {
+          "value": 8.0,
+          "unit": "risk_points"
+        },
+        "rule_span": {
+          "file": "test.adm",
+          "start": 0,
+          "end": 0,
+          "line": 1,
+          "col": 1
+        }
+      }
+    ]
+  }
+}

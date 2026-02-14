@@ -8,7 +8,8 @@ use admit_surrealdb::projection_store::ProjectionStoreOps;
 use admit_surrealdb::ProjectionEventRow;
 
 use crate::{
-    obsidian_adapter, sha256_hex, ProjectionCoordinator, ProjectionRetryArgs, ProjectionVacuumArgs,
+    obsidian_adapter as oa, sha256_hex, ProjectionCoordinator, ProjectionRetryArgs,
+    ProjectionVacuumArgs,
 };
 
 pub fn run_projection_vacuum(
@@ -267,7 +268,7 @@ pub fn run_projection_retry(
     };
     target_phases = target_phases
         .into_iter()
-        .map(|p| obsidian_adapter::normalize_obsidian_vault_links_phase(&p))
+        .map(|p| oa::normalize_obsidian_vault_links_phase(&p))
         .collect();
     target_phases.sort();
     target_phases.dedup();
@@ -458,9 +459,9 @@ pub fn run_projection_retry(
                     merge_retry_results(original.clone(), succeeded, still_failed, start.elapsed())
                 }
             }
-            phase if obsidian_adapter::is_obsidian_vault_links_phase(phase) => {
+            phase if oa::is_obsidian_vault_links_phase(phase) => {
                 let (effective_vault_prefixes, _did_fallback, _doc_paths) =
-                    obsidian_adapter::effective_vault_prefixes_for_dag(
+                    oa::effective_vault_prefixes_for_dag(
                         &dag,
                         &store.projection_config().obsidian_vault_prefixes,
                     );
@@ -468,7 +469,7 @@ pub fn run_projection_retry(
                     .iter()
                     .map(|s| s.as_str())
                     .collect();
-                obsidian_adapter::project_obsidian_vault_links(
+                oa::project_obsidian_vault_links(
                     store,
                     &dag,
                     &artifacts_dir,

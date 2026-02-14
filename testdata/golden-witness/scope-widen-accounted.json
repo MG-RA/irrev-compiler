@@ -1,0 +1,102 @@
+{
+  "schema_id": "admissibility-witness/2",
+  "lens_id": "lens:default@0",
+  "lens_hash": "lens:default:pending",
+  "lens_activation_event_id": "pending:lens_activation:ffd380420daa144d2a99db59b85974fe2ff2f03b7e1b02073955dbbe644b72c3",
+  "verdict": "admissible",
+  "program": {
+    "module": "module:test@1",
+    "scope": "scope:main"
+  },
+  "reason": "admissible",
+  "facts": [
+    {
+      "type": "permission_used",
+      "kind": "allow",
+      "diff": {
+        "ns": "difference",
+        "name": "boundary_loss:scope:main->scope:prod"
+      },
+      "span": {
+        "file": "scope-change.adm",
+        "start": 0,
+        "end": 0,
+        "line": 2,
+        "col": 1
+      }
+    },
+    {
+      "type": "erasure_rule_used",
+      "diff": {
+        "ns": "difference",
+        "name": "boundary_loss:scope:main->scope:prod"
+      },
+      "bucket": {
+        "ns": "bucket",
+        "name": "boundary_risk"
+      },
+      "cost": {
+        "value": 1.0,
+        "unit": "risk_points"
+      },
+      "span": {
+        "file": "scope-change.adm",
+        "start": 0,
+        "end": 0,
+        "line": 3,
+        "col": 1
+      }
+    },
+    {
+      "type": "scope_change_used",
+      "from": "scope:main",
+      "to": "scope:prod",
+      "mode": "widen",
+      "span": {
+        "file": "scope-change.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "displacement_trace": {
+    "mode": "potential",
+    "totals": [
+      {
+        "bucket": {
+          "ns": "bucket",
+          "name": "boundary_risk"
+        },
+        "total": {
+          "value": 1.0,
+          "unit": "risk_points"
+        }
+      }
+    ],
+    "contributions": [
+      {
+        "diff": {
+          "ns": "difference",
+          "name": "boundary_loss:scope:main->scope:prod"
+        },
+        "bucket": {
+          "ns": "bucket",
+          "name": "boundary_risk"
+        },
+        "cost": {
+          "value": 1.0,
+          "unit": "risk_points"
+        },
+        "rule_span": {
+          "file": "scope-change.adm",
+          "start": 0,
+          "end": 0,
+          "line": 3,
+          "col": 1
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+module demo@1
+depends [irrev_std@1]
+scope local
+
+scope_change local -> global widen
+
+query admissible

@@ -65,6 +65,12 @@ pub struct LensDeltaRow {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LensDeltaWitness {
     pub schema_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
     pub from_lens: LensHandle,
     pub to_lens: LensHandle,
     pub snapshot_hash: String,
@@ -96,6 +102,9 @@ impl LensDeltaWitness {
         });
         Self {
             schema_id: DEFAULT_LENS_DELTA_SCHEMA_ID.to_string(),
+            created_at: None,
+            tool_version: None,
+            input_id: None,
             from_lens,
             to_lens,
             snapshot_hash,

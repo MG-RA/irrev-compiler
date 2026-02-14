@@ -1,0 +1,56 @@
+{
+  "schema_id": "admissibility-witness/2",
+  "lens_id": "lens:default@0",
+  "lens_hash": "lens:default:pending",
+  "lens_activation_event_id": "pending:lens_activation:ffd380420daa144d2a99db59b85974fe2ff2f03b7e1b02073955dbbe644b72c3",
+  "verdict": "inadmissible",
+  "program": {
+    "module": "module:test@1",
+    "scope": "scope:main"
+  },
+  "reason": "unaccounted boundary change [irreversibility]",
+  "facts": [
+    {
+      "type": "scope_change_used",
+      "from": "scope:main",
+      "to": "scope:prod",
+      "mode": "widen",
+      "span": {
+        "file": "scope-change.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    },
+    {
+      "type": "unaccounted_boundary_change",
+      "from": "scope:main",
+      "to": "scope:prod",
+      "mode": "widen",
+      "invariant": "irreversibility",
+      "span": {
+        "file": "scope-change.adm",
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "col": 1
+      }
+    }
+  ],
+  "displacement_trace": {
+    "mode": "potential",
+    "totals": [],
+    "contributions": []
+  },
+  "invariant_profile": {
+    "summaries": [
+      {
+        "invariant": "irreversibility",
+        "triggered_count": 1,
+        "finding_count": 0,
+        "constraint_ids": []
+      }
+    ]
+  }
+}

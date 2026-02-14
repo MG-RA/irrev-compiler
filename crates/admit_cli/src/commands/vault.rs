@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use admit_scope_obsidian::{extract_obsidian_links, normalize_target, obsidian_heading_slug};
 use admit_scope_vault::frontmatter::extract_frontmatter;
 
 use crate::{
+    obsidian_adapter as oa,
     VaultArgs, VaultBookBuildArgs, VaultBookCommands, VaultCommands, VaultDocsCommands,
     VaultDocsCompilerExtractArgs, VaultLinkMode, VaultLinksBacklinksArgs, VaultLinksCommands,
     VaultLinksImplicitArgs, VaultSpinesAuditArgs, VaultSpinesCommands, VaultSpinesGenerateArgs,
@@ -188,7 +188,7 @@ fn norm_key(s: &str) -> String {
 }
 
 fn normalize_obsidian_target_to_key(target: &str) -> String {
-    let mut t = normalize_target(target);
+    let mut t = oa::normalize_target(target);
     if t.to_lowercase().ends_with(".md") {
         t = t[..t.len().saturating_sub(3)].to_string();
     }
@@ -444,7 +444,7 @@ fn resolve_explicit_targets(
     term_to_target: &HashMap<String, String>,
 ) -> HashSet<String> {
     let mut out: HashSet<String> = HashSet::new();
-    for link in extract_obsidian_links(&note.body) {
+    for link in oa::extract_obsidian_links(&note.body) {
         let key = normalize_obsidian_target_to_key(&link.target);
         if let Some(target) = term_to_target.get(&key) {
             out.insert(target.clone());
@@ -1472,7 +1472,7 @@ fn concept_keys(note: &VaultNote) -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     let name = note.name.trim().to_lowercase();
     let title = note.title.trim().to_lowercase();
-    let slug = obsidian_heading_slug(&note.title);
+    let slug = oa::obsidian_heading_slug(&note.title);
 
     for base in [name.as_str(), title.as_str(), slug.as_str()] {
         if base.is_empty() {
@@ -1489,7 +1489,7 @@ fn concept_keys(note: &VaultNote) -> BTreeSet<String> {
             continue;
         }
         let low = a.to_lowercase();
-        let slug = obsidian_heading_slug(a);
+        let slug = oa::obsidian_heading_slug(a);
         for base in [low.as_str(), slug.as_str()] {
             keys.insert(base.to_string());
             keys.insert(base.replace('-', " "));
@@ -1501,7 +1501,7 @@ fn concept_keys(note: &VaultNote) -> BTreeSet<String> {
 
 fn extract_concept_refs(body: &str, concept_key_to_id: &HashMap<String, String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for link in extract_obsidian_links(body) {
+    for link in oa::extract_obsidian_links(body) {
         let target = normalize_obsidian_target_to_key(&link.target);
         if let Some(id) = resolve_concept_id(&target, concept_key_to_id) {
             out.push(id);
@@ -1518,7 +1518,7 @@ fn resolve_concept_id(
         return Some(id.clone());
     }
     // Try slugging as a fallback.
-    let slug = obsidian_heading_slug(target_key);
+    let slug = oa::obsidian_heading_slug(target_key);
     if let Some(id) = concept_key_to_id.get(&slug) {
         return Some(id.clone());
     }
@@ -1921,7 +1921,7 @@ fn has_none_primitive_marker(section: &str) -> bool {
 }
 
 fn concept_anchor_id(concept_id: &str) -> String {
-    format!("concept-{}", obsidian_heading_slug(concept_id))
+    format!("concept-{}", oa::obsidian_heading_slug(concept_id))
 }
 
 fn demote_markdown_headings(input: &str, levels: usize) -> String {
@@ -1963,7 +1963,7 @@ fn rewrite_wikilinks_to_book_anchors(
     concept_key_to_id: &HashMap<String, String>,
 ) -> String {
     let mut out = body.to_string();
-    let links = extract_obsidian_links(body);
+    let links = oa::extract_obsidian_links(body);
     for link in links {
         let target_key = normalize_obsidian_target_to_key(&link.target);
         let display = link
@@ -2010,8 +2010,6 @@ fn layer_index(layer: Option<&str>) -> usize {
 
 #[derive(Debug, Clone)]
 struct BookBuild {
-    vault_root: PathBuf,
-    out_path: PathBuf,
     markdown: String,
     concepts_included: usize,
     has_cycles: bool,
@@ -2020,7 +2018,6 @@ struct BookBuild {
 
 fn build_concept_book(
     vault_root: &Path,
-    out_path: PathBuf,
     all_concepts: bool,
 ) -> Result<BookBuild, String> {
     let notes = load_vault_notes(vault_root)?;
@@ -2051,7 +2048,7 @@ fn build_concept_book(
         let mut set = BTreeSet::new();
         if let Some(section) = extract_h2_section(&note.body, "Structural dependencies") {
             if !section.is_empty() && !has_none_primitive_marker(&section) {
-                for link in extract_obsidian_links(&section) {
+                for link in oa::extract_obsidian_links(&section) {
                     let target_key = normalize_obsidian_target_to_key(&link.target);
                     if let Some(dep_id) = resolve_concept_id(&target_key, &concept_key_to_id) {
                         if dep_id != *id {
@@ -2227,8 +2224,6 @@ fn build_concept_book(
     }
 
     Ok(BookBuild {
-        vault_root: vault_root.to_path_buf(),
-        out_path,
         concepts_included: included.len(),
         has_cycles,
         cycle_nodes,
@@ -2243,7 +2238,7 @@ fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| default_book_out_path(&vault_root));
 
-    let build = build_concept_book(&vault_root, out.clone(), args.all_concepts)?;
+    let build = build_concept_book(&vault_root, args.all_concepts)?;
     let bytes = build.markdown.as_bytes().len();
 
     if args.dry_run {
@@ -2373,7 +2368,7 @@ canonical: true
 "#,
         );
 
-        let build = build_concept_book(vault, vault.join("exports/irrev-book.md"), false).unwrap();
+        let build = build_concept_book(vault, false).unwrap();
         let md = build.markdown;
 
         assert!(md.contains("## Primitives"));
@@ -2428,7 +2423,7 @@ canonical: true
 "#,
         );
 
-        let build = build_concept_book(vault, vault.join("exports/irrev-book.md"), false).unwrap();
+        let build = build_concept_book(vault, false).unwrap();
         assert!(build.has_cycles);
         assert!(build.markdown.contains("## Cycles"));
         assert!(build.markdown.contains("cycle-a"));

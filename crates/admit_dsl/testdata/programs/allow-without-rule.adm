@@ -1,0 +1,6 @@
+module test@1
+depends [irrev_std@1]
+scope main
+
+difference crew_fatigue
+allow_erase crew_fatigue

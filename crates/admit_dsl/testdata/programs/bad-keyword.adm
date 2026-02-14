@@ -1,0 +1,5 @@
+module test@1
+depends [irrev_std@1]
+scope main
+
+scop main

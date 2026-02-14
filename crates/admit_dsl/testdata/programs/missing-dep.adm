@@ -1,0 +1,5 @@
+module test@1
+scope main
+
+difference crew_fatigue
+allow_erase crew_fatigue

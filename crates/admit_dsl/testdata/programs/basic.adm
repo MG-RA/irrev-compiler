@@ -1,0 +1,15 @@
+module test@1
+depends [irrev_std@1]
+scope main
+
+difference crew_fatigue unit "risk_points"
+bucket safety_risk
+constraint over_limit
+
+deny_erase crew_fatigue
+
+erasure_rule crew_fatigue cost 8 "risk_points" -> safety_risk
+
+inadmissible_if displaced_total safety_risk > 3 "risk_points"
+
+query admissible

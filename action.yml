@@ -40,6 +40,9 @@ runs:
     - name: Run admissibility witness
       id: run_witness
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         mkdir -p out/artifacts
         CONFIG_ARG=""

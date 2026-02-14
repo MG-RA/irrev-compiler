@@ -2010,8 +2010,6 @@ fn layer_index(layer: Option<&str>) -> usize {
 
 #[derive(Debug, Clone)]
 struct BookBuild {
-    vault_root: PathBuf,
-    out_path: PathBuf,
     markdown: String,
     concepts_included: usize,
     has_cycles: bool,
@@ -2020,7 +2018,6 @@ struct BookBuild {
 
 fn build_concept_book(
     vault_root: &Path,
-    out_path: PathBuf,
     all_concepts: bool,
 ) -> Result<BookBuild, String> {
     let notes = load_vault_notes(vault_root)?;
@@ -2227,8 +2224,6 @@ fn build_concept_book(
     }
 
     Ok(BookBuild {
-        vault_root: vault_root.to_path_buf(),
-        out_path,
         concepts_included: included.len(),
         has_cycles,
         cycle_nodes,
@@ -2243,7 +2238,7 @@ fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
         .clone()
         .unwrap_or_else(|| default_book_out_path(&vault_root));
 
-    let build = build_concept_book(&vault_root, out.clone(), args.all_concepts)?;
+    let build = build_concept_book(&vault_root, args.all_concepts)?;
     let bytes = build.markdown.as_bytes().len();
 
     if args.dry_run {
@@ -2373,7 +2368,7 @@ canonical: true
 "#,
         );
 
-        let build = build_concept_book(vault, vault.join("exports/irrev-book.md"), false).unwrap();
+        let build = build_concept_book(vault, false).unwrap();
         let md = build.markdown;
 
         assert!(md.contains("## Primitives"));
@@ -2428,7 +2423,7 @@ canonical: true
 "#,
         );
 
-        let build = build_concept_book(vault, vault.join("exports/irrev-book.md"), false).unwrap();
+        let build = build_concept_book(vault, false).unwrap();
         assert!(build.has_cycles);
         assert!(build.markdown.contains("## Cycles"));
         assert!(build.markdown.contains("cycle-a"));

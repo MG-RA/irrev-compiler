@@ -982,13 +982,13 @@ admit ci --root . --mode audit --json --artifacts-dir out/artifacts
 admit ci --root . --mode enforce --json --artifacts-dir out/artifacts
 
 # Include typed planner/manifest validation (advisory or enforce)
-admit ci --root . --mode enforce --json --artifacts-dir out/artifacts --plan out/plan/plan-artifact.json --manifest out/plan/proposal-manifest.json --plan-rollout advisory
+admit ci --root . --mode enforce --json --artifacts-dir out/artifacts --plan .admit/plan/plan-artifact.json --manifest .admit/plan/proposal-manifest.json --plan-rollout advisory
 ```
 
 Plan contract validation can also run standalone:
 
 ```bash
-admit plan check --plan out/plan/plan-artifact.json --manifest out/plan/proposal-manifest.json --rollout advisory --json
+admit plan check --plan .admit/plan/plan-artifact.json --manifest .admit/plan/proposal-manifest.json --rollout advisory --json
 ```
 
 ### GitHub Ceremony Scope

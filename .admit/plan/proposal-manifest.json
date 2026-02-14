@@ -1,0 +1,27 @@
+{
+  "schema_id": "proposal-manifest/0",
+  "manifest_id": "manifest:1d539ea1636ff32f70caac8a518754bdb372a2e6e8e0e4a98b84c43f13ed648f",
+  "plan_id": "plan:cf0acc8dcee57d44a59dfef7618877e3a404d9e4b4fa2ee94bee0bf9a7856875",
+  "base_sha": "0371e2b35b2b2a38bd1d4c1efd660be74f592d98",
+  "head_sha": "57bbfd9c3e79c04a42f5acda197c0c03ed414295",
+  "changed_paths": [
+    ".github/workflows/ci.yml",
+    "action.yml",
+    "crates/admit_dsl/src/ast.rs",
+    "crates/admit_dsl/src/lexer.rs",
+    "crates/admit_dsl/src/lib.rs",
+    "crates/admit_dsl/src/lowering.rs",
+    "crates/admit_dsl/src/parser.rs",
+    "crates/admit_dsl/src/tests.rs",
+    "crates/admit_dsl/src/tokens.rs"
+  ],
+  "commands_run": [
+    "admit ci --mode enforce"
+  ],
+  "artifacts_produced": [
+    "out/ci-witness.json"
+  ],
+  "test_results": [],
+  "exceptions_requested": [],
+  "status": "ready_for_review"
+}

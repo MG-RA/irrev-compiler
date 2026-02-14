@@ -19,7 +19,8 @@ jobs:
         with:
           mode: ${{ github.event_name == 'pull_request' && 'enforce' || 'observe' }}
           require-github: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
-          plan-rollout: advisory
+          plan-rollout: enforce
+          scope-pack-gate: error
           comment: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
       - name: Upload witness artifacts
         if: always()

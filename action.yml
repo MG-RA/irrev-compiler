@@ -5,7 +5,7 @@ inputs:
   mode:
     description: "CI mode: observe|audit|enforce"
     required: false
-    default: "observe"
+    default: "enforce"
   config-path:
     description: "Optional path to .admit/config.toml"
     required: false
@@ -13,19 +13,23 @@ inputs:
   require-github:
     description: "Require github.ceremony scope availability"
     required: false
-    default: "false"
+    default: "true"
   plan-path:
-    description: "Optional plan artifact path (omit to skip plan checks)"
+    description: "Plan artifact path (required when plan-rollout=enforce)"
     required: false
-    default: ""
+    default: ".admit/plan/plan-artifact.json"
   manifest-path:
-    description: "Optional proposal manifest path (omit to skip manifest checks)"
+    description: "Proposal manifest path (required when plan-rollout=enforce)"
     required: false
-    default: ""
+    default: ".admit/plan/proposal-manifest.json"
   plan-rollout:
     description: "Plan contract rollout: advisory|enforce"
     required: false
-    default: "advisory"
+    default: "enforce"
+  scope-pack-gate:
+    description: "Scope pack gate mode: warn|error"
+    required: false
+    default: "error"
   comment:
     description: "Post PR comment via gh when possible"
     required: false
@@ -60,6 +64,40 @@ runs:
         fi
         cargo build -p admit_cli
 
+    - name: Autogenerate plan artifacts when required
+      shell: bash
+      run: |
+        ADMIT_BIN="target/debug/admit_cli"
+        PLAN_PATH="${{ inputs.plan-path }}"
+        MANIFEST_PATH="${{ inputs.manifest-path }}"
+        PLAN_ROLLOUT="${{ inputs.plan-rollout }}"
+
+        if [ "$PLAN_ROLLOUT" != "enforce" ]; then
+          exit 0
+        fi
+
+        NEED_AUTOGEN=0
+        if [ -n "$PLAN_PATH" ] && [ ! -f "$PLAN_PATH" ]; then
+          NEED_AUTOGEN=1
+        fi
+        if [ -n "$MANIFEST_PATH" ] && [ ! -f "$MANIFEST_PATH" ]; then
+          NEED_AUTOGEN=1
+        fi
+
+        if [ "$NEED_AUTOGEN" -eq 0 ]; then
+          exit 0
+        fi
+
+        AUTOGEN_ARGS=(plan autogen --root .)
+        if [ -n "$PLAN_PATH" ]; then
+          AUTOGEN_ARGS+=(--out-plan "$PLAN_PATH")
+        fi
+        if [ -n "$MANIFEST_PATH" ]; then
+          AUTOGEN_ARGS+=(--out-manifest "$MANIFEST_PATH")
+        fi
+
+        "$ADMIT_BIN" "${AUTOGEN_ARGS[@]}"
+
     - name: Run admissibility witness
       id: run_witness
       shell: bash
@@ -87,7 +125,7 @@ runs:
         if [ -n "${{ inputs.manifest-path }}" ]; then
           MANIFEST_ARG="--manifest ${{ inputs.manifest-path }}"
         fi
-        $ADMIT_BIN ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan-rollout "${{ inputs.plan-rollout }}" $PLAN_ARG $MANIFEST_ARG $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
+        $ADMIT_BIN ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan-rollout "${{ inputs.plan-rollout }}" --scope-pack-gate "${{ inputs.scope-pack-gate }}" $PLAN_ARG $MANIFEST_ARG $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
 
     - name: Parse outputs
       id: parse

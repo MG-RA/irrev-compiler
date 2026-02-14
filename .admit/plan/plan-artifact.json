@@ -1,0 +1,54 @@
+{
+  "schema_id": "plan-artifact/0",
+  "plan_id": "plan:cf0acc8dcee57d44a59dfef7618877e3a404d9e4b4fa2ee94bee0bf9a7856875",
+  "intent": "Automated CI plan scaffold",
+  "scope_targets": [
+    "."
+  ],
+  "expected_changed_paths": [
+    ".github/workflows/ci.yml",
+    "action.yml",
+    "crates/admit_dsl/src/ast.rs",
+    "crates/admit_dsl/src/lexer.rs",
+    "crates/admit_dsl/src/lib.rs",
+    "crates/admit_dsl/src/lowering.rs",
+    "crates/admit_dsl/src/parser.rs",
+    "crates/admit_dsl/src/tests.rs",
+    "crates/admit_dsl/src/tokens.rs"
+  ],
+  "assumptions": [
+    "auto-generated scaffold; refine before merge"
+  ],
+  "constraints_expected": [],
+  "allowed_exceptions": [],
+  "validation_steps": [
+    {
+      "id": "cmd_1",
+      "command": "admit ci --mode enforce",
+      "required": true
+    }
+  ],
+  "stop_conditions": [
+    "touches_github_workflows",
+    "meta_schema_change",
+    "secrets_detected"
+  ],
+  "risk_routes": [
+    {
+      "bucket": "bucket:trust_debt",
+      "cost_estimate": 1.0,
+      "unit": "risk_points",
+      "rationale": "auto-generated scaffold route"
+    }
+  ],
+  "unknowns": [],
+  "confidence": 0.0,
+  "generated_by": {
+    "provider": "admit_cli",
+    "model": "autogen/v1",
+    "surface": "ci",
+    "timestamp": "2026-02-14T19:10:10Z",
+    "planner_prompt_hash": null,
+    "implementer_prompt_hash": null
+  }
+}

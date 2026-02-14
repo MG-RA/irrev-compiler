@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use clap::builder::styling::{AnsiColor, Effects, Styles};
@@ -22,14 +23,14 @@ use admit_cli::{
     append_meta_interpretation_delta_event, append_plan_created_event, append_projection_event,
     build_lens_activated_event, build_meta_change_checked_event,
     build_meta_interpretation_delta_event, build_projection_event, check_cost_declared,
-    check_plan_contract, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
-    execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
-    load_meta_registry, parse_plan_answers_markdown, read_changed_paths_file, read_file_bytes,
-    registry_build, registry_init, registry_migrate_v0_v1, registry_scope_pack_sync,
+    autogen_plan_artifacts, check_plan_contract, create_plan, declare_cost, default_artifacts_dir,
+    default_ledger_path, execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache,
+    init_project, load_meta_registry, parse_plan_answers_markdown, read_changed_paths_file,
+    read_file_bytes, registry_build, registry_init, registry_migrate_v0_v1, registry_scope_pack_sync,
     render_plan_prompt_template,
     render_plan_text, resolve_scope_enablement, scope_add, scope_list, scope_show, scope_verify,
     store_value_artifact, verify_ledger, verify_witness, ArtifactInput, DeclareCostInput,
-    InitProjectInput, MetaRegistryV0, PlanCheckInput, PlanNewInput,
+    InitProjectInput, MetaRegistryV0, PlanAutogenInput, PlanCheckInput, PlanNewInput,
     ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
     ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
     VerifyWitnessInput,
@@ -1929,6 +1930,7 @@ enum PlanCommands {
     Export(PlanExportArgs),
     PromptTemplate(PlanPromptTemplateArgs),
     AnswersFromMd(PlanAnswersFromMdArgs),
+    Autogen(PlanAutogenArgs),
     Check(PlanCheckArgs),
 }
 
@@ -2040,6 +2042,61 @@ struct PlanCheckArgs {
     /// Rollout mode for contract violations
     #[arg(long, value_enum, default_value = "advisory")]
     rollout: PlanCheckRollout,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct PlanAutogenArgs {
+    /// Repository root for git-derived metadata (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    root: PathBuf,
+
+    /// Output path for plan artifact JSON (`plan-artifact/0`)
+    #[arg(long, value_name = "PATH", default_value = ".admit/plan/plan-artifact.json")]
+    out_plan: PathBuf,
+
+    /// Output path for proposal manifest JSON (`proposal-manifest/0`)
+    #[arg(long, value_name = "PATH", default_value = ".admit/plan/proposal-manifest.json")]
+    out_manifest: PathBuf,
+
+    /// Human-readable plan intent
+    #[arg(long, default_value = "Automated CI plan scaffold")]
+    intent: String,
+
+    /// Scope targets covered by this plan (repeatable, default: ".")
+    #[arg(long = "scope-target", value_name = "GLOB")]
+    scope_targets: Vec<String>,
+
+    /// Optional authoritative changed-paths input file (json array/object or newline-delimited)
+    #[arg(long, value_name = "PATH")]
+    changed_paths: Option<PathBuf>,
+
+    /// Base SHA used by the generated proposal manifest (default: HEAD~1, fallback HEAD)
+    #[arg(long)]
+    base_sha: Option<String>,
+
+    /// Head SHA used by the generated proposal manifest (default: HEAD)
+    #[arg(long)]
+    head_sha: Option<String>,
+
+    /// Commands declared in proposal manifest (repeatable)
+    #[arg(long = "command-run", value_name = "CMD")]
+    commands_run: Vec<String>,
+
+    /// Artifact paths declared in proposal manifest (repeatable)
+    #[arg(long = "artifact-produced", value_name = "PATH")]
+    artifacts_produced: Vec<String>,
+
+    /// Surface attribution for generated-by metadata
+    #[arg(long, default_value = "ci")]
+    surface: String,
+
+    /// Timestamp for generated-by metadata (default: current UTC ISO-8601)
+    #[arg(long = "timestamp")]
+    timestamp: Option<String>,
 
     /// Output JSON instead of key=value lines
     #[arg(long)]
@@ -2170,6 +2227,7 @@ fn main() {
             PlanCommands::AnswersFromMd(parse_args) => {
                 run_plan_answers_from_md(parse_args, dag_trace_out)
             }
+            PlanCommands::Autogen(autogen_args) => run_plan_autogen(autogen_args, dag_trace_out),
             PlanCommands::Check(check_args) => run_plan_check(check_args, dag_trace_out),
         },
         Commands::Calc(args) => match args.command {
@@ -4109,6 +4167,134 @@ fn run_plan_answers_from_md(
         println!("{}", text);
     }
     Ok(())
+}
+
+fn run_plan_autogen(args: PlanAutogenArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    let root = args.root;
+    if !root.exists() {
+        return Err(format!("root path does not exist: {}", root.display()));
+    }
+    if !root.is_dir() {
+        return Err(format!("root path is not a directory: {}", root.display()));
+    }
+
+    let head_sha = match args.head_sha {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err("head_sha cannot be empty when provided".to_string());
+            }
+            trimmed.to_string()
+        }
+        None => git_stdout(root.as_path(), &["rev-parse", "HEAD"])?,
+    };
+
+    let base_sha = match args.base_sha {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err("base_sha cannot be empty when provided".to_string());
+            }
+            trimmed.to_string()
+        }
+        None => git_stdout(root.as_path(), &["rev-parse", "HEAD~1"]).unwrap_or(head_sha.clone()),
+    };
+
+    let changed_paths = match args.changed_paths {
+        Some(path) => read_changed_paths_file(path.as_path())?,
+        None => git_changed_paths(root.as_path(), &base_sha, &head_sha)?,
+    };
+
+    let timestamp = args
+        .timestamp
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let output = autogen_plan_artifacts(PlanAutogenInput {
+        out_plan_path: args.out_plan,
+        out_manifest_path: args.out_manifest,
+        intent: args.intent,
+        scope_targets: args.scope_targets,
+        expected_changed_paths: changed_paths,
+        commands_run: args.commands_run,
+        artifacts_produced: args.artifacts_produced,
+        base_sha,
+        head_sha,
+        surface: args.surface,
+        timestamp,
+    })
+    .map_err(|err| err.to_string())?;
+
+    if args.json {
+        let text =
+            serde_json::to_string_pretty(&output).map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", text);
+    } else {
+        println!("plan_path={}", output.plan_path.display());
+        println!("manifest_path={}", output.manifest_path.display());
+        println!("plan_id={}", output.plan_id);
+        println!("manifest_id={}", output.manifest_id);
+        println!("base_sha={}", output.base_sha);
+        println!("head_sha={}", output.head_sha);
+        println!("changed_paths={}", output.changed_paths.len());
+    }
+
+    Ok(())
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|err| format!("git {}: {}", args.join(" "), err))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            stderr.trim()
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout).map_err(|err| {
+        format!(
+            "git {} output was not valid utf-8: {}",
+            args.join(" "),
+            err
+        )
+    })?;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Err(format!("git {} returned empty output", args.join(" ")));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn git_changed_paths(root: &Path, base_sha: &str, head_sha: &str) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .args(["diff", "--name-only", base_sha, head_sha])
+        .current_dir(root)
+        .output()
+        .map_err(|err| format!("git diff --name-only {} {}: {}", base_sha, head_sha, err))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "git diff --name-only {} {} failed: {}",
+            base_sha,
+            head_sha,
+            stderr.trim()
+        ));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| format!("git diff output was not valid utf-8: {}", err))?;
+
+    let mut set = BTreeSet::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_string());
+        }
+    }
+    Ok(set.into_iter().collect())
 }
 
 fn run_plan_check(args: PlanCheckArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {

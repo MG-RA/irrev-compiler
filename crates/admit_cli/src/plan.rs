@@ -399,6 +399,32 @@ pub struct PlanCheckInput {
     pub enforce: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlanAutogenInput {
+    pub out_plan_path: PathBuf,
+    pub out_manifest_path: PathBuf,
+    pub intent: String,
+    pub scope_targets: Vec<String>,
+    pub expected_changed_paths: Vec<String>,
+    pub commands_run: Vec<String>,
+    pub artifacts_produced: Vec<String>,
+    pub base_sha: String,
+    pub head_sha: String,
+    pub surface: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanAutogenOutput {
+    pub plan_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub plan_id: String,
+    pub manifest_id: String,
+    pub changed_paths: Vec<String>,
+    pub base_sha: String,
+    pub head_sha: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PlanArtifact {
@@ -482,6 +508,130 @@ enum ManifestStatus {
     Revised,
     Halted,
     ReadyForReview,
+}
+
+pub fn autogen_plan_artifacts(input: PlanAutogenInput) -> Result<PlanAutogenOutput, DeclareCostError> {
+    if input.intent.trim().is_empty() {
+        return Err(DeclareCostError::Json(
+            "autogen intent cannot be empty".to_string(),
+        ));
+    }
+    if input.base_sha.trim().is_empty() || input.head_sha.trim().is_empty() {
+        return Err(DeclareCostError::Json(
+            "autogen base/head sha must be non-empty".to_string(),
+        ));
+    }
+
+    let scope_targets = {
+        let normalized = normalize_paths(input.scope_targets);
+        if normalized.is_empty() {
+            vec![".".to_string()]
+        } else {
+            normalized
+        }
+    };
+    let expected_changed_paths = normalize_paths(input.expected_changed_paths);
+    let commands_run = if input.commands_run.is_empty() {
+        vec!["admit ci --mode enforce".to_string()]
+    } else {
+        input.commands_run
+    };
+    let artifacts_produced = if input.artifacts_produced.is_empty() {
+        vec!["out/ci-witness.json".to_string()]
+    } else {
+        normalize_paths(input.artifacts_produced)
+    };
+
+    let mut plan = PlanArtifact {
+        schema_id: PLAN_ARTIFACT_SCHEMA_ID.to_string(),
+        plan_id: String::new(),
+        intent: input.intent,
+        scope_targets,
+        expected_changed_paths: expected_changed_paths.clone(),
+        assumptions: vec!["auto-generated scaffold; refine before merge".to_string()],
+        constraints_expected: vec![],
+        allowed_exceptions: vec![],
+        validation_steps: commands_run
+            .iter()
+            .enumerate()
+            .map(|(idx, command)| PlanValidationStep {
+                id: format!("cmd_{}", idx + 1),
+                command: command.clone(),
+                required: true,
+            })
+            .collect(),
+        stop_conditions: vec![
+            "touches_github_workflows".to_string(),
+            "meta_schema_change".to_string(),
+            "secrets_detected".to_string(),
+        ],
+        risk_routes: vec![PlanRiskRoute {
+            bucket: "bucket:trust_debt".to_string(),
+            cost_estimate: 1.0,
+            unit: "risk_points".to_string(),
+            rationale: "auto-generated scaffold route".to_string(),
+        }],
+        unknowns: vec![],
+        confidence: 0.0,
+        generated_by: PlanGeneratedBy {
+            provider: "admit_cli".to_string(),
+            model: "autogen/v1".to_string(),
+            surface: input.surface,
+            timestamp: input.timestamp,
+            planner_prompt_hash: None,
+            implementer_prompt_hash: None,
+        },
+    };
+    let plan_hash = canonical_hash_without_field(&plan, "plan_id")
+        .map_err(DeclareCostError::Json)?;
+    plan.plan_id = format!("plan:{}", plan_hash);
+
+    let mut manifest = ProposalManifest {
+        schema_id: PROPOSAL_MANIFEST_SCHEMA_ID.to_string(),
+        manifest_id: String::new(),
+        plan_id: plan.plan_id.clone(),
+        base_sha: input.base_sha.clone(),
+        head_sha: input.head_sha.clone(),
+        changed_paths: expected_changed_paths,
+        commands_run,
+        artifacts_produced,
+        test_results: vec![],
+        exceptions_requested: vec![],
+        status: ManifestStatus::ReadyForReview,
+    };
+    let manifest_hash = canonical_hash_without_field(&manifest, "manifest_id")
+        .map_err(DeclareCostError::Json)?;
+    manifest.manifest_id = format!("manifest:{}", manifest_hash);
+
+    if let Some(parent) = input.out_plan_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        }
+    }
+    if let Some(parent) = input.out_manifest_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+        }
+    }
+
+    let plan_json =
+        serde_json::to_string_pretty(&plan).map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    fs::write(&input.out_plan_path, plan_json).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+
+    let manifest_json = serde_json::to_string_pretty(&manifest)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    fs::write(&input.out_manifest_path, manifest_json)
+        .map_err(|err| DeclareCostError::Io(err.to_string()))?;
+
+    Ok(PlanAutogenOutput {
+        plan_path: input.out_plan_path,
+        manifest_path: input.out_manifest_path,
+        plan_id: plan.plan_id,
+        manifest_id: manifest.manifest_id,
+        changed_paths: manifest.changed_paths,
+        base_sha: input.base_sha,
+        head_sha: input.head_sha,
+    })
 }
 
 pub fn read_changed_paths_file(path: &Path) -> Result<Vec<String>, String> {
@@ -1378,5 +1528,44 @@ mod plan_contract_tests {
             .iter()
             .any(|e| e.contains("manifest plan_id mismatch")));
         assert_eq!(out.exit_code, 2);
+    }
+
+    #[test]
+    fn autogen_outputs_pass_enforce_plan_contract() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("out/plan/plan-artifact.json");
+        let manifest_path = temp.path().join("out/plan/proposal-manifest.json");
+        let expected_path = "docs/spec/agent-plan-contract.md".to_string();
+
+        let generated = autogen_plan_artifacts(PlanAutogenInput {
+            out_plan_path: plan_path.clone(),
+            out_manifest_path: manifest_path.clone(),
+            intent: "Auto-generated CI scaffold".to_string(),
+            scope_targets: vec![],
+            expected_changed_paths: vec![expected_path.clone()],
+            commands_run: vec!["cargo test -p admit_cli --test ci_command".to_string()],
+            artifacts_produced: vec![],
+            base_sha: "1111111111111111111111111111111111111111".to_string(),
+            head_sha: "2222222222222222222222222222222222222222".to_string(),
+            surface: "ci".to_string(),
+            timestamp: "2026-02-14T00:00:00Z".to_string(),
+        })
+        .expect("autogen");
+
+        let report = check_plan_contract(PlanCheckInput {
+            plan_path: Some(plan_path),
+            manifest_path: Some(manifest_path),
+            changed_paths_observed: vec![expected_path],
+            enforce: true,
+        });
+        assert!(report.plan_valid);
+        assert!(report.manifest_valid);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(report.exit_code, 0);
+        assert_eq!(report.plan_id.as_deref(), Some(generated.plan_id.as_str()));
+        assert_eq!(
+            report.manifest_id.as_deref(),
+            Some(generated.manifest_id.as_str())
+        );
     }
 }

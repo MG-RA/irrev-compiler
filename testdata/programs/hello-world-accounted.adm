@@ -1,0 +1,10 @@
+module demo@1
+depends [irrev_std@1]
+scope local
+
+scope_change local -> global widen
+bucket boundary_loss
+allow_scope_change local -> global
+scope_change_rule local -> global cost 1 "unit" -> boundary_loss
+
+query admissible

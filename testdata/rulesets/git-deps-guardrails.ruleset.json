@@ -1,0 +1,53 @@
+{
+  "schema_id": "ruleset/admit@1",
+  "ruleset_id": "git-deps-guardrails",
+  "enabled_rules": ["R-200", "R-210", "R-400", "R-410", "R-420"],
+  "bindings": [
+    {
+      "rule_id": "R-200",
+      "severity": "error",
+      "when": {
+        "scope_id": "git.working_tree",
+        "predicate": "dirty_state",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-210",
+      "severity": "error",
+      "when": {
+        "scope_id": "git.working_tree",
+        "predicate": "untracked_file",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-400",
+      "severity": "error",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "git_dependency_present",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-410",
+      "severity": "error",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "wildcard_version_present",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-420",
+      "severity": "error",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "lockfile_missing",
+        "params": {}
+      }
+    }
+  ],
+  "fail_on": "error"
+}

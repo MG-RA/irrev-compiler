@@ -849,11 +849,11 @@ type = { type = "enum", values = ["meta", "index"] }
 
     #[test]
     fn validate_real_vault() {
-        let registry_content = include_str!("../../../../irrev-vault/meta/artifact-types.toml");
+        let registry_content = include_str!("../testdata/artifact-types.toml");
         let reg = ArtifactTypeRegistry::from_toml(registry_content).unwrap();
 
-        // Validate a known-good concept file
-        let concept = include_str!("../../../../irrev-vault/concepts/irreversibility.md");
+        // Validate a known-good fixture concept file.
+        let concept = include_str!("../testdata/concepts/irreversibility.md");
         let files = vec![(
             "concepts/irreversibility.md".to_string(),
             concept.to_string(),

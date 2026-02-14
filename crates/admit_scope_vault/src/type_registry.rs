@@ -180,7 +180,7 @@ aliases = { type = "list", item_type = "string" }
 
     #[test]
     fn parse_real_artifact_types_toml() {
-        let content = include_str!("../../../../irrev-vault/meta/artifact-types.toml");
+        let content = include_str!("../testdata/artifact-types.toml");
         let reg = ArtifactTypeRegistry::from_toml(content).unwrap();
         assert_eq!(reg.registry_version, 1);
         assert!(

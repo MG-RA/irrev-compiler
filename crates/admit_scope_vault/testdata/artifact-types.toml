@@ -1,0 +1,148 @@
+registry_version = 1
+description = "portable test fixture registry"
+
+[defaults]
+requires_frontmatter = true
+linkable = false
+
+[[types]]
+type_id = "vault:concept"
+description = "Concept note"
+
+[types.locations]
+allowed_patterns = ["concepts/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role", "layer", "canonical"]
+optional = ["aliases", "facets"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "concept" }
+layer = { type = "enum", values = ["primitive", "first-order", "mechanism"] }
+canonical = { type = "boolean" }
+aliases = { type = "list", item_type = "string" }
+facets = { type = "list", item_type = "string", allowed = ["implicit-constraint", "anti-belief"] }
+
+[[types]]
+type_id = "vault:diagnostic"
+description = "Diagnostic note"
+
+[types.locations]
+allowed_patterns = ["diagnostics/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "diagnostic" }
+
+[[types]]
+type_id = "vault:ruleset"
+description = "Ruleset file"
+
+[types.locations]
+allowed_patterns = ["meta/**/*.toml"]
+allowed_extensions = [".toml"]
+
+[types.governance]
+requires_frontmatter = false
+
+[[types]]
+type_id = "vault:domain"
+description = "Domain note"
+
+[types.locations]
+allowed_patterns = ["domains/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "domain" }
+
+[[types]]
+type_id = "vault:projection"
+description = "Projection note"
+
+[types.locations]
+allowed_patterns = ["projections/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "projection" }
+
+[[types]]
+type_id = "vault:paper"
+description = "Paper note"
+
+[types.locations]
+allowed_patterns = ["papers/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "paper" }
+
+[[types]]
+type_id = "vault:support"
+description = "Support note"
+
+[types.locations]
+allowed_patterns = ["support/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "support" }
+
+[[types]]
+type_id = "vault:invariant"
+description = "Invariant note"
+
+[types.locations]
+allowed_patterns = ["invariants/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "invariant" }
+
+[[types]]
+type_id = "vault:plan"
+description = "Plan note"
+
+[types.locations]
+allowed_patterns = ["plans/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "plan" }
+
+[[types]]
+type_id = "vault:meta"
+description = "Meta note"
+
+[types.locations]
+allowed_patterns = ["meta/**/*.md"]
+allowed_extensions = [".md"]
+
+[types.metadata]
+required = ["role"]
+
+[types.metadata.constraints]
+role = { type = "literal", value = "meta" }

@@ -89,6 +89,23 @@ runs:
         fi
 
         AUTOGEN_ARGS=(plan autogen --root .)
+        BASE_SHA=""
+        HEAD_SHA=""
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+        elif [ "${{ github.event_name }}" = "push" ]; then
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+        fi
+
+        if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+          AUTOGEN_ARGS+=(--base-sha "$BASE_SHA")
+        fi
+        if [ -n "$HEAD_SHA" ]; then
+          AUTOGEN_ARGS+=(--head-sha "$HEAD_SHA")
+        fi
+
         if [ -n "$PLAN_PATH" ]; then
           AUTOGEN_ARGS+=(--out-plan "$PLAN_PATH")
         fi
@@ -125,7 +142,23 @@ runs:
         if [ -n "${{ inputs.manifest-path }}" ]; then
           MANIFEST_ARG="--manifest ${{ inputs.manifest-path }}"
         fi
-        $ADMIT_BIN ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan-rollout "${{ inputs.plan-rollout }}" --scope-pack-gate "${{ inputs.scope-pack-gate }}" $PLAN_ARG $MANIFEST_ARG $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
+        set +e
+        $ADMIT_BIN ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan-rollout "${{ inputs.plan-rollout }}" --scope-pack-gate "${{ inputs.scope-pack-gate }}" $PLAN_ARG $MANIFEST_ARG $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json 2> out/ci-witness.stderr
+        CI_EXIT=$?
+        set -e
+        echo "ci_exit_code=$CI_EXIT" >> "$GITHUB_OUTPUT"
+        if [ ! -s out/ci-witness.json ]; then
+          jq -n --arg err "$(cat out/ci-witness.stderr)" '{
+            mode: "unknown",
+            verdict: "error",
+            integrity_failures: [],
+            stop_reasons: [],
+            top_warnings: [],
+            scope_warnings: [],
+            requires_manual_approval: false,
+            error: $err
+          }' > out/ci-witness.json
+        fi
 
     - name: Parse outputs
       id: parse
@@ -211,3 +244,10 @@ runs:
             gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$(cat out/ci-witness-comment.md)" || true
           fi
         fi
+
+    - name: Enforce witness result
+      if: ${{ steps.run_witness.outputs.ci_exit_code != '0' }}
+      shell: bash
+      run: |
+        echo "admit ci failed (exit=${{ steps.run_witness.outputs.ci_exit_code }})"
+        exit "${{ steps.run_witness.outputs.ci_exit_code }}"

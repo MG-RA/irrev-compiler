@@ -113,13 +113,14 @@ pub fn evaluate_ruleset(
     ruleset: &RuleSet,
     registry: &ProviderRegistry,
 ) -> Result<RuleEvaluationOutcome, EvalError> {
-    evaluate_ruleset_with_inputs(ruleset, registry, None)
+    evaluate_ruleset_with_inputs(ruleset, registry, None, None)
 }
 
 pub fn evaluate_ruleset_with_inputs(
     ruleset: &RuleSet,
     registry: &ProviderRegistry,
     input_bundles: Option<&BTreeMap<ScopeId, FactsBundle>>,
+    runtime_overlays: Option<&BTreeMap<String, Value>>,
 ) -> Result<RuleEvaluationOutcome, EvalError> {
     if ruleset.schema_id != RULESET_SCHEMA_ID_V1 {
         return Err(EvalError(format!(
@@ -188,6 +189,36 @@ pub fn evaluate_ruleset_with_inputs(
                 obj.entry("facts_schema_id".to_string())
                     .or_insert(Value::String(bundle.schema_id.clone()));
                 effective_params = Value::Object(obj);
+            }
+        }
+        // Merge runtime overlays keyed by rule_id (e.g., injected changed_paths).
+        if let Some(overlays) = runtime_overlays {
+            if let Some(overlay) = overlays.get(&binding.rule_id) {
+                if let Value::Object(overlay_obj) = overlay {
+                    let obj = match &mut effective_params {
+                        Value::Object(map) => map,
+                        other => {
+                            let mut map = serde_json::Map::new();
+                            if !other.is_null() {
+                                map.insert(
+                                    "value".to_string(),
+                                    std::mem::replace(other, Value::Null),
+                                );
+                            }
+                            *other = Value::Object(serde_json::Map::new());
+                            match &mut effective_params {
+                                Value::Object(m) => {
+                                    *m = map;
+                                    m
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
+                    };
+                    for (k, v) in overlay_obj {
+                        obj.insert(k.clone(), v.clone());
+                    }
+                }
             }
         }
         let mut result = provider
@@ -378,7 +409,7 @@ mod tests {
         fn eval_predicate(
             &self,
             name: &str,
-            _params: &Value,
+            params: &Value,
         ) -> Result<PredicateResult, ProviderError> {
             match name {
                 "always_trigger" => Ok(PredicateResult {
@@ -403,6 +434,18 @@ mod tests {
                         evidence: None,
                     }],
                 }),
+                "overlay_flag" => {
+                    let hit = params
+                        .get("changed_paths")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|paths| {
+                            paths.iter().any(|v| v.as_str() == Some("Cargo.toml"))
+                        });
+                    Ok(PredicateResult {
+                        triggered: hit,
+                        findings: vec![],
+                    })
+                }
                 _ => Err(ProviderError {
                     scope: self.scope_id.clone(),
                     phase: ProviderPhase::Snapshot,
@@ -514,7 +557,92 @@ mod tests {
                 created_at: Rfc3339Timestamp::new("2026-02-11T00:00:00Z"),
             },
         );
-        let out = evaluate_ruleset_with_inputs(&ruleset, &reg, Some(&bundles)).unwrap();
+        let out = evaluate_ruleset_with_inputs(&ruleset, &reg, Some(&bundles), None).unwrap();
         assert_eq!(out.witness.program.snapshot_hash.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn ruleset_runtime_overlay_merges_params_by_rule_id() {
+        let mut reg = ProviderRegistry::new();
+        reg.register(Arc::new(StubProvider {
+            scope_id: ScopeId("stub.scope".to_string()),
+        }))
+        .unwrap();
+
+        let ruleset = RuleSet {
+            schema_id: RULESET_SCHEMA_ID_V1.to_string(),
+            ruleset_id: "default".to_string(),
+            enabled_rules: vec!["R-CI-200".to_string()],
+            bindings: vec![RuleBinding {
+                rule_id: "R-CI-200".to_string(),
+                severity: Severity::Error,
+                when: RulePredicateBinding {
+                    scope_id: ScopeId("stub.scope".to_string()),
+                    predicate: "overlay_flag".to_string(),
+                    params: Value::Object(serde_json::Map::new()),
+                },
+            }],
+            fail_on: LintFailOn::Error,
+            module: None,
+            scope: None,
+        };
+
+        let no_overlay = evaluate_ruleset_with_inputs(&ruleset, &reg, None, None).unwrap();
+        assert_eq!(no_overlay.witness.verdict, Verdict::Admissible);
+
+        let mut overlays = BTreeMap::new();
+        overlays.insert(
+            "R-CI-200".to_string(),
+            serde_json::json!({ "changed_paths": ["Cargo.toml"] }),
+        );
+        let with_overlay =
+            evaluate_ruleset_with_inputs(&ruleset, &reg, None, Some(&overlays)).unwrap();
+        assert_eq!(with_overlay.witness.verdict, Verdict::Inadmissible);
+        assert!(with_overlay.witness.facts.iter().any(|fact| matches!(
+            fact,
+            Fact::RuleEvaluated {
+                rule_id,
+                triggered,
+                ..
+            } if rule_id == "R-CI-200" && *triggered
+        )));
+    }
+
+    #[test]
+    fn ruleset_runtime_overlay_does_not_change_ruleset_hash() {
+        let mut reg = ProviderRegistry::new();
+        reg.register(Arc::new(StubProvider {
+            scope_id: ScopeId("stub.scope".to_string()),
+        }))
+        .unwrap();
+
+        let ruleset = RuleSet {
+            schema_id: RULESET_SCHEMA_ID_V1.to_string(),
+            ruleset_id: "default".to_string(),
+            enabled_rules: vec!["R-CI-200".to_string()],
+            bindings: vec![RuleBinding {
+                rule_id: "R-CI-200".to_string(),
+                severity: Severity::Warning,
+                when: RulePredicateBinding {
+                    scope_id: ScopeId("stub.scope".to_string()),
+                    predicate: "overlay_flag".to_string(),
+                    params: Value::Object(serde_json::Map::new()),
+                },
+            }],
+            fail_on: LintFailOn::Error,
+            module: None,
+            scope: None,
+        };
+
+        let base = evaluate_ruleset_with_inputs(&ruleset, &reg, None, None).unwrap();
+        let mut overlays = BTreeMap::new();
+        overlays.insert(
+            "R-CI-200".to_string(),
+            serde_json::json!({ "changed_paths": ["Cargo.toml"] }),
+        );
+        let overlaid = evaluate_ruleset_with_inputs(&ruleset, &reg, None, Some(&overlays)).unwrap();
+
+        assert_eq!(base.ruleset_hash, overlaid.ruleset_hash);
+        assert_eq!(base.ruleset_hash, canonical_ruleset_hash(&ruleset).unwrap());
     }
 }

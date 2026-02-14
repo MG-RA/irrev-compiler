@@ -21,19 +21,20 @@ use admit_cli::{
     append_lens_activated_event, append_meta_change_checked_event,
     append_meta_interpretation_delta_event, append_plan_created_event, append_projection_event,
     build_lens_activated_event, build_meta_change_checked_event,
-    build_meta_interpretation_delta_event, build_projection_event, check_cost_declared, create_plan,
-    declare_cost, default_artifacts_dir, default_ledger_path, execute_checked, export_plan_markdown,
-    ingest_dir_protocol_with_cache, init_project, load_meta_registry, parse_plan_answers_markdown,
-    read_file_bytes, registry_build, registry_init, registry_migrate_v0_v1,
-    render_plan_prompt_template, render_plan_text, resolve_scope_enablement, scope_add, scope_list,
-    scope_show, scope_verify, store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
-    DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanNewInput,
-    ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
-    ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
-    VerifyWitnessInput,
+    build_meta_interpretation_delta_event, build_projection_event, check_cost_declared,
+    create_plan, declare_cost, default_artifacts_dir, default_ledger_path, execute_checked,
+    export_plan_markdown, ingest_dir_protocol_with_cache, init_project, load_meta_registry,
+    parse_plan_answers_markdown, read_file_bytes, registry_build, registry_init,
+    registry_migrate_v0_v1, render_plan_prompt_template, render_plan_text,
+    resolve_scope_enablement, scope_add, scope_list, scope_show, scope_verify,
+    store_value_artifact, verify_ledger, verify_witness, ArtifactInput, DeclareCostInput,
+    InitProjectInput, MetaRegistryV0, PlanNewInput, ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode,
+    ScopeListArgs as ScopeListArgsLib, ScopeOperation, ScopeShowArgs as ScopeShowArgsLib,
+    ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
 };
 use admit_core::provider_types::FactsBundle;
 use admit_core::{evaluate_ruleset_with_inputs, ProviderRegistry, RuleSet};
+use commands::ci_check::{run_ci_check, CiArgs};
 
 mod commands;
 
@@ -346,6 +347,8 @@ enum Commands {
     Bundle(BundleArgs),
     /// Lens operations (activation lineage and interpretation deltas).
     Lens(LensArgs),
+    /// Run CI admissibility checks and emit witnessed summary.
+    Ci(CiArgs),
     /// Evaluate admissibility from event or executable ruleset.
     Check(CheckArgs),
     /// Execute an already checked admissible action.
@@ -2103,6 +2106,7 @@ fn main() {
             BundleCommands::Verify(verify_args) => run_bundle_verify(verify_args, dag_trace_out),
         },
         Commands::Lens(args) => run_lens(args, dag_trace_out),
+        Commands::Ci(args) => run_ci_check(args),
         Commands::Check(args) => run_check(args, dag_trace_out, &mut projection),
         Commands::Execute(args) => run_execute(args, dag_trace_out, &mut projection),
         Commands::Observe(args) => run_observe(args, dag_trace_out),
@@ -2541,6 +2545,13 @@ fn build_ruleset_provider_registry(ruleset: &RuleSet) -> Result<ProviderRegistry
                     ))
                     .map_err(|err| err.to_string())?;
             }
+            admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID => {
+                registry
+                    .register(Arc::new(
+                        admit_scope_github::provider_impl::GithubCeremonyProvider::new(),
+                    ))
+                    .map_err(|err| err.to_string())?;
+            }
             _ => {
                 return Err(format!(
                     "ruleset requires scope '{}', but CLI has no provider wiring for it yet",
@@ -2599,6 +2610,7 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
         &ruleset,
         &registry,
         (!input_bundles.is_empty()).then_some(&input_bundles),
+        None,
     )
     .map_err(|err| err.0)?;
     let mut witness = outcome.witness.clone();
@@ -3634,14 +3646,18 @@ fn build_observe_scope_provider(scope_id: &str) -> Result<Arc<dyn admit_core::Pr
         admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID => Ok(Arc::new(
             admit_scope_deps::provider_impl::DepsManifestProvider::new(),
         )),
+        admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID => Ok(Arc::new(
+            admit_scope_github::provider_impl::GithubCeremonyProvider::new(),
+        )),
         _ => Err(format!(
-            "observe --scope '{}' is not wired yet (supported: {}, {}, {}, {}, {})",
+            "observe --scope '{}' is not wired yet (supported: {}, {}, {}, {}, {}, {})",
             scope_id,
             admit_scope_ingest::backend::INGEST_DIR_SCOPE_ID,
             admit_scope_rust::backend::RUST_SCOPE_ID,
             admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID,
             admit_scope_text::backend::TEXT_METRICS_SCOPE_ID,
-            admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID
+            admit_scope_deps::backend::DEPS_MANIFEST_SCOPE_ID,
+            admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID
         )),
     }
 }

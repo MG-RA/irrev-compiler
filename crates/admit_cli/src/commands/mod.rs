@@ -1,5 +1,6 @@
 //! Command implementations for admit-cli
 
+pub mod ci_check;
 pub mod engine;
 pub mod git;
 pub mod lint;

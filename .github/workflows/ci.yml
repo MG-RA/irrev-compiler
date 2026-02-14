@@ -9,3 +9,15 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo run -p admit_cli -- lint rust .
+      - name: Admissibility witness
+        uses: ./
+        with:
+          mode: ${{ github.event_name == 'pull_request' && 'enforce' || 'observe' }}
+          require-github: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+      - name: Upload witness artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: admissibility-witness
+          path: out/
+          retention-days: 90

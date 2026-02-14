@@ -331,8 +331,7 @@ fn registry_v1_canonical_hash_from_init_is_pinned() {
 
     let artifact_ref = registry_build(&path, &artifacts_dir).expect("build v1 registry");
     assert_eq!(
-        artifact_ref.sha256,
-        "77b89745cecd4352898fe67dca13ca872caa6a8a6dcab56b401f20cc947123e4",
+        artifact_ref.sha256, "77b89745cecd4352898fe67dca13ca872caa6a8a6dcab56b401f20cc947123e4",
         "pinned v1 registry hash changed - update pin or bump registry_version"
     );
 }
@@ -348,8 +347,7 @@ fn default_lens_v0_canonical_hash_is_pinned() {
         admit_core::encode_canonical_value(&lens_value).expect("encode default lens canonical");
     let hash = hex::encode(sha2::Sha256::digest(&canonical));
     assert_eq!(
-        hash,
-        "29fa7bf20f869e1cfbbf0b0299a5a6567262d560133c5f38d9a6502c5b279702",
+        hash, "29fa7bf20f869e1cfbbf0b0299a5a6567262d560133c5f38d9a6502c5b279702",
         "default lens canonical hash changed - this is a governance-level breaking change"
     );
 }

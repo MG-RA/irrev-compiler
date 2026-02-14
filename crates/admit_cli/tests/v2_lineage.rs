@@ -123,10 +123,9 @@ pub fn do_unsafe() {
 
     let registry_path = temp.path().join("meta-registry.json");
     admit_cli::registry_init(&registry_path).expect("registry init");
-    let mut registry: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&registry_path).expect("read initialized registry"),
-    )
-    .expect("decode registry");
+    let mut registry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).expect("read initialized registry"))
+            .expect("decode registry");
 
     let default_lens_hash = registry["default_lens"]["lens_hash"]
         .as_str()
@@ -174,13 +173,14 @@ pub fn do_unsafe() {
     );
 
     let witness_sha = parse_stdout_line(&check_stdout, "witness_sha256");
-    let baseline_path = artifacts_dir.join("witness").join(format!("{}.json", witness_sha));
+    let baseline_path = artifacts_dir
+        .join("witness")
+        .join(format!("{}.json", witness_sha));
     assert!(baseline_path.exists(), "missing baseline witness artifact");
 
-    let baseline: admit_core::Witness = serde_json::from_slice(
-        &std::fs::read(&baseline_path).expect("read baseline witness"),
-    )
-    .expect("decode baseline witness");
+    let baseline: admit_core::Witness =
+        serde_json::from_slice(&std::fs::read(&baseline_path).expect("read baseline witness"))
+            .expect("decode baseline witness");
     assert_eq!(
         baseline.schema_id.as_deref(),
         Some(admit_core::DEFAULT_WITNESS_SCHEMA_ID)
@@ -306,4 +306,3 @@ pub fn do_unsafe() {
         "expected final event to be meta.change.checked"
     );
 }
-

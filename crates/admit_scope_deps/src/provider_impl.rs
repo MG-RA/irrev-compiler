@@ -24,6 +24,8 @@ const RULE_GIT_DEP_PRESENT: &str = "deps/git_dependency_present";
 const RULE_WILDCARD_VERSION_PRESENT: &str = "deps/wildcard_version_present";
 const RULE_LOCKFILE_MISSING: &str = "deps/lockfile_missing";
 const RULE_UNAPPROVED_DEP: &str = "deps/unapproved_dependency";
+const RULE_MANIFEST_CHANGED_WITHOUT_LOCK: &str =
+    "scope:deps.manifest/predicate:manifest_changed_without_lockfile";
 
 #[derive(Debug, Clone)]
 struct ManifestRecord {
@@ -128,6 +130,23 @@ impl Provider for DepsManifestProvider {
                         "properties": {
                             "facts": { "type": "array" },
                             "allowed": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        }
+                    })),
+                },
+                PredicateDescriptor {
+                    name: "manifest_changed_without_lockfile".to_string(),
+                    doc: "Triggers when a manifest file appears in changed_paths without its \
+                          corresponding lockfile also changed."
+                        .to_string(),
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "required": ["facts"],
+                        "properties": {
+                            "facts": { "type": "array" },
+                            "changed_paths": {
                                 "type": "array",
                                 "items": { "type": "string" }
                             }
@@ -344,6 +363,7 @@ impl Provider for DepsManifestProvider {
             "wildcard_version_present" => eval_wildcard_version_present(&deps),
             "lockfile_missing" => eval_lockfile_missing(&manifests, &locks),
             "unapproved_dependency" => eval_unapproved_dependency(params, &scope_id, &deps),
+            "manifest_changed_without_lockfile" => eval_manifest_changed_without_lockfile(params),
             _ => Err(ProviderError {
                 scope: scope_id,
                 phase: ProviderPhase::Snapshot,
@@ -519,6 +539,84 @@ fn eval_unapproved_dependency(
             ));
         }
     }
+    sort_findings(&mut findings);
+    Ok(PredicateResult {
+        triggered: !findings.is_empty(),
+        findings,
+    })
+}
+
+fn eval_manifest_changed_without_lockfile(
+    params: &serde_json::Value,
+) -> Result<PredicateResult, ProviderError> {
+    let changed_paths: BTreeSet<String> = params
+        .get("changed_paths")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if changed_paths.is_empty() {
+        return Ok(PredicateResult {
+            triggered: false,
+            findings: vec![],
+        });
+    }
+
+    // Manifest -> expected lockfile pairings
+    let manifest_lock_pairs: &[(&str, &[&str])] = &[
+        ("Cargo.toml", &["Cargo.lock"]),
+        (
+            "package.json",
+            &["package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
+        ),
+    ];
+
+    let mut findings = Vec::new();
+    for path in &changed_paths {
+        let file_name = path.rsplit('/').next().unwrap_or(path);
+        for &(manifest_name, lock_names) in manifest_lock_pairs {
+            if file_name != manifest_name {
+                continue;
+            }
+            let dir = if path.contains('/') {
+                &path[..path.rfind('/').unwrap()]
+            } else {
+                ""
+            };
+            let has_lock = lock_names.iter().any(|lock_name| {
+                let lock_path = if dir.is_empty() {
+                    lock_name.to_string()
+                } else {
+                    format!("{}/{}", dir, lock_name)
+                };
+                changed_paths.contains(&lock_path)
+            });
+            if !has_lock {
+                findings.push(admit_core::LintFinding {
+                    rule_id: RULE_MANIFEST_CHANGED_WITHOUT_LOCK.to_string(),
+                    severity: Severity::Warning,
+                    invariant: Some("deps.lockfile_sync".to_string()),
+                    path: path.clone(),
+                    span: span_for_path(path),
+                    message: format!(
+                        "{} changed without corresponding lockfile change",
+                        manifest_name
+                    ),
+                    evidence: Some(serde_json::json!({
+                        "manifest_path": path,
+                        "manifest_name": manifest_name,
+                        "expected_lock_names": lock_names,
+                        "dir": dir
+                    })),
+                });
+            }
+        }
+    }
+
     sort_findings(&mut findings);
     Ok(PredicateResult {
         triggered: !findings.is_empty(),
@@ -1304,5 +1402,72 @@ version = "1.0.0"
         assert!(out.triggered);
         assert_eq!(out.findings.len(), 1);
         assert_eq!(out.findings[0].rule_id, RULE_UNAPPROVED_DEP);
+    }
+
+    #[test]
+    fn manifest_changed_without_lockfile_triggers() {
+        let provider = DepsManifestProvider::new();
+        let facts: Vec<Fact> = vec![];
+        let out = provider
+            .eval_predicate(
+                "manifest_changed_without_lockfile",
+                &serde_json::json!({
+                    "facts": facts,
+                    "changed_paths": ["Cargo.toml", "src/main.rs"]
+                }),
+            )
+            .expect("predicate");
+        assert!(out.triggered);
+        assert_eq!(out.findings.len(), 1);
+        assert_eq!(out.findings[0].rule_id, RULE_MANIFEST_CHANGED_WITHOUT_LOCK);
+    }
+
+    #[test]
+    fn manifest_changed_with_lockfile_does_not_trigger() {
+        let provider = DepsManifestProvider::new();
+        let facts: Vec<Fact> = vec![];
+        let out = provider
+            .eval_predicate(
+                "manifest_changed_without_lockfile",
+                &serde_json::json!({
+                    "facts": facts,
+                    "changed_paths": ["Cargo.toml", "Cargo.lock"]
+                }),
+            )
+            .expect("predicate");
+        assert!(!out.triggered);
+    }
+
+    #[test]
+    fn manifest_changed_without_lockfile_npm() {
+        let provider = DepsManifestProvider::new();
+        let facts: Vec<Fact> = vec![];
+        let out = provider
+            .eval_predicate(
+                "manifest_changed_without_lockfile",
+                &serde_json::json!({
+                    "facts": facts,
+                    "changed_paths": ["frontend/package.json"]
+                }),
+            )
+            .expect("predicate");
+        assert!(out.triggered);
+        assert_eq!(out.findings[0].path, "frontend/package.json");
+    }
+
+    #[test]
+    fn manifest_changed_without_lockfile_npm_with_yarn() {
+        let provider = DepsManifestProvider::new();
+        let facts: Vec<Fact> = vec![];
+        let out = provider
+            .eval_predicate(
+                "manifest_changed_without_lockfile",
+                &serde_json::json!({
+                    "facts": facts,
+                    "changed_paths": ["frontend/package.json", "frontend/yarn.lock"]
+                }),
+            )
+            .expect("predicate");
+        assert!(!out.triggered);
     }
 }

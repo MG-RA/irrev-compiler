@@ -1,0 +1,121 @@
+{
+  "schema_id": "ruleset/admit@1",
+  "ruleset_id": "software-lens-v0",
+  "enabled_rules": [
+    "R-CI-100",
+    "R-CI-110",
+    "R-CI-120",
+    "R-CI-130",
+    "R-CI-200",
+    "R-CI-300",
+    "R-CI-310",
+    "R-CI-320",
+    "R-CI-330"
+  ],
+  "bindings": [
+    {
+      "rule_id": "R-CI-100",
+      "severity": "warning",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "lockfile_missing",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-CI-110",
+      "severity": "warning",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "git_dependency_present",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-CI-120",
+      "severity": "warning",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "wildcard_version_present",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-CI-130",
+      "severity": "info",
+      "when": {
+        "scope_id": "git.working_tree",
+        "predicate": "sensitive_path_touched",
+        "params": {
+          "patterns": [
+            "**/.env",
+            "**/.env.*",
+            "**/*.pem",
+            "**/*.key",
+            "**/secrets/**",
+            ".github/workflows/**"
+          ]
+        }
+      }
+    },
+    {
+      "rule_id": "R-CI-200",
+      "severity": "warning",
+      "when": {
+        "scope_id": "deps.manifest",
+        "predicate": "manifest_changed_without_lockfile",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-CI-300",
+      "severity": "info",
+      "when": {
+        "scope_id": "github.ceremony",
+        "predicate": "required_checks_green",
+        "params": {}
+      }
+    },
+    {
+      "rule_id": "R-CI-310",
+      "severity": "info",
+      "when": {
+        "scope_id": "github.ceremony",
+        "predicate": "min_approvals_met",
+        "params": {
+          "min": 1
+        }
+      }
+    },
+    {
+      "rule_id": "R-CI-320",
+      "severity": "info",
+      "when": {
+        "scope_id": "github.ceremony",
+        "predicate": "workflow_change_requires_extra_approval",
+        "params": {
+          "min_for_workflow": 2
+        }
+      }
+    },
+    {
+      "rule_id": "R-CI-330",
+      "severity": "error",
+      "when": {
+        "scope_id": "github.ceremony",
+        "predicate": "protected_branch_flow",
+        "params": {
+          "protected_bases": [
+            "main",
+            "master"
+          ],
+          "allowed_heads": [
+            "dev",
+            "dev/*"
+          ]
+        }
+      }
+    }
+  ],
+  "fail_on": "error"
+}

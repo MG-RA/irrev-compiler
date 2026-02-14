@@ -1,0 +1,83 @@
+name: "Admissibility Witness"
+description: "Run admit ci and emit witnessed CI summary."
+
+inputs:
+  mode:
+    description: "CI mode: observe|audit|enforce"
+    required: false
+    default: "observe"
+  config-path:
+    description: "Optional path to .admit/config.toml"
+    required: false
+    default: ""
+  require-github:
+    description: "Require github.ceremony scope availability"
+    required: false
+    default: "false"
+  comment:
+    description: "Post PR comment via gh when possible"
+    required: false
+    default: "false"
+
+outputs:
+  verdict:
+    description: "Witness verdict"
+    value: ${{ steps.parse.outputs.verdict }}
+  witness-hash:
+    description: "Witness canonical hash"
+    value: ${{ steps.parse.outputs.witness_hash }}
+  witness-path:
+    description: "Witness artifact path"
+    value: ${{ steps.parse.outputs.witness_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Build admit CLI
+      shell: bash
+      run: cargo build -p admit_cli --release
+
+    - name: Run admissibility witness
+      id: run_witness
+      shell: bash
+      run: |
+        mkdir -p out/artifacts
+        CONFIG_ARG=""
+        if [ -n "${{ inputs.config-path }}" ]; then
+          CONFIG_ARG="--config ${{ inputs.config-path }}"
+        fi
+        REQUIRE_GH_ARG=""
+        if [ "${{ inputs.require-github }}" = "true" ]; then
+          REQUIRE_GH_ARG="--require-github"
+        fi
+        target/release/admit_cli ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
+
+    - name: Parse outputs
+      id: parse
+      shell: bash
+      run: |
+        VERDICT=$(jq -r '.verdict // ""' out/ci-witness.json)
+        WITNESS_HASH=$(jq -r '.witness_hash // ""' out/ci-witness.json)
+        WITNESS_PATH=$(jq -r '.witness_artifact_path // ""' out/ci-witness.json)
+        echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+        echo "witness_hash=$WITNESS_HASH" >> "$GITHUB_OUTPUT"
+        echo "witness_path=$WITNESS_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Publish summary
+      shell: bash
+      run: |
+        echo "## Admissibility Witness" >> "$GITHUB_STEP_SUMMARY"
+        echo '```json' >> "$GITHUB_STEP_SUMMARY"
+        jq . out/ci-witness.json >> "$GITHUB_STEP_SUMMARY" || cat out/ci-witness.json >> "$GITHUB_STEP_SUMMARY"
+        echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Best-effort PR comment
+      if: ${{ inputs.comment == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        if [ -n "$PR_NUMBER" ]; then
+          gh pr comment "$PR_NUMBER" --body-file out/ci-witness.json || true
+        fi

@@ -36,8 +36,10 @@ See `meta/design/v2/adjudicator-transition.md` for the adjudicator/lens transiti
 - [Registry & Validation](#registry--validation)
 - [Witness Format Specification](#witness-format-specification)
 - [CLI Usage](#cli-usage)
+- [CI Self-Hosting](#ci-self-hosting)
 - [Development](#development)
 - [Design Documents](#design-documents)
+- [Operations](#operations)
 - [Protocol Conformance](#protocol-conformance)
 
 ---
@@ -103,6 +105,13 @@ Five binding rules govern all transformations:
 ### Crate Organization
 
 The compiler is structured as a multi-crate Rust workspace:
+
+Active scope providers in current CI/runtime policy paths:
+- `admit_scope_git`
+- `admit_scope_deps`
+- `admit_scope_github`
+- `admit_scope_text`
+- `admit_scope_rust`
 
 ```
 irrev-compiler/
@@ -949,6 +958,63 @@ admit calc verify calc_witness.json
 # Plan creation
 admit plan new --answers plan_answers.json --scope scope:calc.pure --target "evaluate expression"
 ```
+
+## CI Self-Hosting
+
+The compiler can adjudicate its own repository changes in CI through `admit ci`.
+
+### CI Command Modes
+
+```bash
+# Observe only: always exits 0, emits witness + summary
+admit ci --root . --mode observe --json --artifacts-dir out/artifacts
+
+# Audit mode: fails on integrity failures (e.g., nondeterministic witness hash)
+admit ci --root . --mode audit --json --artifacts-dir out/artifacts
+
+# Enforce mode: fails when witness verdict is inadmissible
+admit ci --root . --mode enforce --json --artifacts-dir out/artifacts
+```
+
+### GitHub Ceremony Scope
+
+When `github.ceremony` is enabled in the ruleset, CI uses `gh` CLI + `GITHUB_TOKEN` to snapshot:
+- PR state (`github/pr_state`)
+- review summary (`github/review_summary`)
+- checks summary (`github/checks_summary`)
+- changed files (`github/changed_files`)
+
+If GitHub scope is unavailable, default behavior is graceful degradation with
+`github/scope_unavailable` fact in the witness. To require strict availability:
+
+```bash
+admit ci --root . --mode enforce --require-github --json
+```
+
+or set:
+
+```toml
+[ci]
+require_github_scope = true
+```
+
+### Branch Flow Enforcement (`dev` -> `main|master`)
+
+Ruleset `software-lens-v0` includes `R-CI-330` (`protected_branch_flow`) with:
+- protected bases: `main`, `master`
+- allowed heads: `dev`, `dev/*`
+
+A PR to protected bases from any other head branch is inadmissible in enforce mode.
+
+### Repo Workflow Behavior
+
+Current `.github/workflows/ci.yml` runs:
+- `enforce` mode on `pull_request`
+- `observe` mode on `push`
+
+The repository should also enable branch protection on `main`/`master` requiring this
+workflow status check to merge.
+
 ### Vault Utilities
 
 ```bash
@@ -1071,6 +1137,8 @@ The `meta/` directory contains design documents, protocols, and scope contracts:
 - [admissibility-ir.md](meta/design/compiler/admissibility-ir.md) — IR specification
 - [adm-wellformedness.md](meta/design/compiler/adm-wellformedness.md) — Language well-formedness
 - [compiler-rs-phase3-checklist.md](meta/design/compiler/compiler-rs-phase3-checklist.md) — Phase 3 tasks
+- [adjudicator-transition.md](meta/design/v2/adjudicator-transition.md) — V2 adjudicator/lens transition
+- [ci-self-hosting-hardening.md](meta/design/v2/ci-self-hosting-hardening.md) — CIv3 hardening and branch-flow enforcement
 
 ### Protocols
 - [semantics-authority.md](meta/protocols/semantics-authority.md) — Authority protocol
@@ -1094,6 +1162,10 @@ The `meta/` directory contains design documents, protocols, and scope contracts:
 - [hash-witness-schema-v0.md](meta/design/compiler/hash-witness-schema-v0.md) — Hash witness format
 
 ---
+
+## Operations
+
+- [docs/OPERATIONS.md](docs/OPERATIONS.md) - Maintainer runbook for local checks, CI triage, branch protection, and witness artifact handling.
 
 ## Protocol Conformance
 
@@ -1243,6 +1315,7 @@ Design documents and protocols are canonical. Code changes must:
 
 ---
 
-**Last Updated**: 2026-02-07
-**Compiler Version**: 0.1.0 (Phase 3)
+**Last Updated**: 2026-02-14
+**Compiler Version**: 0.1.0 (V2 adjudicator + CIv3 self-hosting hardening)
 **Status**: Active Development
+

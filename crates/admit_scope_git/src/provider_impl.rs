@@ -27,6 +27,7 @@ const RULE_DELETED: &str = "git/deleted_file";
 const RULE_RENAMED: &str = "git/renamed_file";
 const RULE_UNTRACKED: &str = "git/untracked_file";
 const RULE_STAGED: &str = "git/staged_file";
+const RULE_CHANGED_PATHS: &str = "git/changed_paths";
 
 const DIRTY_RULE_IDS: [&str; 6] = [
     RULE_MODIFIED,
@@ -124,6 +125,19 @@ impl Provider for GitWorkingTreeProvider {
                         "type": "object",
                         "required": ["facts"],
                         "properties": { "facts": { "type": "array" } }
+                    })),
+                },
+                PredicateDescriptor {
+                    name: "sensitive_path_touched".to_string(),
+                    doc: "Triggers when changed paths match any of the supplied glob patterns."
+                        .to_string(),
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "required": ["facts"],
+                        "properties": {
+                            "facts": { "type": "array" },
+                            "patterns": { "type": "array", "items": { "type": "string" } }
+                        }
                     })),
                 },
             ],
@@ -271,6 +285,7 @@ impl Provider for GitWorkingTreeProvider {
                     findings,
                 })
             }
+            "sensitive_path_touched" => eval_sensitive_path_touched(params, &facts, &scope_id),
             _ => Err(ProviderError {
                 scope: scope_id,
                 phase: ProviderPhase::Snapshot,
@@ -346,6 +361,90 @@ fn sort_findings(findings: &mut [admit_core::LintFinding]) {
             .then(a.span.col.unwrap_or(0).cmp(&b.span.col.unwrap_or(0)))
             .then(a.message.cmp(&b.message))
     });
+}
+
+/// Extract sorted, deduplicated changed paths from facts (reads `git/changed_paths` summary fact).
+fn extract_changed_paths(facts: &[Fact]) -> Vec<String> {
+    for fact in facts {
+        if let Fact::LintFinding {
+            rule_id,
+            evidence: Some(evidence),
+            ..
+        } = fact
+        {
+            if rule_id == RULE_CHANGED_PATHS {
+                if let Some(paths) = evidence.get("paths").and_then(|v| v.as_array()) {
+                    return paths
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn eval_sensitive_path_touched(
+    params: &serde_json::Value,
+    facts: &[Fact],
+    scope_id: &ScopeId,
+) -> Result<PredicateResult, ProviderError> {
+    let patterns = params
+        .get("patterns")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if patterns.is_empty() {
+        return Ok(PredicateResult {
+            triggered: false,
+            findings: vec![],
+        });
+    }
+
+    let mut builder = globset::GlobSetBuilder::new();
+    for pat in &patterns {
+        let glob = globset::Glob::new(pat).map_err(|err| ProviderError {
+            scope: scope_id.clone(),
+            phase: ProviderPhase::Snapshot,
+            message: format!("invalid glob pattern '{}': {}", pat, err),
+        })?;
+        builder.add(glob);
+    }
+    let glob_set = builder.build().map_err(|err| ProviderError {
+        scope: scope_id.clone(),
+        phase: ProviderPhase::Snapshot,
+        message: format!("glob set build failed: {}", err),
+    })?;
+
+    let changed_paths = extract_changed_paths(facts);
+    let mut findings = Vec::new();
+    for path in &changed_paths {
+        let matches: Vec<usize> = glob_set.matches(path);
+        for idx in matches {
+            findings.push(admit_core::LintFinding {
+                rule_id: "scope:git.working_tree/predicate:sensitive_path_touched".to_string(),
+                severity: Severity::Info,
+                invariant: Some("ci.sensitive_path".to_string()),
+                path: path.clone(),
+                span: span_for_path(path),
+                message: format!("sensitive path touched: {}", path),
+                evidence: Some(serde_json::json!({
+                    "matched_pattern": patterns[idx],
+                    "path": path
+                })),
+            });
+        }
+    }
+    sort_findings(&mut findings);
+    Ok(PredicateResult {
+        triggered: !findings.is_empty(),
+        findings,
+    })
 }
 
 fn severity_rank(severity: &Severity) -> u8 {
@@ -535,6 +634,31 @@ fn status_to_facts(status: &GitStatusSnapshot) -> Vec<Fact> {
                 "change_fact_count": dirty_count
             }),
         )),
+    });
+
+    // Emit stable summary fact with sorted, deduplicated changed paths.
+    let mut changed_paths: Vec<String> = Vec::new();
+    for entry in &status.entries {
+        let path = match entry {
+            GitStatusEntry::Tracked { path, .. } => path.clone(),
+            GitStatusEntry::Untracked { path } => path.clone(),
+        };
+        changed_paths.push(path);
+    }
+    changed_paths.sort();
+    changed_paths.dedup();
+    let count = changed_paths.len();
+    facts.push(Fact::LintFinding {
+        rule_id: RULE_CHANGED_PATHS.to_string(),
+        severity: Severity::Info,
+        invariant: None,
+        path: ".".to_string(),
+        span: span_for_path("."),
+        message: format!("{} changed path(s)", count),
+        evidence: Some(serde_json::json!({
+            "paths": changed_paths,
+            "count": count
+        })),
     });
 
     facts
@@ -1024,5 +1148,131 @@ mod tests {
             .expect("predicate");
         assert!(out.triggered);
         assert!(!out.findings.is_empty());
+    }
+
+    #[test]
+    fn snapshot_emits_changed_paths_fact() {
+        if !git_available() {
+            return;
+        }
+        let root = temp_dir("changed-paths");
+        run_git(&root, &["init", "-q"]);
+        std::fs::write(root.join("a.txt"), "a\n").expect("write a");
+        run_git(&root, &["add", "a.txt"]);
+        run_git(
+            &root,
+            &[
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "init",
+                "-q",
+            ],
+        );
+        std::fs::write(root.join("a.txt"), "a2\n").expect("modify a");
+        std::fs::write(root.join("b.txt"), "b\n").expect("write b");
+
+        let provider = GitWorkingTreeProvider::new();
+        let req = SnapshotRequest {
+            scope_id: ScopeId(GIT_WORKING_TREE_SCOPE_ID.to_string()),
+            params: serde_json::json!({
+                "root": root.to_string_lossy(),
+                "created_at": "2026-02-14T00:00:00Z"
+            }),
+        };
+        let out = provider.snapshot(&req).expect("snapshot");
+        let cp = out.facts_bundle.facts.iter().find(|f| {
+            matches!(
+                f, Fact::LintFinding { rule_id, .. } if rule_id == RULE_CHANGED_PATHS
+            )
+        });
+        assert!(cp.is_some(), "expected git/changed_paths fact");
+        if let Some(Fact::LintFinding {
+            evidence: Some(e), ..
+        }) = cp
+        {
+            let paths = e
+                .get("paths")
+                .and_then(|v| v.as_array())
+                .expect("paths array");
+            assert!(paths.len() >= 2, "expected at least 2 changed paths");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sensitive_path_touched_matches_glob() {
+        let provider = GitWorkingTreeProvider::new();
+        let facts = vec![Fact::LintFinding {
+            rule_id: RULE_CHANGED_PATHS.to_string(),
+            severity: Severity::Info,
+            invariant: None,
+            path: ".".to_string(),
+            span: Span {
+                file: ".".to_string(),
+                start: None,
+                end: None,
+                line: None,
+                col: None,
+            },
+            message: "2 changed path(s)".to_string(),
+            evidence: Some(serde_json::json!({
+                "paths": [".github/workflows/ci.yml", "src/main.rs"],
+                "count": 2
+            })),
+        }];
+        let out = provider
+            .eval_predicate(
+                "sensitive_path_touched",
+                &serde_json::json!({
+                    "facts": facts,
+                    "patterns": [".github/workflows/**"]
+                }),
+            )
+            .expect("predicate");
+        assert!(out.triggered);
+        assert_eq!(out.findings.len(), 1);
+        assert_eq!(
+            out.findings[0].rule_id,
+            "scope:git.working_tree/predicate:sensitive_path_touched"
+        );
+        assert_eq!(out.findings[0].path, ".github/workflows/ci.yml");
+    }
+
+    #[test]
+    fn sensitive_path_touched_no_match() {
+        let provider = GitWorkingTreeProvider::new();
+        let facts = vec![Fact::LintFinding {
+            rule_id: RULE_CHANGED_PATHS.to_string(),
+            severity: Severity::Info,
+            invariant: None,
+            path: ".".to_string(),
+            span: Span {
+                file: ".".to_string(),
+                start: None,
+                end: None,
+                line: None,
+                col: None,
+            },
+            message: "1 changed path(s)".to_string(),
+            evidence: Some(serde_json::json!({
+                "paths": ["src/main.rs"],
+                "count": 1
+            })),
+        }];
+        let out = provider
+            .eval_predicate(
+                "sensitive_path_touched",
+                &serde_json::json!({
+                    "facts": facts,
+                    "patterns": ["**/.env", "**/*.pem"]
+                }),
+            )
+            .expect("predicate");
+        assert!(!out.triggered);
+        assert!(out.findings.is_empty());
     }
 }

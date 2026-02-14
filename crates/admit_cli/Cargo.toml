@@ -14,6 +14,7 @@ admit_scope_rust = { path = "../admit_scope_rust" }
 admit_scope_git = { path = "../admit_scope_git" }
 admit_scope_text = { path = "../admit_scope_text" }
 admit_scope_deps = { path = "../admit_scope_deps" }
+admit_scope_github = { path = "../admit_scope_github" }
 admit_scope_vault = { path = "../admit_scope_vault" }
 clap = { version = "4.5.27", features = ["derive"] }
 serde = { version = "1.0.203", features = ["derive"] }

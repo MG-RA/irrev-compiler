@@ -7,7 +7,7 @@ use admit_cli::{
 };
 use admit_surrealdb::{FunctionArtifactRow, ProjectionStoreOps, QueryArtifactRow};
 
-use crate::{EngineFunctionAddArgs, EngineQueryAddArgs, ProjectionCoordinator};
+use crate::{commands::current_utc_rfc3339, EngineFunctionAddArgs, EngineQueryAddArgs, ProjectionCoordinator};
 
 pub fn run_engine_query_add(
     args: EngineQueryAddArgs,
@@ -44,7 +44,7 @@ pub fn run_engine_query_add(
     )
     .map_err(|e| e.to_string())?;
 
-    let timestamp = chrono::Utc::now().to_rfc3339();
+    let timestamp = current_utc_rfc3339();
     let event = build_engine_event(
         "engine.query.registered",
         timestamp.clone(),
@@ -140,7 +140,7 @@ pub fn run_engine_function_add(
     )
     .map_err(|e| e.to_string())?;
 
-    let timestamp = chrono::Utc::now().to_rfc3339();
+    let timestamp = current_utc_rfc3339();
     let event = build_engine_event(
         "engine.function.registered",
         timestamp.clone(),

@@ -1378,6 +1378,7 @@ pub fn search_doc_title_embeddings(
 
 /// SQL for vacuuming obsidian-specific tables for given projection run IDs.
 pub fn vacuum_obsidian_tables_sql(_run_ids_json: &str) -> String {
+    // IR-DELETE-JUSTIFIED: explicit vacuum path for projection run cleanup.
     format!(
         "DELETE obsidian_link WHERE projection_run_id IN $runs RETURN NONE;\
 DELETE obsidian_file_link WHERE projection_run_id IN $runs RETURN NONE;\

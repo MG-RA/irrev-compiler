@@ -48,8 +48,11 @@ impl Provider for IngestDirProvider {
             },
             required_approvals: vec![],
             predicates: vec![PredicateDescriptor {
+                predicate_id: "ingest.dir/missing_path@1".to_string(),
                 name: "missing_path".to_string(),
                 doc: "Triggers when params.path does not exist.".to_string(),
+                result_kind: PredicateResultKind::Bool,
+                emits_findings: true,
                 param_schema: Some(serde_json::json!({
                     "type": "object",
                     "required": ["path"],
@@ -57,6 +60,7 @@ impl Provider for IngestDirProvider {
                         "path": { "type": "string" }
                     }
                 })),
+                evidence_schema: None,
             }],
         }
     }
@@ -254,6 +258,7 @@ impl Provider for IngestDirProvider {
         &self,
         name: &str,
         params: &serde_json::Value,
+        _ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         let scope_id = ScopeId(INGEST_DIR_SCOPE_ID.to_string());
         match name {
@@ -436,6 +441,7 @@ mod tests {
             .eval_predicate(
                 "missing_path",
                 &serde_json::json!({ "path": "/definitely/not/here" }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -450,6 +456,7 @@ mod tests {
             .eval_predicate(
                 "missing_path",
                 &serde_json::json!({ "path": root.to_string_lossy() }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);

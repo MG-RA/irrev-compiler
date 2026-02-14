@@ -247,6 +247,7 @@ admit ledger verify --json
 admit registry scope-add --scope calc.pure@0 --deterministic true --foundational true
 admit registry scope-verify --scope-id scope:calc.pure
 admit plan new --answers <answers.json> --scope <scope> --target <target>
+admit plan check --plan <plan-artifact.json> --manifest <proposal-manifest.json> --rollout advisory --json
 admit calc execute --plan <plan.json> --input x=42 --out <witness.json>
 admit calc verify <witness.json>           # legacy compatibility route to witness verify
 admit status --json
@@ -963,6 +964,11 @@ admit plan new --answers plan_answers.json --scope scope:calc.pure --target "eva
 
 The compiler can adjudicate its own repository changes in CI through `admit ci`.
 
+Typed planning contract support is documented in:
+- `docs/spec/agent-plan-contract.md`
+- `.admit/schemas/plan-artifact.v0.schema.json`
+- `.admit/schemas/proposal-manifest.v0.schema.json`
+
 ### CI Command Modes
 
 ```bash
@@ -974,6 +980,15 @@ admit ci --root . --mode audit --json --artifacts-dir out/artifacts
 
 # Enforce mode: fails when witness verdict is inadmissible
 admit ci --root . --mode enforce --json --artifacts-dir out/artifacts
+
+# Include typed planner/manifest validation (advisory or enforce)
+admit ci --root . --mode enforce --json --artifacts-dir out/artifacts --plan out/plan/plan-artifact.json --manifest out/plan/proposal-manifest.json --plan-rollout advisory
+```
+
+Plan contract validation can also run standalone:
+
+```bash
+admit plan check --plan out/plan/plan-artifact.json --manifest out/plan/proposal-manifest.json --rollout advisory --json
 ```
 
 ### GitHub Ceremony Scope

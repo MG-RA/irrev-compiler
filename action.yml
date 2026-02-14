@@ -14,6 +14,18 @@ inputs:
     description: "Require github.ceremony scope availability"
     required: false
     default: "false"
+  plan-path:
+    description: "Optional plan artifact path"
+    required: false
+    default: "out/plan/plan-artifact.json"
+  manifest-path:
+    description: "Optional proposal manifest path"
+    required: false
+    default: "out/plan/proposal-manifest.json"
+  plan-rollout:
+    description: "Plan contract rollout: advisory|enforce"
+    required: false
+    default: "advisory"
   comment:
     description: "Post PR comment via gh when possible"
     required: false
@@ -29,6 +41,12 @@ outputs:
   witness-path:
     description: "Witness artifact path"
     value: ${{ steps.parse.outputs.witness_path }}
+  requires-manual-approval:
+    description: "Whether plan contract requires manual approval"
+    value: ${{ steps.parse.outputs.requires_manual_approval }}
+  plan-valid:
+    description: "Whether plan artifact validated successfully"
+    value: ${{ steps.parse.outputs.plan_valid }}
 
 runs:
   using: "composite"
@@ -55,7 +73,7 @@ runs:
         if [ "${{ inputs.require-github }}" = "true" ]; then
           REQUIRE_GH_ARG="--require-github"
         fi
-        target/release/admit_cli ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
+        target/release/admit_cli ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan "${{ inputs.plan-path }}" --manifest "${{ inputs.manifest-path }}" --plan-rollout "${{ inputs.plan-rollout }}" $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
 
     - name: Parse outputs
       id: parse
@@ -64,9 +82,13 @@ runs:
         VERDICT=$(jq -r '.verdict // ""' out/ci-witness.json)
         WITNESS_HASH=$(jq -r '.witness_hash // ""' out/ci-witness.json)
         WITNESS_PATH=$(jq -r '.witness_artifact_path // ""' out/ci-witness.json)
+        REQUIRES_MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        PLAN_VALID=$(jq -r '.plan_contract.plan_valid // false' out/ci-witness.json)
         echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
         echo "witness_hash=$WITNESS_HASH" >> "$GITHUB_OUTPUT"
         echo "witness_path=$WITNESS_PATH" >> "$GITHUB_OUTPUT"
+        echo "requires_manual_approval=$REQUIRES_MANUAL_APPROVAL" >> "$GITHUB_OUTPUT"
+        echo "plan_valid=$PLAN_VALID" >> "$GITHUB_OUTPUT"
 
     - name: Publish summary
       shell: bash
@@ -87,6 +109,10 @@ runs:
         WITNESS_PATH=$(jq -r '.witness_artifact_path // ""' out/ci-witness.json)
         INTEGRITY_COUNT=$(jq -r '(.integrity_failures // []) | length' out/ci-witness.json)
         SCOPE_WARNING_COUNT=$(jq -r '(.scope_warnings // []) | length' out/ci-witness.json)
+        PLAN_VALID=$(jq -r '.plan_contract.plan_valid // false' out/ci-witness.json)
+        MANIFEST_VALID=$(jq -r '.plan_contract.manifest_valid // false' out/ci-witness.json)
+        MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        STOP_REASON_COUNT=$(jq -r '(.stop_reasons // []) | length' out/ci-witness.json)
 
         cat > out/ci-witness-comment.md <<EOF
         <!-- admit-ci-witness -->
@@ -101,6 +127,10 @@ runs:
         | witness_artifact_path | \`$WITNESS_PATH\` |
         | integrity_failures | \`$INTEGRITY_COUNT\` |
         | scope_warnings | \`$SCOPE_WARNING_COUNT\` |
+        | plan_valid | \`$PLAN_VALID\` |
+        | manifest_valid | \`$MANIFEST_VALID\` |
+        | requires_manual_approval | \`$MANUAL_APPROVAL\` |
+        | stop_reasons | \`$STOP_REASON_COUNT\` |
 
         <details>
         <summary>Full Witness Summary (JSON)</summary>

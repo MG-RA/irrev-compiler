@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://irrev.local/schemas/proposal-manifest.v0.schema.json",
+  "title": "ProposalManifestV0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id",
+    "manifest_id",
+    "plan_id",
+    "base_sha",
+    "head_sha",
+    "changed_paths",
+    "commands_run",
+    "artifacts_produced",
+    "test_results",
+    "exceptions_requested",
+    "status"
+  ],
+  "properties": {
+    "schema_id": {
+      "const": "proposal-manifest/0"
+    },
+    "manifest_id": {
+      "type": "string",
+      "pattern": "^manifest:[0-9a-f]{64}$"
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^plan:[0-9a-f]{64}$"
+    },
+    "base_sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "head_sha": {
+      "type": "string",
+      "minLength": 1
+    },
+    "changed_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "commands_run": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1
+    },
+    "artifacts_produced": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "test_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "status"],
+        "properties": {
+          "command": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "exceptions_requested": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "revised", "halted", "ready_for_review"]
+    }
+  }
+}

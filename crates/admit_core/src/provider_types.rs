@@ -11,7 +11,9 @@
 //! - `FactsBundle.schema_id` is scope-namespaced (e.g. `"facts-bundle/ingest.dir@1"`).
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
+use crate::error::EvalError;
 use crate::lint::LintFinding;
 use crate::symbols::ScopeId;
 use crate::witness::{Fact, Witness};
@@ -123,12 +125,28 @@ pub struct ClosureRequirements {
 ///
 /// Providers declare their predicates in `ProviderDescriptor` so the kernel
 /// can dispatch generically without hardcoding extension predicates in the IR.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PredicateResultKind {
+    #[default]
+    Bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PredicateDescriptor {
+    /// Stable contract ID, e.g. "text.metrics/lines_exceed@1".
+    #[serde(default)]
+    pub predicate_id: String,
     pub name: String,
     pub doc: String,
+    #[serde(default)]
+    pub result_kind: PredicateResultKind,
+    #[serde(default = "default_true")]
+    pub emits_findings: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub param_schema: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_schema: Option<serde_json::Value>,
 }
 
 /// Result of evaluating a provider predicate.
@@ -139,6 +157,17 @@ pub struct PredicateDescriptor {
 pub struct PredicateResult {
     pub triggered: bool,
     pub findings: Vec<LintFinding>,
+}
+
+/// Snapshot-bound context passed into provider predicate evaluation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PredicateEvalContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts: Option<Vec<Fact>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts_schema_id: Option<String>,
 }
 
 /// Identity and capability declaration returned by `Provider::describe()`.
@@ -155,6 +184,98 @@ pub struct ProviderDescriptor {
     /// Predicates this provider can evaluate via `eval_predicate`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub predicates: Vec<PredicateDescriptor>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderPackPredicateIdentity {
+    predicate_id: String,
+    name: String,
+    result_kind: PredicateResultKind,
+    emits_findings: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    param_schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_schema: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderPackIdentity {
+    scope_id: ScopeId,
+    version: u32,
+    schema_ids: Vec<String>,
+    supported_phases: Vec<ProviderPhase>,
+    deterministic: bool,
+    closure: ClosureRequirements,
+    required_approvals: Vec<String>,
+    predicates: Vec<ProviderPackPredicateIdentity>,
+}
+
+fn phase_rank(phase: ProviderPhase) -> u8 {
+    match phase {
+        ProviderPhase::Describe => 0,
+        ProviderPhase::Snapshot => 1,
+        ProviderPhase::Plan => 2,
+        ProviderPhase::Execute => 3,
+        ProviderPhase::Verify => 4,
+    }
+}
+
+fn normalized_predicate_id(desc: &ProviderDescriptor, pred: &PredicateDescriptor) -> String {
+    if pred.predicate_id.trim().is_empty() {
+        format!("{}/{}@{}", desc.scope_id.0, pred.name, desc.version)
+    } else {
+        pred.predicate_id.clone()
+    }
+}
+
+/// Deterministic provider pack hash over identity-bearing descriptor fields.
+///
+/// `doc` text is intentionally excluded so prose edits do not change identity.
+pub fn provider_pack_hash(desc: &ProviderDescriptor) -> Result<String, EvalError> {
+    let mut schema_ids = desc.schema_ids.clone();
+    schema_ids.sort();
+
+    let mut supported_phases = desc.supported_phases.clone();
+    supported_phases.sort_by_key(|phase| phase_rank(*phase));
+
+    let mut required_approvals = desc.required_approvals.clone();
+    required_approvals.sort();
+
+    let mut predicates = desc
+        .predicates
+        .iter()
+        .map(|pred| ProviderPackPredicateIdentity {
+            predicate_id: normalized_predicate_id(desc, pred),
+            name: pred.name.clone(),
+            result_kind: pred.result_kind,
+            emits_findings: pred.emits_findings,
+            param_schema: pred.param_schema.clone(),
+            evidence_schema: pred.evidence_schema.clone(),
+        })
+        .collect::<Vec<_>>();
+    predicates.sort_by(|a, b| a.predicate_id.cmp(&b.predicate_id).then(a.name.cmp(&b.name)));
+
+    let identity = ProviderPackIdentity {
+        scope_id: desc.scope_id.clone(),
+        version: desc.version,
+        schema_ids,
+        supported_phases,
+        deterministic: desc.deterministic,
+        closure: desc.closure.clone(),
+        required_approvals,
+        predicates,
+    };
+
+    let value = serde_json::to_value(&identity)
+        .map_err(|err| EvalError(format!("provider pack identity encode failed: {}", err)))?;
+    let cbor = crate::encode_canonical_value(&value)?;
+    let mut hasher = Sha256::new();
+    hasher.update(cbor);
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 // ---------------------------------------------------------------------------
@@ -282,4 +403,90 @@ pub struct VerifyResult {
     pub canonical_bytes_match: bool,
     pub signature_valid: Option<bool>,
     pub witness: Witness,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor() -> ProviderDescriptor {
+        ProviderDescriptor {
+            scope_id: ScopeId("text.metrics".to_string()),
+            version: 1,
+            schema_ids: vec![
+                "facts-bundle/text.metrics@1".to_string(),
+                "facts-bundle/common@1".to_string(),
+            ],
+            supported_phases: vec![ProviderPhase::Snapshot, ProviderPhase::Describe],
+            deterministic: true,
+            closure: ClosureRequirements {
+                requires_fs: true,
+                ..ClosureRequirements::default()
+            },
+            required_approvals: vec!["approval/b".to_string(), "approval/a".to_string()],
+            predicates: vec![
+                PredicateDescriptor {
+                    predicate_id: "text.metrics/todo_present@1".to_string(),
+                    name: "todo_present".to_string(),
+                    doc: "Doc B".to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {}
+                    })),
+                    evidence_schema: None,
+                },
+                PredicateDescriptor {
+                    predicate_id: "text.metrics/lines_exceed@1".to_string(),
+                    name: "lines_exceed".to_string(),
+                    doc: "Doc A".to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    param_schema: Some(serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "max_lines": { "type": "integer" }
+                        }
+                    })),
+                    evidence_schema: Some(serde_json::json!({
+                        "type": "object"
+                    })),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn provider_pack_hash_is_order_independent_for_identity_lists() {
+        let a = descriptor();
+        let mut b = descriptor();
+        b.schema_ids.reverse();
+        b.supported_phases.reverse();
+        b.required_approvals.reverse();
+        b.predicates.reverse();
+        assert_eq!(provider_pack_hash(&a).unwrap(), provider_pack_hash(&b).unwrap());
+    }
+
+    #[test]
+    fn provider_pack_hash_ignores_doc_text() {
+        let a = descriptor();
+        let mut b = descriptor();
+        b.predicates[0].doc = "Different prose".to_string();
+        b.predicates[1].doc = "Another prose".to_string();
+        assert_eq!(provider_pack_hash(&a).unwrap(), provider_pack_hash(&b).unwrap());
+    }
+
+    #[test]
+    fn provider_pack_hash_changes_on_semantic_field_change() {
+        let a = descriptor();
+        let mut b = descriptor();
+        b.predicates[1].param_schema = Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "max_lines": { "type": "integer", "minimum": 1 }
+            }
+        }));
+        assert_ne!(provider_pack_hash(&a).unwrap(), provider_pack_hash(&b).unwrap());
+    }
 }

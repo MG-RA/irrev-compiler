@@ -1,7 +1,8 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 use super::artifact::{default_artifacts_dir, store_artifact};
 use super::internal::{
@@ -324,6 +325,618 @@ fn select_plan_witness_schema_id(registry: Option<&MetaRegistryV0>) -> &'static 
 }
 
 // ---------------------------------------------------------------------------
+// Plan contract validation (typed planner/implementer artifacts)
+// ---------------------------------------------------------------------------
+
+pub const PLAN_ARTIFACT_SCHEMA_ID: &str = "plan-artifact/0";
+pub const PROPOSAL_MANIFEST_SCHEMA_ID: &str = "proposal-manifest/0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureClassification {
+    None,
+    Mechanical,
+    Semantic,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCheckSchemaIds {
+    pub plan: Option<String>,
+    pub manifest: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCheckOutput {
+    pub schema_id: String,
+    pub plan_present: bool,
+    pub plan_valid: bool,
+    pub manifest_present: bool,
+    pub manifest_valid: bool,
+    pub schema_ids: PlanCheckSchemaIds,
+    pub plan_id: Option<String>,
+    pub plan_hash: Option<String>,
+    pub manifest_id: Option<String>,
+    pub manifest_hash: Option<String>,
+    pub changed_paths_observed: Vec<String>,
+    pub changed_paths_claimed: Vec<String>,
+    pub changed_paths_unexpected: Vec<String>,
+    pub changed_paths_missing_from_claim: Vec<String>,
+    pub changed_paths_extra_in_claim: Vec<String>,
+    pub changed_paths_missing_from_expected: Vec<String>,
+    pub stop_reasons: Vec<String>,
+    pub requires_manual_approval: bool,
+    pub failure_classification: FailureClassification,
+    pub confidence: Option<f64>,
+    pub unknowns: Vec<String>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+    pub exit_code: i32,
+}
+
+impl PlanCheckOutput {
+    pub fn apply_semantic_failure(&mut self, reason: &str) {
+        if !self.stop_reasons.iter().any(|r| r == reason) {
+            self.stop_reasons.push(reason.to_string());
+        }
+        self.requires_manual_approval = true;
+        self.failure_classification = FailureClassification::Semantic;
+        if !self
+            .warnings
+            .iter()
+            .any(|w| w == "semantic failure observed during CI")
+        {
+            self.warnings
+                .push("semantic failure observed during CI".to_string());
+        }
+    }
+}
+
+pub struct PlanCheckInput {
+    pub plan_path: Option<PathBuf>,
+    pub manifest_path: Option<PathBuf>,
+    pub changed_paths_observed: Vec<String>,
+    pub enforce: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanArtifact {
+    schema_id: String,
+    plan_id: String,
+    intent: String,
+    scope_targets: Vec<String>,
+    #[serde(default)]
+    expected_changed_paths: Vec<String>,
+    assumptions: Vec<String>,
+    constraints_expected: Vec<String>,
+    allowed_exceptions: Vec<String>,
+    validation_steps: Vec<PlanValidationStep>,
+    stop_conditions: Vec<String>,
+    risk_routes: Vec<PlanRiskRoute>,
+    #[serde(default)]
+    unknowns: Vec<String>,
+    confidence: f64,
+    generated_by: PlanGeneratedBy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanValidationStep {
+    id: String,
+    command: String,
+    required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanRiskRoute {
+    bucket: String,
+    cost_estimate: f64,
+    unit: String,
+    rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanGeneratedBy {
+    provider: String,
+    model: String,
+    surface: String,
+    timestamp: String,
+    #[serde(default)]
+    planner_prompt_hash: Option<String>,
+    #[serde(default)]
+    implementer_prompt_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalManifest {
+    schema_id: String,
+    manifest_id: String,
+    plan_id: String,
+    base_sha: String,
+    head_sha: String,
+    changed_paths: Vec<String>,
+    commands_run: Vec<String>,
+    artifacts_produced: Vec<String>,
+    #[serde(default)]
+    test_results: Vec<ManifestTestResult>,
+    #[serde(default)]
+    exceptions_requested: Vec<String>,
+    status: ManifestStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestTestResult {
+    command: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ManifestStatus {
+    Proposed,
+    Revised,
+    Halted,
+    ReadyForReview,
+}
+
+pub fn read_changed_paths_file(path: &Path) -> Result<Vec<String>, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("read changed paths '{}': {}", path.display(), err))?;
+    parse_changed_paths_text(&raw)
+}
+
+pub fn check_plan_contract(input: PlanCheckInput) -> PlanCheckOutput {
+    let mut out = PlanCheckOutput {
+        schema_id: "plan-contract-check/0".to_string(),
+        plan_present: false,
+        plan_valid: false,
+        manifest_present: false,
+        manifest_valid: false,
+        schema_ids: PlanCheckSchemaIds {
+            plan: None,
+            manifest: None,
+        },
+        plan_id: None,
+        plan_hash: None,
+        manifest_id: None,
+        manifest_hash: None,
+        changed_paths_observed: normalize_paths(input.changed_paths_observed),
+        changed_paths_claimed: Vec::new(),
+        changed_paths_unexpected: Vec::new(),
+        changed_paths_missing_from_claim: Vec::new(),
+        changed_paths_extra_in_claim: Vec::new(),
+        changed_paths_missing_from_expected: Vec::new(),
+        stop_reasons: Vec::new(),
+        requires_manual_approval: false,
+        failure_classification: FailureClassification::None,
+        confidence: None,
+        unknowns: Vec::new(),
+        warnings: Vec::new(),
+        errors: Vec::new(),
+        exit_code: 0,
+    };
+
+    let mut parsed_plan: Option<PlanArtifact> = None;
+    if let Some(path) = input.plan_path.as_ref() {
+        if path.exists() {
+            out.plan_present = true;
+            match fs::read(path) {
+                Ok(bytes) => match serde_json::from_slice::<PlanArtifact>(&bytes) {
+                    Ok(plan) => {
+                        out.schema_ids.plan = Some(plan.schema_id.clone());
+                        out.plan_id = Some(plan.plan_id.clone());
+                        validate_plan_artifact(&plan, &mut out);
+                        parsed_plan = Some(plan);
+                    }
+                    Err(err) => out.errors.push(format!(
+                        "plan decode '{}': {}",
+                        path.display(),
+                        err
+                    )),
+                },
+                Err(err) => out
+                    .errors
+                    .push(format!("read plan '{}': {}", path.display(), err)),
+            }
+        } else {
+            out.warnings
+                .push(format!("plan artifact not found: {}", path.display()));
+            if input.enforce {
+                out.errors
+                    .push(format!("plan artifact required in enforce mode: {}", path.display()));
+            }
+        }
+    }
+
+    let mut parsed_manifest: Option<ProposalManifest> = None;
+    if let Some(path) = input.manifest_path.as_ref() {
+        if path.exists() {
+            out.manifest_present = true;
+            match fs::read(path) {
+                Ok(bytes) => match serde_json::from_slice::<ProposalManifest>(&bytes) {
+                    Ok(manifest) => {
+                        out.schema_ids.manifest = Some(manifest.schema_id.clone());
+                        out.manifest_id = Some(manifest.manifest_id.clone());
+                        out.changed_paths_claimed = normalize_paths(manifest.changed_paths.clone());
+                        validate_manifest(&manifest, &mut out);
+                        parsed_manifest = Some(manifest);
+                    }
+                    Err(err) => out.errors.push(format!(
+                        "manifest decode '{}': {}",
+                        path.display(),
+                        err
+                    )),
+                },
+                Err(err) => out
+                    .errors
+                    .push(format!("read manifest '{}': {}", path.display(), err)),
+            }
+        } else {
+            out.warnings
+                .push(format!("proposal manifest not found: {}", path.display()));
+            if input.enforce {
+                out.errors.push(format!(
+                    "proposal manifest required in enforce mode: {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    if let (Some(plan), Some(manifest)) = (parsed_plan.as_ref(), parsed_manifest.as_ref()) {
+        if plan.plan_id != manifest.plan_id {
+            out.errors.push(format!(
+                "manifest plan_id mismatch: plan={} manifest={}",
+                plan.plan_id, manifest.plan_id
+            ));
+        }
+    }
+
+    apply_changed_path_checks(parsed_plan.as_ref(), parsed_manifest.as_ref(), &mut out);
+    apply_hard_stop_checks(&mut out);
+    classify_failures(&mut out);
+
+    let contract_violation = !out.errors.is_empty() || out.requires_manual_approval;
+    if input.enforce && contract_violation {
+        out.exit_code = 2;
+    }
+    out
+}
+
+fn validate_plan_artifact(plan: &PlanArtifact, out: &mut PlanCheckOutput) {
+    let before = out.errors.len();
+    if plan.schema_id != PLAN_ARTIFACT_SCHEMA_ID {
+        out.errors.push(format!(
+            "plan schema_id mismatch: expected '{}' found '{}'",
+            PLAN_ARTIFACT_SCHEMA_ID, plan.schema_id
+        ));
+    }
+
+    let plan_hash = match canonical_hash_without_field(plan, "plan_id") {
+        Ok(v) => v,
+        Err(err) => {
+            out.errors
+                .push(format!("plan canonical hash computation failed: {}", err));
+            return;
+        }
+    };
+    let expected_plan_id = format!("plan:{}", plan_hash);
+    out.plan_hash = Some(plan_hash);
+    if plan.plan_id != expected_plan_id {
+        out.errors.push(format!(
+            "plan_id mismatch: expected '{}' found '{}'",
+            expected_plan_id, plan.plan_id
+        ));
+    }
+    if plan.intent.trim().is_empty() {
+        out.errors.push("plan intent must be non-empty".to_string());
+    }
+    let _assumptions_count = plan.assumptions.len();
+    let _constraints_expected_count = plan.constraints_expected.len();
+    let _allowed_exceptions_count = plan.allowed_exceptions.len();
+    if plan.scope_targets.is_empty() {
+        out.errors
+            .push("plan scope_targets must include at least one path/glob".to_string());
+    }
+    if plan.stop_conditions.is_empty() {
+        out.warnings
+            .push("plan stop_conditions is empty; no explicit hard-stop policy declared".to_string());
+    }
+    for step in &plan.validation_steps {
+        let _required = step.required;
+        if step.id.trim().is_empty() || step.command.trim().is_empty() {
+            out.errors.push(
+                "plan validation_steps entries require non-empty id and command".to_string(),
+            );
+            break;
+        }
+    }
+    for route in &plan.risk_routes {
+        if route.bucket.trim().is_empty()
+            || route.unit.trim().is_empty()
+            || route.rationale.trim().is_empty()
+            || !route.cost_estimate.is_finite()
+        {
+            out.errors.push(
+                "plan risk_routes entries require finite cost and bucket/unit/rationale".to_string(),
+            );
+            break;
+        }
+    }
+    if plan.generated_by.provider.trim().is_empty()
+        || plan.generated_by.model.trim().is_empty()
+        || plan.generated_by.surface.trim().is_empty()
+        || plan.generated_by.timestamp.trim().is_empty()
+    {
+        out.errors
+            .push("plan generated_by requires provider/model/surface/timestamp".to_string());
+    }
+    out.plan_valid = out.errors.len() == before;
+
+    if !(0.0..=1.0).contains(&plan.confidence) {
+        out.errors.push(format!(
+            "plan confidence out of range [0,1]: {}",
+            plan.confidence
+        ));
+    } else {
+        out.confidence = Some(plan.confidence);
+    }
+    out.unknowns = plan.unknowns.clone();
+    if plan.generated_by.planner_prompt_hash.is_none() {
+        out.warnings.push("planner_prompt_hash missing".to_string());
+    }
+    if plan.generated_by.implementer_prompt_hash.is_none() {
+        out.warnings.push("implementer_prompt_hash missing".to_string());
+    }
+}
+
+fn validate_manifest(manifest: &ProposalManifest, out: &mut PlanCheckOutput) {
+    let before = out.errors.len();
+    if manifest.schema_id != PROPOSAL_MANIFEST_SCHEMA_ID {
+        out.errors.push(format!(
+            "manifest schema_id mismatch: expected '{}' found '{}'",
+            PROPOSAL_MANIFEST_SCHEMA_ID, manifest.schema_id
+        ));
+    }
+    let manifest_hash = match canonical_hash_without_field(manifest, "manifest_id") {
+        Ok(v) => v,
+        Err(err) => {
+            out.errors
+                .push(format!("manifest canonical hash computation failed: {}", err));
+            return;
+        }
+    };
+    let expected_manifest_id = format!("manifest:{}", manifest_hash);
+    out.manifest_hash = Some(manifest_hash);
+    if manifest.manifest_id != expected_manifest_id {
+        out.errors.push(format!(
+            "manifest_id mismatch: expected '{}' found '{}'",
+            expected_manifest_id, manifest.manifest_id
+        ));
+    }
+    if manifest.base_sha.trim().is_empty() {
+        out.errors.push("manifest base_sha must be non-empty".to_string());
+    }
+    if manifest.head_sha.trim().is_empty() {
+        out.errors.push("manifest head_sha must be non-empty".to_string());
+    }
+    if manifest.commands_run.is_empty() {
+        out.errors
+            .push("manifest commands_run must include at least one command".to_string());
+    }
+    let _artifact_count = manifest.artifacts_produced.len();
+    for row in &manifest.test_results {
+        if row.command.trim().is_empty() || row.status.trim().is_empty() {
+            out.errors
+                .push("manifest test_results entries require command and status".to_string());
+            break;
+        }
+    }
+    let _exceptions_count = manifest.exceptions_requested.len();
+    let _status = &manifest.status;
+    out.manifest_valid = out.errors.len() == before;
+}
+
+fn apply_changed_path_checks(
+    plan: Option<&PlanArtifact>,
+    manifest: Option<&ProposalManifest>,
+    out: &mut PlanCheckOutput,
+) {
+    let observed: std::collections::BTreeSet<String> =
+        out.changed_paths_observed.iter().cloned().collect();
+    let claimed: std::collections::BTreeSet<String> =
+        out.changed_paths_claimed.iter().cloned().collect();
+    let expected = plan
+        .map(|p| normalize_paths(p.expected_changed_paths.clone()))
+        .unwrap_or_default();
+    let expected_set: std::collections::BTreeSet<String> = expected.into_iter().collect();
+
+    out.changed_paths_missing_from_claim = observed.difference(&claimed).cloned().collect();
+    out.changed_paths_extra_in_claim = claimed.difference(&observed).cloned().collect();
+
+    if !out.changed_paths_missing_from_claim.is_empty() {
+        out.warnings.push(format!(
+            "changed path claim mismatch: {} observed path(s) missing from manifest claim",
+            out.changed_paths_missing_from_claim.len()
+        ));
+    }
+    if !out.changed_paths_extra_in_claim.is_empty() {
+        out.warnings.push(format!(
+            "changed path claim mismatch: {} claimed path(s) not observed",
+            out.changed_paths_extra_in_claim.len()
+        ));
+    }
+
+    if !expected_set.is_empty() {
+        out.changed_paths_unexpected = observed.difference(&expected_set).cloned().collect();
+        out.changed_paths_missing_from_expected =
+            expected_set.difference(&observed).cloned().collect();
+
+        if !out.changed_paths_unexpected.is_empty() {
+            out.warnings.push(format!(
+                "expected_changed_paths mismatch: {} unexpected observed path(s)",
+                out.changed_paths_unexpected.len()
+            ));
+        }
+    }
+
+    if manifest.is_none() && !out.changed_paths_observed.is_empty() {
+        out.warnings
+            .push("manifest missing while observed changed paths are present".to_string());
+    }
+}
+
+fn apply_hard_stop_checks(out: &mut PlanCheckOutput) {
+    let observed_paths = out.changed_paths_observed.clone();
+    for path in &observed_paths {
+        if path.starts_with(".github/workflows/") {
+            add_stop_reason(out, "touches_github_workflows");
+        }
+        if path.starts_with(".admit/schemas/") {
+            add_stop_reason(out, "meta_schema_change");
+        } else if path.starts_with(".admit/prompts/") {
+            add_stop_reason(out, "meta_prompt_change");
+        } else if path.starts_with(".admit/") {
+            add_stop_reason(out, "meta_registry_change");
+        }
+        if is_secret_like_path(path) {
+            add_stop_reason(out, "secrets_detected");
+        }
+    }
+    out.requires_manual_approval = !out.stop_reasons.is_empty();
+}
+
+fn classify_failures(out: &mut PlanCheckOutput) {
+    if out.stop_reasons.iter().any(|r| r == "semantic_ci_failure") {
+        out.failure_classification = FailureClassification::Semantic;
+        return;
+    }
+    if out.errors.is_empty() && out.stop_reasons.is_empty() {
+        out.failure_classification = FailureClassification::None;
+        return;
+    }
+    if out
+        .errors
+        .iter()
+        .any(|e| e.contains("schema_id") || e.contains("decode") || e.contains("mismatch"))
+    {
+        out.failure_classification = FailureClassification::Mechanical;
+        return;
+    }
+    if !out.stop_reasons.is_empty() {
+        out.failure_classification = FailureClassification::Unknown;
+        return;
+    }
+    out.failure_classification = FailureClassification::Unknown;
+}
+
+fn add_stop_reason(out: &mut PlanCheckOutput, reason: &str) {
+    if !out.stop_reasons.iter().any(|r| r == reason) {
+        out.stop_reasons.push(reason.to_string());
+    }
+}
+
+fn is_secret_like_path(path: &str) -> bool {
+    let low = path.to_ascii_lowercase();
+    low.ends_with(".pem")
+        || low.ends_with(".key")
+        || low.ends_with(".env")
+        || low.contains("/.env.")
+        || low.contains("/secrets/")
+}
+
+fn canonical_hash_without_field<T: Serialize>(value: &T, remove_field: &str) -> Result<String, String> {
+    let mut value = serde_json::to_value(value).map_err(|err| err.to_string())?;
+    let map = value
+        .as_object_mut()
+        .ok_or_else(|| "expected object value for canonical hash".to_string())?;
+    map.remove(remove_field);
+    canonicalize_identity_numbers(&mut value);
+    canonical_sha256(&value)
+}
+
+fn canonical_sha256(value: &serde_json::Value) -> Result<String, String> {
+    let bytes = admit_core::encode_canonical_value(value).map_err(|err| err.0)?;
+    Ok(hex::encode(sha2::Sha256::digest(&bytes)))
+}
+
+fn canonicalize_identity_numbers(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                canonicalize_identity_numbers(item);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values_mut() {
+                canonicalize_identity_numbers(item);
+            }
+        }
+        serde_json::Value::Number(number) => {
+            if number.is_i64() || number.is_u64() {
+                return;
+            }
+            // Canonical CBOR identity in this repo forbids floats.
+            // Preserve decimal intent deterministically as a string for identity hashing.
+            let repr = number.to_string();
+            *value = serde_json::Value::String(repr);
+        }
+        _ => {}
+    }
+}
+
+fn parse_changed_paths_text(text: &str) -> Result<Vec<String>, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+        let value: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|err| format!("decode changed paths json: {}", err))?;
+        let rows = if let Some(arr) = value.as_array() {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        } else if let Some(arr) = value.get("paths").and_then(|v| v.as_array()) {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        return Ok(normalize_paths(rows));
+    }
+    let rows = trimmed
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    Ok(normalize_paths(rows))
+}
+
+fn normalize_paths(paths: Vec<String>) -> Vec<String> {
+    let mut rows = paths
+        .into_iter()
+        .map(|p| {
+            p.replace('\\', "/")
+                .trim_start_matches("./")
+                .trim()
+                .to_string()
+        })
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows.dedup();
+    rows
+}
+
+// ---------------------------------------------------------------------------
 // Public: create plan
 // ---------------------------------------------------------------------------
 
@@ -633,4 +1246,137 @@ pub fn export_plan_markdown(
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod plan_contract_tests {
+    use super::*;
+
+    fn sample_plan() -> PlanArtifact {
+        PlanArtifact {
+            schema_id: PLAN_ARTIFACT_SCHEMA_ID.to_string(),
+            plan_id: "plan:placeholder".to_string(),
+            intent: "doc update".to_string(),
+            scope_targets: vec!["docs/**".to_string()],
+            expected_changed_paths: vec!["docs/spec/agent-plan-contract.md".to_string()],
+            assumptions: vec!["docs-only".to_string()],
+            constraints_expected: vec!["R-CI-130".to_string()],
+            allowed_exceptions: vec![],
+            validation_steps: vec![PlanValidationStep {
+                id: "lint".to_string(),
+                command: "cargo test --workspace".to_string(),
+                required: true,
+            }],
+            stop_conditions: vec!["touches_github_workflows".to_string()],
+            risk_routes: vec![PlanRiskRoute {
+                bucket: "docs".to_string(),
+                cost_estimate: 1.0,
+                unit: "change".to_string(),
+                rationale: "documentation only".to_string(),
+            }],
+            unknowns: vec![],
+            confidence: 0.9,
+            generated_by: PlanGeneratedBy {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                surface: "cli".to_string(),
+                timestamp: "2026-02-14T00:00:00Z".to_string(),
+                planner_prompt_hash: Some("a".repeat(64)),
+                implementer_prompt_hash: Some("b".repeat(64)),
+            },
+        }
+    }
+
+    fn sample_manifest(plan_id: &str) -> ProposalManifest {
+        ProposalManifest {
+            schema_id: PROPOSAL_MANIFEST_SCHEMA_ID.to_string(),
+            manifest_id: "manifest:placeholder".to_string(),
+            plan_id: plan_id.to_string(),
+            base_sha: "abc123".to_string(),
+            head_sha: "def456".to_string(),
+            changed_paths: vec!["docs/spec/agent-plan-contract.md".to_string()],
+            commands_run: vec!["cargo test --workspace".to_string()],
+            artifacts_produced: vec!["out/ci-witness.json".to_string()],
+            test_results: vec![ManifestTestResult {
+                command: "cargo test --workspace".to_string(),
+                status: "ok".to_string(),
+            }],
+            exceptions_requested: vec![],
+            status: ManifestStatus::ReadyForReview,
+        }
+    }
+
+    #[test]
+    fn plan_id_matches_canonical_hash() {
+        let mut plan = sample_plan();
+        let hash = canonical_hash_without_field(&plan, "plan_id").expect("hash");
+        plan.plan_id = format!("plan:{}", hash);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("plan.json");
+        fs::write(&plan_path, serde_json::to_vec(&plan).expect("encode")).expect("write");
+        let out = check_plan_contract(PlanCheckInput {
+            plan_path: Some(plan_path),
+            manifest_path: None,
+            changed_paths_observed: vec![],
+            enforce: false,
+        });
+        assert!(out.plan_valid);
+        assert!(out
+            .errors
+            .iter()
+            .all(|e| !e.contains("plan_id mismatch")));
+    }
+
+    #[test]
+    fn hard_stop_detects_meta_schema_change() {
+        let mut plan = sample_plan();
+        let hash = canonical_hash_without_field(&plan, "plan_id").expect("hash");
+        plan.plan_id = format!("plan:{}", hash);
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("plan.json");
+        let bytes = serde_json::to_vec(&plan).expect("encode");
+        fs::write(&plan_path, bytes).expect("write");
+
+        let out = check_plan_contract(PlanCheckInput {
+            plan_path: Some(plan_path),
+            manifest_path: None,
+            changed_paths_observed: vec![".admit/schemas/plan-artifact.v0.schema.json".to_string()],
+            enforce: false,
+        });
+        assert!(out.requires_manual_approval);
+        assert!(out.stop_reasons.contains(&"meta_schema_change".to_string()));
+    }
+
+    #[test]
+    fn manifest_plan_mismatch_is_reported() {
+        let mut plan = sample_plan();
+        let plan_hash = canonical_hash_without_field(&plan, "plan_id").expect("hash");
+        plan.plan_id = format!("plan:{}", plan_hash);
+
+        let mut manifest = sample_manifest("plan:deadbeef");
+        let manifest_hash = canonical_hash_without_field(&manifest, "manifest_id").expect("hash");
+        manifest.manifest_id = format!("manifest:{}", manifest_hash);
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let plan_path = temp.path().join("plan.json");
+        let manifest_path = temp.path().join("manifest.json");
+        fs::write(&plan_path, serde_json::to_vec(&plan).expect("encode")).expect("write");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&manifest).expect("encode"),
+        )
+        .expect("write");
+
+        let out = check_plan_contract(PlanCheckInput {
+            plan_path: Some(plan_path),
+            manifest_path: Some(manifest_path),
+            changed_paths_observed: vec!["docs/spec/agent-plan-contract.md".to_string()],
+            enforce: true,
+        });
+        assert!(out
+            .errors
+            .iter()
+            .any(|e| e.contains("manifest plan_id mismatch")));
+        assert_eq!(out.exit_code, 2);
+    }
 }

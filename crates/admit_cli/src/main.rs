@@ -22,18 +22,20 @@ use admit_cli::{
     append_meta_interpretation_delta_event, append_plan_created_event, append_projection_event,
     build_lens_activated_event, build_meta_change_checked_event,
     build_meta_interpretation_delta_event, build_projection_event, check_cost_declared,
-    create_plan, declare_cost, default_artifacts_dir, default_ledger_path, execute_checked,
-    export_plan_markdown, ingest_dir_protocol_with_cache, init_project, load_meta_registry,
-    parse_plan_answers_markdown, read_file_bytes, registry_build, registry_init,
-    registry_migrate_v0_v1, render_plan_prompt_template, render_plan_text,
-    resolve_scope_enablement, scope_add, scope_list, scope_show, scope_verify,
+    check_plan_contract, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
+    execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
+    load_meta_registry, parse_plan_answers_markdown, read_changed_paths_file, read_file_bytes,
+    registry_build, registry_init, registry_migrate_v0_v1, registry_scope_pack_sync,
+    render_plan_prompt_template,
+    render_plan_text, resolve_scope_enablement, scope_add, scope_list, scope_show, scope_verify,
     store_value_artifact, verify_ledger, verify_witness, ArtifactInput, DeclareCostInput,
-    InitProjectInput, MetaRegistryV0, PlanNewInput, ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode,
-    ScopeListArgs as ScopeListArgsLib, ScopeOperation, ScopeShowArgs as ScopeShowArgsLib,
-    ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
+    InitProjectInput, MetaRegistryV0, PlanCheckInput, PlanNewInput,
+    ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
+    ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
+    VerifyWitnessInput,
 };
 use admit_core::provider_types::FactsBundle;
-use admit_core::{evaluate_ruleset_with_inputs, ProviderRegistry, RuleSet};
+use admit_core::{evaluate_ruleset_with_inputs, provider_pack_hash, ProviderRegistry, RuleSet};
 use commands::ci_check::{run_ci_check, CiArgs};
 
 mod commands;
@@ -531,6 +533,9 @@ struct CheckArgs {
     /// Scope gate mode (warn|error) when registry is present
     #[arg(long, default_value = "warn", value_name = "MODE")]
     scope_gate: String,
+    /// Scope pack gate mode (warn|error) when meta-registry scope_packs are present
+    #[arg(long, default_value = "warn", value_name = "MODE")]
+    scope_pack_gate: String,
 }
 
 #[derive(Parser)]
@@ -1747,6 +1752,7 @@ enum RegistryCommands {
     Build(RegistryBuildArgs),
     Migrate(RegistryMigrateArgs),
     Verify(RegistryVerifyArgs),
+    ScopePackSync(RegistryScopePackSyncArgs),
     ScopeAdd(ScopeAddArgs),
     ScopeVerify(ScopeVerifyArgs),
     ScopeList(ScopeListArgs),
@@ -1788,6 +1794,16 @@ struct RegistryVerifyArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     artifacts_dir: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct RegistryScopePackSyncArgs {
+    /// Input registry JSON path
+    #[arg(long, value_name = "PATH", default_value = "out/meta-registry.json")]
+    input: PathBuf,
+    /// Output registry JSON path
+    #[arg(long, value_name = "PATH", default_value = "out/meta-registry.json")]
+    out: PathBuf,
 }
 
 #[derive(Parser)]
@@ -1913,6 +1929,7 @@ enum PlanCommands {
     Export(PlanExportArgs),
     PromptTemplate(PlanPromptTemplateArgs),
     AnswersFromMd(PlanAnswersFromMdArgs),
+    Check(PlanCheckArgs),
 }
 
 #[derive(Parser)]
@@ -1998,6 +2015,35 @@ struct PlanAnswersFromMdArgs {
     /// Output JSON path (writes to stdout when omitted)
     #[arg(long, value_name = "PATH")]
     out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PlanCheckRollout {
+    Advisory,
+    Enforce,
+}
+
+#[derive(Parser)]
+struct PlanCheckArgs {
+    /// Path to plan artifact JSON (`plan-artifact/0`)
+    #[arg(long, value_name = "PATH", required = true)]
+    plan: PathBuf,
+
+    /// Optional path to proposal manifest JSON (`proposal-manifest/0`)
+    #[arg(long, value_name = "PATH")]
+    manifest: Option<PathBuf>,
+
+    /// Optional file with authoritative changed paths (json array/object or newline-delimited)
+    #[arg(long, value_name = "PATH")]
+    changed_paths: Option<PathBuf>,
+
+    /// Rollout mode for contract violations
+    #[arg(long, value_enum, default_value = "advisory")]
+    rollout: PlanCheckRollout,
+
+    /// Output JSON instead of key=value lines
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -2124,6 +2170,7 @@ fn main() {
             PlanCommands::AnswersFromMd(parse_args) => {
                 run_plan_answers_from_md(parse_args, dag_trace_out)
             }
+            PlanCommands::Check(check_args) => run_plan_check(check_args, dag_trace_out),
         },
         Commands::Calc(args) => match args.command {
             CalcCommands::Plan(plan_args) => {
@@ -2563,6 +2610,133 @@ fn build_ruleset_provider_registry(ruleset: &RuleSet) -> Result<ProviderRegistry
     Ok(registry)
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum ScopePackIssueKind {
+    Missing,
+    Mismatch { expected: String, actual: String },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ScopePackIssue {
+    pub scope_id: String,
+    pub version: u32,
+    pub kind: ScopePackIssueKind,
+}
+
+pub(crate) fn collect_scope_pack_issues(
+    meta_registry: Option<&MetaRegistryV0>,
+    provider_registry: &ProviderRegistry,
+) -> Result<Vec<ScopePackIssue>, String> {
+    let Some(meta_registry) = meta_registry else {
+        return Ok(vec![]);
+    };
+    if meta_registry.scope_packs.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut issues = Vec::new();
+    for desc in provider_registry.all_descriptors() {
+        let actual_hash = provider_pack_hash(&desc).map_err(|err| {
+            format!(
+                "compute provider pack hash for {}@{} failed: {}",
+                desc.scope_id.0, desc.version, err
+            )
+        })?;
+        let expected = meta_registry
+            .scope_packs
+            .iter()
+            .find(|entry| entry.scope_id == desc.scope_id.0 && entry.version == desc.version);
+        match expected {
+            None => issues.push(ScopePackIssue {
+                scope_id: desc.scope_id.0.clone(),
+                version: desc.version,
+                kind: ScopePackIssueKind::Missing,
+            }),
+            Some(entry) if entry.provider_pack_hash != actual_hash => issues.push(ScopePackIssue {
+                scope_id: desc.scope_id.0.clone(),
+                version: desc.version,
+                kind: ScopePackIssueKind::Mismatch {
+                    expected: entry.provider_pack_hash.clone(),
+                    actual: actual_hash,
+                },
+            }),
+            Some(_) => {}
+        }
+    }
+    Ok(issues)
+}
+
+pub(crate) fn format_scope_pack_gate_error(issues: &[ScopePackIssue]) -> String {
+    let mut parts = Vec::new();
+    for issue in issues {
+        match &issue.kind {
+            ScopePackIssueKind::Missing => parts.push(format!(
+                "{}@{} missing from meta-registry scope_packs",
+                issue.scope_id, issue.version
+            )),
+            ScopePackIssueKind::Mismatch { expected, actual } => parts.push(format!(
+                "{}@{} hash mismatch expected={} actual={}",
+                issue.scope_id, issue.version, expected, actual
+            )),
+        }
+    }
+    format!("scope-pack gate failed: {}", parts.join("; "))
+}
+
+pub(crate) fn scope_pack_issue_facts(issues: &[ScopePackIssue]) -> Vec<admit_core::Fact> {
+    issues
+        .iter()
+        .map(|issue| match &issue.kind {
+            ScopePackIssueKind::Missing => admit_core::Fact::LintFinding {
+                rule_id: "provider/scope_pack_missing".to_string(),
+                severity: admit_core::Severity::Warning,
+                invariant: Some("provider.scope_pack".to_string()),
+                path: ".".to_string(),
+                span: admit_core::Span {
+                    file: ".".to_string(),
+                    start: None,
+                    end: None,
+                    line: None,
+                    col: None,
+                },
+                message: format!(
+                    "scope pack missing for {}@{} in meta-registry",
+                    issue.scope_id, issue.version
+                ),
+                evidence: Some(serde_json::json!({
+                    "scope_id": issue.scope_id,
+                    "version": issue.version,
+                    "kind": "missing"
+                })),
+            },
+            ScopePackIssueKind::Mismatch { expected, actual } => admit_core::Fact::LintFinding {
+                rule_id: "provider/scope_pack_mismatch".to_string(),
+                severity: admit_core::Severity::Warning,
+                invariant: Some("provider.scope_pack".to_string()),
+                path: ".".to_string(),
+                span: admit_core::Span {
+                    file: ".".to_string(),
+                    start: None,
+                    end: None,
+                    line: None,
+                    col: None,
+                },
+                message: format!(
+                    "scope pack hash mismatch for {}@{}",
+                    issue.scope_id, issue.version
+                ),
+                evidence: Some(serde_json::json!({
+                    "scope_id": issue.scope_id,
+                    "version": issue.version,
+                    "kind": "mismatch",
+                    "expected": expected,
+                    "actual": actual
+                })),
+            },
+        })
+        .collect()
+}
+
 fn load_ruleset_input_bundles(
     args: &CheckArgs,
 ) -> Result<BTreeMap<admit_core::ScopeId, FactsBundle>, String> {
@@ -2605,7 +2779,15 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
         read_file_bytes(&ruleset_path).map_err(|err| format!("read ruleset: {}", err))?;
     let ruleset: RuleSet =
         serde_json::from_slice(&ruleset_bytes).map_err(|err| format!("ruleset decode: {}", err))?;
+    let scope_pack_gate_mode = parse_scope_gate_mode(&args.scope_pack_gate)?;
+    let meta_registry = load_meta_registry(args.meta_registry.as_deref())
+        .map_err(|err| err.to_string())?
+        .map(|(registry, _hash)| registry);
     let registry = build_ruleset_provider_registry(&ruleset)?;
+    let scope_pack_issues = collect_scope_pack_issues(meta_registry.as_ref(), &registry)?;
+    if scope_pack_gate_mode == ScopeGateMode::Error && !scope_pack_issues.is_empty() {
+        return Err(format_scope_pack_gate_error(&scope_pack_issues));
+    }
     let outcome = evaluate_ruleset_with_inputs(
         &ruleset,
         &registry,
@@ -2614,6 +2796,11 @@ fn run_ruleset_check(args: CheckArgs, ruleset_path: PathBuf) -> Result<(), Strin
     )
     .map_err(|err| err.0)?;
     let mut witness = outcome.witness.clone();
+    if scope_pack_gate_mode == ScopeGateMode::Warn && !scope_pack_issues.is_empty() {
+        witness
+            .facts
+            .extend(scope_pack_issue_facts(&scope_pack_issues));
+    }
     let lens_activation_event = build_lens_activated_event(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
         witness.lens_id.clone(),
@@ -3789,6 +3976,13 @@ fn run_registry(args: RegistryArgs, _dag_trace_out: Option<&Path>) -> Result<(),
                 Err("registry verification found issues".to_string())
             }
         }
+        RegistryCommands::ScopePackSync(sync_args) => {
+            registry_scope_pack_sync(&sync_args.input, &sync_args.out)
+                .map_err(|err| err.to_string())?;
+            println!("scope_pack_synced_from={}", sync_args.input.display());
+            println!("scope_pack_synced_to={}", sync_args.out.display());
+            Ok(())
+        }
         RegistryCommands::ScopeAdd(args) => run_scope_add(args),
         RegistryCommands::ScopeVerify(args) => run_scope_verify(args),
         RegistryCommands::ScopeList(args) => run_scope_list(args),
@@ -3913,6 +4107,41 @@ fn run_plan_answers_from_md(
     } else {
         let text = String::from_utf8(bytes).map_err(|err| format!("utf8 encode: {}", err))?;
         println!("{}", text);
+    }
+    Ok(())
+}
+
+fn run_plan_check(args: PlanCheckArgs, _dag_trace_out: Option<&Path>) -> Result<(), String> {
+    let changed_paths = match args.changed_paths.as_ref() {
+        Some(path) => read_changed_paths_file(path.as_path())?,
+        None => Vec::new(),
+    };
+    let report = check_plan_contract(PlanCheckInput {
+        plan_path: Some(args.plan),
+        manifest_path: args.manifest,
+        changed_paths_observed: changed_paths,
+        enforce: matches!(args.rollout, PlanCheckRollout::Enforce),
+    });
+
+    if args.json {
+        let text =
+            serde_json::to_string_pretty(&report).map_err(|err| format!("json encode: {}", err))?;
+        println!("{}", text);
+    } else {
+        println!("plan_present={}", report.plan_present);
+        println!("plan_valid={}", report.plan_valid);
+        println!("manifest_present={}", report.manifest_present);
+        println!("manifest_valid={}", report.manifest_valid);
+        println!("requires_manual_approval={}", report.requires_manual_approval);
+        println!("failure_classification={:?}", report.failure_classification);
+        println!("stop_reasons={}", report.stop_reasons.len());
+        println!("errors={}", report.errors.len());
+        println!("warnings={}", report.warnings.len());
+        println!("exit_code={}", report.exit_code);
+    }
+
+    if report.exit_code == 2 {
+        std::process::exit(2);
     }
     Ok(())
 }

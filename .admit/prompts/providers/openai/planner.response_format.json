@@ -1,0 +1,8 @@
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "plan_artifact_v0",
+    "schema_ref": ".admit/schemas/plan-artifact.v0.schema.json",
+    "strict": true
+  }
+}

@@ -91,54 +91,68 @@ impl Provider for GitWorkingTreeProvider {
             required_approvals: vec![],
             predicates: vec![
                 PredicateDescriptor {
+                    predicate_id: "git.working_tree/dirty_state@1".to_string(),
                     name: "dirty_state".to_string(),
                     doc: "Triggers when facts indicate any tracked/untracked working-tree change."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "git.working_tree/untracked_file@1".to_string(),
                     name: "untracked_file".to_string(),
                     doc: "Triggers when untracked file facts are present.".to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "git.working_tree/staged_file@1".to_string(),
                     name: "staged_file".to_string(),
                     doc: "Triggers when staged file facts are present.".to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "git.working_tree/modified_file@1".to_string(),
                     name: "modified_file".to_string(),
                     doc: "Triggers when modified file facts are present.".to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "git.working_tree/sensitive_path_touched@1".to_string(),
                     name: "sensitive_path_touched".to_string(),
                     doc: "Triggers when changed paths match any of the supplied glob patterns."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
                         "properties": {
-                            "facts": { "type": "array" },
                             "patterns": { "type": "array", "items": { "type": "string" } }
                         }
                     })),
+                    evidence_schema: None,
                 },
             ],
         }
@@ -229,9 +243,10 @@ impl Provider for GitWorkingTreeProvider {
         &self,
         name: &str,
         params: &serde_json::Value,
+        ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         let scope_id = ScopeId(GIT_WORKING_TREE_SCOPE_ID.to_string());
-        let facts = decode_facts(params, &scope_id)?;
+        let facts = decode_facts(params, ctx, &scope_id)?;
         match name {
             "dirty_state" => {
                 let mut findings = Vec::new();
@@ -297,12 +312,16 @@ impl Provider for GitWorkingTreeProvider {
 
 fn decode_facts(
     params: &serde_json::Value,
+    ctx: &PredicateEvalContext,
     scope_id: &ScopeId,
 ) -> Result<Vec<Fact>, ProviderError> {
+    if let Some(facts) = &ctx.facts {
+        return Ok(facts.clone());
+    }
     let value = params.get("facts").cloned().ok_or_else(|| ProviderError {
         scope: scope_id.clone(),
         phase: ProviderPhase::Snapshot,
-        message: "predicate requires params.facts".to_string(),
+        message: "predicate requires context.facts or params.facts".to_string(),
     })?;
     serde_json::from_value(value).map_err(|err| ProviderError {
         scope: scope_id.clone(),
@@ -1144,7 +1163,11 @@ mod tests {
             evidence: None,
         }];
         let out = provider
-            .eval_predicate("dirty_state", &serde_json::json!({ "facts": facts }))
+            .eval_predicate(
+                "dirty_state",
+                &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
+            )
             .expect("predicate");
         assert!(out.triggered);
         assert!(!out.findings.is_empty());
@@ -1231,6 +1254,7 @@ mod tests {
                     "facts": facts,
                     "patterns": [".github/workflows/**"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1270,9 +1294,42 @@ mod tests {
                     "facts": facts,
                     "patterns": ["**/.env", "**/*.pem"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);
         assert!(out.findings.is_empty());
+    }
+
+    #[test]
+    fn dirty_state_predicate_uses_context_facts() {
+        let provider = GitWorkingTreeProvider::new();
+        let facts = vec![Fact::LintFinding {
+            rule_id: RULE_UNTRACKED.to_string(),
+            severity: Severity::Info,
+            invariant: None,
+            path: "new.txt".to_string(),
+            span: Span {
+                file: "new.txt".to_string(),
+                start: None,
+                end: None,
+                line: None,
+                col: None,
+            },
+            message: "untracked file".to_string(),
+            evidence: None,
+        }];
+        let out = provider
+            .eval_predicate(
+                "dirty_state",
+                &serde_json::json!({}),
+                &PredicateEvalContext {
+                    facts: Some(facts),
+                    snapshot_hash: None,
+                    facts_schema_id: None,
+                },
+            )
+            .expect("predicate");
+        assert!(out.triggered);
     }
 }

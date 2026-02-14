@@ -11,7 +11,7 @@ use sha2::Digest;
 
 use admit_cli::{
     append_lens_activated_event, build_lens_activated_event, default_artifacts_dir,
-    store_value_artifact, ProgramRef,
+    check_plan_contract, load_meta_registry, store_value_artifact, PlanCheckInput, ProgramRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -42,6 +42,9 @@ pub(crate) struct CiArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     pub artifacts_dir: Option<PathBuf>,
+    /// Optional path to meta registry JSON (fallback: ADMIT_META_REGISTRY env)
+    #[arg(long, value_name = "PATH")]
+    pub meta_registry: Option<PathBuf>,
     /// CI mode: observe|audit|enforce
     #[arg(long, value_enum)]
     pub mode: Option<CiMode>,
@@ -51,6 +54,30 @@ pub(crate) struct CiArgs {
     /// Require GitHub scope to be available when ruleset references github.ceremony
     #[arg(long)]
     pub require_github: bool,
+    /// Optional plan artifact path (`plan-artifact/0`) for typed contract validation
+    #[arg(long, value_name = "PATH")]
+    pub plan: Option<PathBuf>,
+    /// Optional proposal manifest path (`proposal-manifest/0`) for typed contract validation
+    #[arg(long, value_name = "PATH")]
+    pub manifest: Option<PathBuf>,
+    /// Rollout mode for plan contract validation
+    #[arg(long, value_enum, default_value = "advisory")]
+    pub plan_rollout: PlanRolloutMode,
+    /// Scope pack gate mode: warn emits witness warnings, error fails CI
+    #[arg(long, value_enum, default_value = "warn")]
+    pub scope_pack_gate: ScopePackGateModeArg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PlanRolloutMode {
+    Advisory,
+    Enforce,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ScopePackGateModeArg {
+    Warn,
+    Error,
 }
 
 #[derive(Debug, Clone)]
@@ -184,8 +211,26 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         .map(extract_changed_paths)
         .unwrap_or_default();
     let runtime_overlays = build_runtime_overlays(&ruleset, &changed_paths);
+    let plan_enforce = matches!(args.plan_rollout, PlanRolloutMode::Enforce);
+    let mut plan_contract = check_plan_contract(PlanCheckInput {
+        plan_path: args.plan.clone(),
+        manifest_path: args.manifest.clone(),
+        changed_paths_observed: changed_paths.clone(),
+        enforce: plan_enforce,
+    });
 
     let registry = crate::build_ruleset_provider_registry(&ruleset)?;
+    let scope_pack_gate_mode = match args.scope_pack_gate {
+        ScopePackGateModeArg::Warn => admit_cli::ScopeGateMode::Warn,
+        ScopePackGateModeArg::Error => admit_cli::ScopeGateMode::Error,
+    };
+    let meta_registry = load_meta_registry(args.meta_registry.as_deref())
+        .map_err(|err| err.to_string())?
+        .map(|(registry, _hash)| registry);
+    let scope_pack_issues = crate::collect_scope_pack_issues(meta_registry.as_ref(), &registry)?;
+    if scope_pack_gate_mode == admit_cli::ScopeGateMode::Error && !scope_pack_issues.is_empty() {
+        return Err(crate::format_scope_pack_gate_error(&scope_pack_issues));
+    }
     let mut outcome = evaluate_ruleset_with_inputs(
         &ruleset,
         &registry,
@@ -194,6 +239,55 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
     )
     .map_err(|err| err.0)?;
     append_scope_warning_facts(&mut outcome.witness.facts, &scope_warning_facts);
+    if scope_pack_gate_mode == admit_cli::ScopeGateMode::Warn && !scope_pack_issues.is_empty() {
+        outcome
+            .witness
+            .facts
+            .extend(crate::scope_pack_issue_facts(&scope_pack_issues));
+    }
+    if matches!(outcome.witness.verdict, Verdict::Inadmissible) {
+        plan_contract.apply_semantic_failure("semantic_ci_failure");
+    }
+    if plan_enforce && (plan_contract.requires_manual_approval || !plan_contract.errors.is_empty()) {
+        plan_contract.exit_code = 2;
+    }
+    if plan_contract.requires_manual_approval
+        || !plan_contract.errors.is_empty()
+        || !plan_contract.warnings.is_empty()
+    {
+        let plan_contract_evidence = serde_json::to_value(&plan_contract).unwrap_or_else(|_| {
+            serde_json::json!({
+                "requires_manual_approval": plan_contract.requires_manual_approval,
+                "stop_reasons": plan_contract.stop_reasons,
+                "errors": plan_contract.errors,
+                "warnings": plan_contract.warnings,
+            })
+        });
+        outcome.witness.facts.push(Fact::LintFinding {
+            rule_id: "plan/contract".to_string(),
+            severity: if plan_contract.requires_manual_approval {
+                Severity::Warning
+            } else {
+                Severity::Info
+            },
+            invariant: Some("ci.plan_contract".to_string()),
+            path: ".".to_string(),
+            span: admit_core::Span {
+                file: ".".to_string(),
+                start: None,
+                end: None,
+                line: None,
+                col: None,
+            },
+            message: format!(
+                "plan_contract plan_valid={} manifest_valid={} manual_approval={}",
+                plan_contract.plan_valid,
+                plan_contract.manifest_valid,
+                plan_contract.requires_manual_approval
+            ),
+            evidence: Some(plan_contract_evidence),
+        });
+    }
 
     let github_context = bundles
         .get(&ScopeId(
@@ -271,6 +365,12 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         )
         .map_err(|err| err.0)?;
         append_scope_warning_facts(&mut second.witness.facts, &scope_warning_facts);
+        if scope_pack_gate_mode == admit_cli::ScopeGateMode::Warn && !scope_pack_issues.is_empty() {
+            second
+                .witness
+                .facts
+                .extend(crate::scope_pack_issue_facts(&scope_pack_issues));
+        }
         apply_ci_witness_metadata(
             &mut second.witness,
             &input_id,
@@ -315,6 +415,10 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         LintFailOn::Warning => "warning",
         LintFailOn::Info => "info",
     };
+    let plan_contract_value =
+        serde_json::to_value(&plan_contract).map_err(|err| format!("plan_contract encode: {}", err))?;
+    let plan_requires_manual_approval = plan_contract.requires_manual_approval;
+    let plan_stop_reasons = plan_contract.stop_reasons.clone();
 
     let summary = serde_json::json!({
         "mode": resolved.mode.as_str(),
@@ -339,6 +443,9 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
             "head_sha": ctx.head_sha,
             "payload_hash": ctx.payload_hash
         })),
+        "plan_contract": plan_contract_value,
+        "requires_manual_approval": plan_requires_manual_approval,
+        "stop_reasons": plan_stop_reasons,
     });
 
     if args.json {
@@ -385,6 +492,12 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
     if resolved.mode == CiMode::Enforce && matches!(outcome.witness.verdict, Verdict::Inadmissible)
     {
         return Err("ci enforce failed: witness verdict is inadmissible".to_string());
+    }
+    if plan_enforce && plan_contract.exit_code == 2 {
+        return Err(format!(
+            "ci plan enforce failed: manual approval required ({})",
+            plan_contract.stop_reasons.join(", ")
+        ));
     }
 
     Ok(())

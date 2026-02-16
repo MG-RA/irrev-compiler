@@ -122,6 +122,21 @@ fn run_higher_order_checks(
 
             let role = fm.get("role").and_then(|v| v.as_str());
             if let Some(role) = role {
+                if role == "concept" {
+                    if let Some(Value::Array(arr)) = fm.get("invariants") {
+                        if arr.is_empty() {
+                            findings.push(finding(
+                                "vault-higher-order/concept-empty-invariants",
+                                Severity::Error,
+                                path,
+                                None,
+                                "concept frontmatter field `invariants` must be non-empty"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                }
+
                 if tracked_roles.contains(role) {
                     coverage_total += 1;
                     let refs = detect_invariant_references(fm, content);
@@ -213,11 +228,36 @@ const INVARIANT_NAMES: &[InvariantDescriptor] = &[
     },
 ];
 
-fn detect_invariant_references<'a>(
+fn detect_invariant_references(
     fm: &BTreeMap<String, Value>,
     content: &str,
-) -> BTreeSet<&'a str> {
+) -> BTreeSet<&'static str> {
     let mut refs = BTreeSet::new();
+
+    // Explicit invariant coverage declaration (preferred).
+    if let Some(val) = fm.get("invariants") {
+        let mut declared: Vec<&str> = Vec::new();
+        match val {
+            Value::String(s) => declared.push(s.as_str()),
+            Value::Array(arr) => {
+                for item in arr {
+                    if let Value::String(s) = item {
+                        declared.push(s.as_str());
+                    }
+                }
+            }
+            _ => {}
+        }
+        for raw in declared {
+            let key = raw.trim().to_ascii_lowercase();
+            for invariant in INVARIANT_NAMES {
+                if key == invariant.name {
+                    refs.insert(invariant.name);
+                }
+            }
+        }
+    }
+
     let haystack = format!(
         "{}\n{}",
         content.to_ascii_lowercase(),

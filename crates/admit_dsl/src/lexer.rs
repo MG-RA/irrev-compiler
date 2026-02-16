@@ -22,9 +22,8 @@ pub(crate) fn lexer(
         .then_ignore(just('"'))
         .map(Token::Str);
 
-    let symbol = filter(|c: &char| {
-        c.is_ascii_alphanumeric() || matches!(*c, '_' | ':' | '@' | '-' | '.')
-    })
+    let symbol =
+        filter(|c: &char| c.is_ascii_alphanumeric() || matches!(*c, '_' | ':' | '@' | '-' | '.'))
             .repeated()
             .at_least(1)
             .collect::<String>();

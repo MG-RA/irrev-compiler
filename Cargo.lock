@@ -3,9 +3,20 @@
 version = 4
 
 [[package]]
+name = "admit_book"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "admit_cli"
 version = "0.1.0"
 dependencies = [
+ "admit_book",
  "admit_core",
  "admit_dag",
  "admit_embed",

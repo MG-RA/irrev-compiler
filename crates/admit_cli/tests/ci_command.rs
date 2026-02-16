@@ -287,7 +287,9 @@ fn ci_scope_pack_gate_warn_adds_warning_fact() {
         .get("witness_hash")
         .and_then(|v| v.as_str())
         .expect("witness_hash");
-    let witness_path = artifacts.join("witness").join(format!("{}.json", witness_hash));
+    let witness_path = artifacts
+        .join("witness")
+        .join(format!("{}.json", witness_hash));
     let witness: admit_core::Witness =
         serde_json::from_slice(&std::fs::read(witness_path).expect("read witness"))
             .expect("decode witness");

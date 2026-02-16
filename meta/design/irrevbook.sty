@@ -1,0 +1,134 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{irrevbook}[2026/02/15 Irreversibility Book Style]
+
+% --- Geometry ---
+\RequirePackage[margin=1in, headheight=14pt]{geometry}
+\setlength{\emergencystretch}{2em}
+
+% --- Colors ---
+\RequirePackage{xcolor}
+\definecolor{irrevblue}{RGB}{30,60,120}
+\definecolor{irrevgray}{RGB}{100,100,100}
+\definecolor{irrevlightgray}{RGB}{200,200,200}
+
+% --- Typography ---
+\RequirePackage[T1]{fontenc}
+\RequirePackage{tgpagella}   % Body: TeX Gyre Pagella (Palatino)
+\RequirePackage{tgheros}     % Headings: TeX Gyre Heros (Helvetica)
+
+% --- Lists ---
+\RequirePackage{enumitem}
+\setlist{nosep, leftmargin=1.5em}
+
+% --- Tables ---
+\RequirePackage{booktabs}
+\RequirePackage{longtable}
+
+% --- Code blocks ---
+\RequirePackage{fancyvrb}
+
+% --- Headers and footers ---
+\RequirePackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[RE]{\textit{\leftmark}}
+\fancyhead[LO]{\textit{\rightmark}}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\thepage}\renewcommand{\headrulewidth}{0pt}}
+
+% --- Section styling ---
+\RequirePackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\sffamily\color{irrevblue}}
+  {\chaptertitlename\ \thechapter}{20pt}{\Huge}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\sffamily\color{irrevblue}}
+  {\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\sffamily}
+  {\thesubsection}{1em}{}
+
+% --- Hyperlinks (loaded last) ---
+\RequirePackage[colorlinks=true, linkcolor=irrevblue, urlcolor=irrevblue, citecolor=irrevblue]{hyperref}
+
+% ===================================================================
+% Semantic environments
+% ===================================================================
+
+% Concept wrapper
+% Usage: \begin{irrevconcept}{id}{Title} ... \end{irrevconcept}
+\newenvironment{irrevconcept}[2]{%
+  \section{#2}\label{concept:#1}%
+  \par\medskip
+}{%
+  \par\vspace{1em}{\color{irrevlightgray}\hrule}\vspace{0.5em}%
+}
+
+% Invariant interlude — wraps stats/spine/audit block per layer
+% Usage: \begin{irrevinterlude} ... \end{irrevinterlude}
+\newenvironment{irrevinterlude}{%
+  \subsection*{Invariant Interlude}%
+  \begin{quote}\small\raggedright
+}{%
+  \end{quote}\vspace{1em}%
+}
+
+% Callout — replaces Obsidian > [!note] / > [!warning] blocks
+% Usage: \begin{irrevcallout}{note} ... \end{irrevcallout}
+\newenvironment{irrevcallout}[1]{%
+  \par\medskip
+  \begin{quote}%
+  \noindent\textbf{\MakeUppercase{#1}:}\enspace\itshape
+}{%
+  \end{quote}%
+  \medskip
+}
+
+% Code block with language label
+% Usage:
+% \irrevcodelabel{adm}
+% \begin{irrevcode}
+% ...
+% \end{irrevcode}
+\newcommand{\irrevcodelabel}[1]{%
+  \par\medskip
+  \noindent{\small\sffamily\color{irrevgray}#1}\par\nopagebreak
+}
+\DefineVerbatimEnvironment{irrevcode}{Verbatim}{fontsize=\small}
+
+% ===================================================================
+% Semantic macros (safe-token arguments only)
+% ===================================================================
+
+% Invariant count line (inside \begin{itemize})
+% Usage: \irrevinvariantcount{governance}{3}{3}{2}{0}
+\newcommand{\irrevinvariantcount}[5]{%
+  \item \texttt{#1}: declared=#2, observed=#3, core=#4, inferred=#5%
+}
+
+% Core spine concept list item
+% Usage: \irrevspine{governance}{constraint-surface, exemption}
+\newcommand{\irrevspine}[2]{%
+  \item \texttt{#1}: #2%
+}
+
+% Navigational matrix row
+% Usage: \irrevnavrow{governance}{constraint* exemption!}
+\newcommand{\irrevnavrow}[2]{%
+  \item \texttt{#1}: #2%
+}
+
+% Audit hook marker
+% Usage: \irrevaudit{declared-only}{(none)}
+\newcommand{\irrevaudit}[2]{%
+  \item \textbf{#1}: \textcolor{irrevgray}{#2}%
+}
+
+% Reader contract (italic preamble text)
+% Usage: \irrevcontract{This section is generated from...}
+\newcommand{\irrevcontract}[1]{%
+  \noindent\textit{#1}\par\medskip%
+}
+
+\endinput

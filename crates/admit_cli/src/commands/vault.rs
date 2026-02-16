@@ -7,14 +7,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use admit_book::{
+    analyze_book as analyze_book_model, build_book_ast as build_book_ast_model, BookAnalytics,
+    BookAst, BookGraphInput, BookInvariantSection, BookSupplementalPage, ConceptBookRecord,
+    IncludedReason, LayerInvariantMatrixView, RefCounts as BookRefCounts, RenderProfile,
+    SourceConcept, SpineEvidenceRow,
+};
+use admit_scope_vault::frontmatter::extract_frontmatter;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use admit_scope_vault::frontmatter::extract_frontmatter;
-
 use crate::{
-    obsidian_adapter as oa,
-    VaultArgs, VaultBookBuildArgs, VaultBookCommands, VaultCommands, VaultDocsCommands,
+    obsidian_adapter as oa, VaultArgs, VaultBookBuildArgs, VaultBookCommands,
+    VaultBookOutputFormat, VaultBookProfile, VaultCommands, VaultDocsCommands,
     VaultDocsCompilerExtractArgs, VaultLinkMode, VaultLinksBacklinksArgs, VaultLinksCommands,
     VaultLinksImplicitArgs, VaultSpinesAuditArgs, VaultSpinesCommands, VaultSpinesGenerateArgs,
     VaultSpinesRenderArgs,
@@ -51,6 +56,8 @@ struct VaultNote {
     invariant_id: Option<String>,
     canonical: bool,
     layer: Option<String>,
+    invariants: Vec<String>,
+    frontmatter: BTreeMap<String, serde_json::Value>,
 }
 
 fn load_vault_notes(vault_root: &Path) -> Result<Vec<VaultNote>, String> {
@@ -81,6 +88,7 @@ fn load_vault_notes(vault_root: &Path) -> Result<Vec<VaultNote>, String> {
         let invariant_id = extract_string(&fm, "invariant_id");
         let canonical = extract_bool(&fm, "canonical").unwrap_or(false);
         let layer = extract_string(&fm, "layer");
+        let invariants = extract_string_list(&fm, "invariants");
 
         notes.push(VaultNote {
             name,
@@ -92,6 +100,8 @@ fn load_vault_notes(vault_root: &Path) -> Result<Vec<VaultNote>, String> {
             invariant_id,
             canonical,
             layer,
+            invariants,
+            frontmatter: fm,
         });
     }
     Ok(notes)
@@ -496,6 +506,30 @@ fn run_links_implicit(args: VaultLinksImplicitArgs) -> Result<(), String> {
         let mut counts: HashMap<String, u32> = HashMap::new();
         let mut via_counts: HashMap<String, HashMap<String, u32>> = HashMap::new();
 
+        // Treat declared invariant coverage as an explicit (non-text) mention edge so
+        // invariant-concept graphs don't depend on prose mentions.
+        if note.role == "concept" && target_roles.contains("invariant") {
+            for inv in &note.invariants {
+                let term = norm_key(inv);
+                if term.is_empty() {
+                    continue;
+                }
+                let Some(target) = term_to_target.get(&term) else {
+                    continue;
+                };
+                if target == &norm_key(&note.name) {
+                    continue;
+                }
+                *counts.entry(target.clone()).or_insert(0) += 1;
+                via_counts
+                    .entry(target.clone())
+                    .or_default()
+                    .entry(inv.clone())
+                    .and_modify(|v| *v += 1)
+                    .or_insert(1);
+            }
+        }
+
         for (term, term_norm, target) in &norm_terms {
             if !args.include_explicit && explicit_targets.contains(target) {
                 continue;
@@ -645,6 +679,20 @@ fn run_links_backlinks(args: VaultLinksBacklinksArgs) -> Result<(), String> {
                 if c > 0 {
                     total += c;
                     via.get_or_insert_with(|| term.clone());
+                }
+            }
+            // Include declared invariant coverage as an implicit mention edge.
+            if note.role == "concept" {
+                for inv in &note.invariants {
+                    let key = norm_key(inv);
+                    if key.is_empty() {
+                        continue;
+                    }
+                    if term_to_target.get(&key) == Some(&target_norm) {
+                        total += 1;
+                        via.get_or_insert_with(|| inv.clone());
+                        break;
+                    }
                 }
             }
             if total > 0 {
@@ -1071,6 +1119,8 @@ struct RefCounts {
 struct ConceptEvidence {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     core_in: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    footprint_in: Vec<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     refs: BTreeMap<String, RefCounts>, // spine_id -> counts
 }
@@ -1096,6 +1146,10 @@ struct ConceptSpineRow {
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     layer: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    role_summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    depends_on: Vec<String>,
     primary_spine: String,
     tier: ConceptTier,
     confidence: Confidence,
@@ -1363,6 +1417,22 @@ fn build_concept_spine_index_and_markdown(
             .extend(links.into_iter());
     }
 
+    // Footprint concepts: extracted from each invariant's "Structural footprint" section.
+    let mut footprint_by_spine: BTreeMap<SpineId, BTreeSet<String>> = BTreeMap::new();
+    for inv in &invariants {
+        let Some(inv_id) = inv.invariant_id.as_deref() else {
+            continue;
+        };
+        let Some(spine) = spine_from_str(inv_id) else {
+            continue;
+        };
+        let links = extract_structural_footprint_concept_ids(&inv.body, &concept_key_to_id);
+        footprint_by_spine
+            .entry(spine)
+            .or_default()
+            .extend(links.into_iter());
+    }
+
     // Reference counts: explicit wikilinks found in invariant and diagnostic notes.
     let mut refs: BTreeMap<String, BTreeMap<SpineId, RefCounts>> = BTreeMap::new();
 
@@ -1399,11 +1469,28 @@ fn build_concept_spine_index_and_markdown(
         let title = c.title.clone();
         // Re-read concept files for accurate frontmatter fields (VaultNote stores only a subset).
         let layer = concept_layer_from_file(&concepts_dir, &id).ok().flatten();
+        let role_summary = extract_registry_role_summary(c);
+        let depends_on = extract_structural_dependency_ids(&c.body, &concept_key_to_id, &id);
 
         let core_in = SpineId::all_invariants()
             .iter()
             .filter_map(|sp| {
                 if core_by_spine
+                    .get(sp)
+                    .map(|set| set.contains(&id))
+                    .unwrap_or(false)
+                {
+                    Some(sp.as_str().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let footprint_in = SpineId::all_invariants()
+            .iter()
+            .filter_map(|sp| {
+                if footprint_by_spine
                     .get(sp)
                     .map(|set| set.contains(&id))
                     .unwrap_or(false)
@@ -1434,11 +1521,14 @@ fn build_concept_spine_index_and_markdown(
             id,
             title,
             layer,
+            role_summary,
+            depends_on,
             primary_spine: primary_spine.as_str().to_string(),
             tier,
             confidence,
             evidence: ConceptEvidence {
                 core_in,
+                footprint_in,
                 refs: refs_out,
             },
         });
@@ -1555,6 +1645,41 @@ fn minimal_decomposition_slice(body: &str) -> String {
     lines[s..e].join("\n")
 }
 
+fn extract_structural_footprint_concept_ids(
+    body: &str,
+    concept_key_to_id: &HashMap<String, String>,
+) -> BTreeSet<String> {
+    let slice = structural_footprint_slice(body);
+    extract_concept_refs(&slice, concept_key_to_id)
+        .into_iter()
+        .collect()
+}
+
+fn structural_footprint_slice(body: &str) -> String {
+    let mut start: Option<usize> = None;
+    let mut end: Option<usize> = None;
+    let lines: Vec<&str> = body.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        let t_lower = t.to_lowercase();
+        if t_lower.starts_with("## structural footprint") {
+            start = Some(i + 1);
+            continue;
+        }
+        if start.is_some() && t.starts_with("## ") {
+            end = Some(i);
+            break;
+        }
+    }
+    match start {
+        Some(s) => {
+            let e = end.unwrap_or(lines.len());
+            lines[s..e].join("\n")
+        }
+        None => String::new(),
+    }
+}
+
 fn diagnostic_spine_from_rel_path(rel_path: &str) -> SpineId {
     // When we load notes relative to `<vault>/diagnostics`, rel_path is like:
     //   "attribution/Diagnostic Checklist.md" (spine-specific)
@@ -1602,24 +1727,276 @@ fn concept_layer_from_file(
     Ok(extract_string(&fm, "layer"))
 }
 
-fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
-    let mut out = String::new();
-    out.push_str("---\n");
-    out.push_str("role: support\n");
-    out.push_str("type: generated\n");
-    out.push_str("generated: true\n");
-    out.push_str(&format!("generated_at_utc: {}\n", index.generated_at_utc));
-    out.push_str("---\n\n");
-    out.push_str("# Concept → Spine Index (Generated)\n\n");
-    out.push_str(&format!(
-        "- Vault: `{}`\n- Concepts: `{}`\n\n",
-        index.vault_root,
-        index.concepts.len()
-    ));
+fn extract_structural_dependency_ids(
+    body: &str,
+    concept_key_to_id: &HashMap<String, String>,
+    concept_id: &str,
+) -> Vec<String> {
+    let Some(section) = extract_h2_section(body, "Structural dependencies") else {
+        return Vec::new();
+    };
+    if section.is_empty() || has_none_primitive_marker(&section) {
+        return Vec::new();
+    }
+    let mut deps: BTreeSet<String> = BTreeSet::new();
+    for link in oa::extract_obsidian_links(&section) {
+        let target_key = normalize_obsidian_target_to_key(&link.target);
+        if let Some(dep_id) = resolve_concept_id(&target_key, concept_key_to_id) {
+            if dep_id != concept_id {
+                deps.insert(dep_id);
+            }
+        }
+    }
+    deps.into_iter().collect()
+}
 
+fn extract_registry_role_summary(note: &VaultNote) -> String {
+    for key in ["description", "summary", "blurb"] {
+        if let Some(raw) = extract_string(&note.frontmatter, key) {
+            let cleaned = clean_registry_cell_text(&raw);
+            if !cleaned.is_empty() {
+                return truncate_with_ellipsis(cleaned, 140);
+            }
+        }
+    }
+
+    for heading in ["Definition", "Summary"] {
+        if let Some(paragraph) = first_paragraph_under_h2(&note.body, heading) {
+            let cleaned = clean_registry_cell_text(&paragraph);
+            if !cleaned.is_empty() {
+                let first_sentence = cleaned
+                    .split('.')
+                    .next()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+                if !first_sentence.is_empty() && first_sentence.len() <= 140 {
+                    return first_sentence;
+                }
+                return truncate_with_ellipsis(cleaned, 140);
+            }
+        }
+    }
+
+    if let Some(paragraph) = first_body_paragraph(&note.body) {
+        let cleaned = clean_registry_cell_text(&paragraph);
+        if !cleaned.is_empty() {
+            return truncate_with_ellipsis(cleaned, 140);
+        }
+    }
+
+    note.name.replace('-', " ")
+}
+
+fn first_paragraph_under_h2(body: &str, heading: &str) -> Option<String> {
+    let wanted = format!("## {}", heading).to_lowercase();
+    let lines: Vec<&str> = body.lines().collect();
+    let mut start: Option<usize> = None;
+    let mut end: Option<usize> = None;
+    for (idx, line) in lines.iter().enumerate() {
+        let t = line.trim_start().to_lowercase();
+        if t == wanted {
+            start = Some(idx + 1);
+            continue;
+        }
+        if start.is_some() && t.starts_with("## ") {
+            end = Some(idx);
+            break;
+        }
+    }
+    let s = start?;
+    let e = end.unwrap_or(lines.len());
+    let section = lines[s..e].join("\n");
+    for paragraph in section.split("\n\n") {
+        let candidate = paragraph.trim();
+        if candidate.is_empty() {
+            continue;
+        }
+        if candidate.starts_with('>') {
+            continue;
+        }
+        return Some(candidate.to_string());
+    }
+    None
+}
+
+fn first_body_paragraph(body: &str) -> Option<String> {
+    let mut current: Vec<String> = Vec::new();
+    let mut paragraphs: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        if trimmed.is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
+            }
+            continue;
+        }
+        current.push(trimmed.to_string());
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join(" "));
+    }
+    for paragraph in paragraphs {
+        let candidate = paragraph.trim();
+        if candidate.is_empty() || candidate.starts_with('>') {
+            continue;
+        }
+        return Some(candidate.to_string());
+    }
+    None
+}
+
+fn clean_registry_cell_text(input: &str) -> String {
+    let no_links = strip_obsidian_wikilinks(input);
+    let no_md = strip_inline_markdown(&no_links);
+    let normalized = normalize_common_mojibake(&no_md);
+    let compact = collapse_ws(&normalized);
+    compact.replace('|', "\\|").trim().to_string()
+}
+
+fn strip_obsidian_wikilinks(input: &str) -> String {
+    let mut out = input.to_string();
+    for link in oa::extract_obsidian_links(input) {
+        let display = link.alias.clone().unwrap_or_else(|| link.target.clone());
+        out = out.replace(&link.raw, &display);
+    }
+    out
+}
+
+fn normalize_common_mojibake(input: &str) -> String {
+    input
+        .replace("â€œ", "\"")
+        .replace("â€", "\"")
+        .replace("â€˜", "'")
+        .replace("â€™", "'")
+        .replace("â€”", "-")
+        .replace("â€“", "-")
+        .replace("â€¦", "...")
+}
+
+fn strip_inline_markdown(input: &str) -> String {
+    input
+        .replace("**", "")
+        .replace('*', "")
+        .replace('`', "")
+        .replace("[!note]", "")
+        .replace("[!warning]", "")
+        .replace("[!info]", "")
+}
+
+fn collapse_ws(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_space = false;
+    for ch in input.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                out.push(' ');
+            }
+            prev_space = true;
+        } else {
+            out.push(ch);
+            prev_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn truncate_with_ellipsis(mut input: String, max_chars: usize) -> String {
+    if input.chars().count() <= max_chars {
+        return input;
+    }
+    input = input.chars().take(max_chars.saturating_sub(3)).collect();
+    input.push_str("...");
+    input
+}
+
+fn concept_link(concept_id: &str) -> String {
+    format!("[{}](#{})", concept_id, concept_anchor_id(concept_id))
+}
+
+fn concept_link_with_layer(row: &ConceptSpineRow) -> String {
+    let layer = row.layer.as_deref().unwrap_or("unclassified");
+    format!("{} (layer: {})", concept_link(&row.id), layer)
+}
+
+fn registry_layer_label(layer: Option<&str>) -> String {
+    let low = layer.unwrap_or("unknown").trim().to_lowercase();
+    for (label, keys) in BOOK_LAYER_ORDER {
+        if keys.iter().any(|k| low == *k) {
+            return (*label).to_string();
+        }
+    }
+    format!(
+        "Unclassified ({})",
+        if low.is_empty() { "unknown" } else { &low }
+    )
+}
+
+fn render_dependency_classes_by_layer(index: &ConceptSpineIndex, out: &mut String) {
+    let mut by_layer: BTreeMap<String, Vec<&ConceptSpineRow>> = BTreeMap::new();
+    for concept in &index.concepts {
+        by_layer
+            .entry(registry_layer_label(concept.layer.as_deref()))
+            .or_default()
+            .push(concept);
+    }
+
+    for rows in by_layer.values_mut() {
+        rows.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    for (label, _keys) in BOOK_LAYER_ORDER {
+        let Some(rows) = by_layer.remove(*label) else {
+            continue;
+        };
+        out.push_str(&format!("### Concepts :: {label}\n\n"));
+        let concepts = rows.iter().map(|c| concept_link(&c.id)).collect::<Vec<_>>();
+        out.push_str(&format!("- concept count: {}\n", concepts.len()));
+        for chunk in concepts.chunks(8) {
+            out.push_str(&format!("- {}\n", chunk.join(", ")));
+        }
+        out.push('\n');
+    }
+
+    for (label, rows) in by_layer {
+        out.push_str(&format!("### Concepts :: {label}\n\n"));
+        let concepts = rows.iter().map(|c| concept_link(&c.id)).collect::<Vec<_>>();
+        out.push_str(&format!("- concept count: {}\n", concepts.len()));
+        for chunk in concepts.chunks(8) {
+            out.push_str(&format!("- {}\n", chunk.join(", ")));
+        }
+        out.push('\n');
+    }
+}
+
+fn render_invariant_spine_index(index: &ConceptSpineIndex, out: &mut String) {
     let mut by_spine: BTreeMap<String, Vec<&ConceptSpineRow>> = BTreeMap::new();
     for c in &index.concepts {
         by_spine.entry(c.primary_spine.clone()).or_default().push(c);
+    }
+
+    let mut footprint_by_spine: BTreeMap<String, Vec<&ConceptSpineRow>> = BTreeMap::new();
+    for c in &index.concepts {
+        for fp_spine in &c.evidence.footprint_in {
+            let is_core_or_support = c.primary_spine == *fp_spine
+                && (matches!(c.tier, ConceptTier::Core)
+                    || (matches!(c.tier, ConceptTier::Support)
+                        && c.evidence
+                            .refs
+                            .get(fp_spine)
+                            .map(|r| r.invariant + r.diagnostic > 0)
+                            .unwrap_or(false)));
+            if !is_core_or_support {
+                footprint_by_spine
+                    .entry(fp_spine.clone())
+                    .or_default()
+                    .push(c);
+            }
+        }
     }
 
     for spine in SpineId::all_invariants()
@@ -1627,7 +2004,7 @@ fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
         .map(|s| s.as_str().to_string())
         .collect::<Vec<_>>()
     {
-        out.push_str(&format!("## {}\n\n", spine));
+        out.push_str(&format!("### {}\n\n", spine));
         let items = by_spine.get(&spine).cloned().unwrap_or_default();
         let mut core: Vec<&ConceptSpineRow> = items
             .iter()
@@ -1642,23 +2019,28 @@ fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
         core.sort_by(|a, b| a.id.cmp(&b.id));
         support.sort_by(|a, b| a.id.cmp(&b.id));
 
-        out.push_str("### Core\n\n");
+        out.push_str("#### Core\n\n");
         if core.is_empty() {
             out.push_str("- (none)\n");
         } else {
             for c in core {
-                out.push_str(&format!(
-                    "- [[{}]]{} \n",
-                    c.id,
-                    c.layer
-                        .as_ref()
-                        .map(|l| format!(" (`layer: {l}`)"))
-                        .unwrap_or_default()
-                ));
+                out.push_str(&format!("- {}\n", concept_link_with_layer(c)));
             }
         }
 
-        out.push_str("\n### Support\n\n");
+        out.push_str("\n#### Footprint\n\n");
+        let mut footprint: Vec<&ConceptSpineRow> =
+            footprint_by_spine.get(&spine).cloned().unwrap_or_default();
+        footprint.sort_by(|a, b| a.id.cmp(&b.id));
+        if footprint.is_empty() {
+            out.push_str("- (none)\n");
+        } else {
+            for c in footprint {
+                out.push_str(&format!("- {}\n", concept_link_with_layer(c)));
+            }
+        }
+
+        out.push_str("\n#### Support\n\n");
         if support.is_empty() {
             out.push_str("- (none)\n\n");
         } else {
@@ -1666,15 +2048,13 @@ fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
                 let refs = c.evidence.refs.get(&spine);
                 let inv = refs.map(|r| r.invariant).unwrap_or(0);
                 let diag = refs.map(|r| r.diagnostic).unwrap_or(0);
+                let layer = c.layer.as_deref().unwrap_or("unclassified");
                 out.push_str(&format!(
-                    "- [[{}]] (inv={}, diag={}){}\n",
-                    c.id,
+                    "- {} (inv={}, diag={}, layer={})\n",
+                    concept_link(&c.id),
                     inv,
                     diag,
-                    c.layer
-                        .as_ref()
-                        .map(|l| format!(", layer={l}"))
-                        .unwrap_or_default()
+                    layer
                 ));
             }
             out.push('\n');
@@ -1682,7 +2062,7 @@ fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
     }
 
     let structural = by_spine.get("structural").cloned().unwrap_or_default();
-    out.push_str("## structural\n\n");
+    out.push_str("### structural\n\n");
     if structural.is_empty() {
         out.push_str("- (none)\n");
     } else {
@@ -1705,9 +2085,148 @@ fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
             } else {
                 nonzero.join("; ")
             };
-            out.push_str(&format!("- [[{}]] ({})\n", c.id, evidence));
+            out.push_str(&format!("- {} ({})\n", concept_link(&c.id), evidence));
         }
     }
+}
+
+fn render_concept_spine_markdown(index: &ConceptSpineIndex) -> String {
+    let mut out = String::new();
+    out.push_str("---\n");
+    out.push_str("role: support\n");
+    out.push_str("type: index\n");
+    out.push_str("generated: true\n");
+    out.push_str(&format!("generated_at_utc: {}\n", index.generated_at_utc));
+    out.push_str("---\n\n");
+    out.push_str("# Concept -> Spine Index (Generated)\n\n");
+    out.push_str(&format!(
+        "- Vault: `{}`\n- Concepts: `{}`\n\n",
+        index.vault_root,
+        index.concepts.len()
+    ));
+    out.push_str("> [!note]\n");
+    out.push_str("> Orientation: Registry of dependency classes and boundaries. Canonical definitions live in `/concepts`; invariant and diagnostic references are evidence overlays.\n\n");
+    out.push_str("Directionality: This registry points to `/concepts` (definitions) plus invariants/diagnostics evidence; it does not import templates, examples, or domain notes.\n\n");
+
+    out.push_str("## Core question\n\n");
+    out.push_str(
+        "- What persistent differences is this system producing, and who is carrying them?\n\n",
+    );
+
+    out.push_str("## Dependency classes (by layer)\n\n");
+    out.push_str("> [!note]\n");
+    out.push_str("> Scope: Higher layers assume lower layers. This grouping does not imply reading order.\n\n");
+    render_dependency_classes_by_layer(index, &mut out);
+
+    out.push_str("## Invariant spine index\n\n");
+    render_invariant_spine_index(index, &mut out);
+    out.push_str("\n\n");
+
+    out.push_str("## Operator (diagnostic sequence)\n\n");
+    out.push_str("1. What differences is this system producing?\n");
+    out.push_str(&format!(
+        "2. Which persist under the declared {}?\n",
+        concept_link("transformation-space")
+    ));
+    out.push_str(&format!(
+        "3. What would removal require? ({} check)\n",
+        concept_link("erasure-cost")
+    ));
+    out.push_str(&format!(
+        "4. Where is removal work landing? ({} / {} check)\n",
+        concept_link("displacement"),
+        concept_link("absorption")
+    ));
+    out.push_str(&format!(
+        "5. For whom is this irreversible? ({})\n",
+        concept_link("persistence-gradient")
+    ));
+    out.push_str(&format!(
+        "6. Where do accumulated effects eliminate options? ({} -> {})\n\n",
+        concept_link("constraint-load"),
+        concept_link("collapse-surface")
+    ));
+    out.push_str(&format!(
+        "If steps 2-6 cannot be stated within a declared transformation space, the output is consistent with {}.\n\n",
+        concept_link("accounting-failure")
+    ));
+
+    out.push_str("## Scope conditions\n\n");
+    out.push_str("> [!warning]\n");
+    out.push_str(
+        "> Validity limit: Apply the lens only within an explicit transformation space and time window.\n\n",
+    );
+    out.push_str("The lens applies where:\n");
+    out.push_str(&format!(
+        "- {} accumulates faster than local {} can unwind.\n",
+        concept_link("persistent-difference"),
+        concept_link("rollback")
+    ));
+    out.push_str(&format!(
+        "- marginal {} dominates marginal action capacity.\n\n",
+        concept_link("erasure-cost")
+    ));
+    out.push_str("The lens does not apply where:\n");
+    out.push_str("- effects are local, ephemeral, and symmetric.\n");
+    out.push_str(&format!(
+        "- {} is cheap, immediate, and coordination-free.\n",
+        concept_link("rollback")
+    ));
+    out.push_str("- activity is exploratory or non-binding (no downstream commitments form).\n\n");
+
+    out.push_str("## Boundaries (distinctions)\n\n");
+    out.push_str("| Distinction | Prevents conflating |\n");
+    out.push_str("|---|---|\n");
+    out.push_str("| Diagnostic vs normative | revealing failure vs judging failure |\n");
+    out.push_str("| Constrains vs generates | limiting explanations vs producing explanations |\n");
+    out.push_str("| Behavior vs persistence | what happens vs what remains after |\n");
+    out.push_str("| Local correction vs global options | fixed here vs restored everywhere |\n");
+    out.push_str("| Practical vs metaphysical | operational tests vs ontological claims |\n\n");
+
+    out.push_str("## Declared relations (non-exhaustive)\n\n");
+    out.push_str("> [!note]\n");
+    out.push_str(
+        "> Non-claim: This is a structural dependency list, not a proof or a complete model.\n\n",
+    );
+    out.push_str(&format!(
+        "1. {} is relative to {}.\n",
+        concept_link("persistent-difference"),
+        concept_link("transformation-space")
+    ));
+    out.push_str(&format!(
+        "2. {} is the operational test for {}.\n",
+        concept_link("erasure-cost"),
+        concept_link("persistent-difference")
+    ));
+    out.push_str(&format!(
+        "3. {} makes \"undo later\" structurally unreliable under scale.\n",
+        concept_link("erasure-asymmetry")
+    ));
+    out.push_str(&format!(
+        "4. {} without {} is consistent with {}.\n",
+        concept_link("displacement"),
+        concept_link("tracking-mechanism"),
+        concept_link("accounting-failure")
+    ));
+    out.push_str(&format!(
+        "5. {} is consistent with {} and rising {}.\n",
+        concept_link("accounting-failure"),
+        concept_link("constraint-accumulation"),
+        concept_link("constraint-load")
+    ));
+    out.push_str(&format!(
+        "6. Accumulated constraints are consistent with {} or {} under perturbation.\n",
+        concept_link("brittleness"),
+        concept_link("saturation")
+    ));
+    out.push_str(&format!(
+        "7. {} describes conditional boundaries where options disappear.\n\n",
+        concept_link("collapse-surface")
+    ));
+
+    out.push_str("## Related\n\n");
+    out.push_str("- Irreversibility Accounting (Paper)\n");
+    out.push_str("- Irreversibility Accounting (Open Questions)\n");
     out
 }
 
@@ -1886,8 +2405,17 @@ fn resolve_vault_root_for_book(path: &Path) -> Result<PathBuf, String> {
     ))
 }
 
-fn default_book_out_path(vault_root: &Path) -> PathBuf {
-    vault_root.join("exports").join("irrev-book.md")
+fn default_book_export_dir(vault_root: &Path) -> PathBuf {
+    vault_root.join("plans").join("book")
+}
+
+fn default_book_out_path(vault_root: &Path, format: VaultBookOutputFormat) -> PathBuf {
+    let file = match format {
+        VaultBookOutputFormat::Markdown => "irrev-book.md",
+        VaultBookOutputFormat::Latex => "irrev-book.tex",
+        VaultBookOutputFormat::Pdf => "irrev-book.pdf",
+    };
+    default_book_export_dir(vault_root).join(file)
 }
 
 fn is_concept_note(note: &VaultNote) -> bool {
@@ -2010,16 +2538,327 @@ fn layer_index(layer: Option<&str>) -> usize {
 
 #[derive(Debug, Clone)]
 struct BookBuild {
+    ast: BookAst,
     markdown: String,
     concepts_included: usize,
     has_cycles: bool,
     cycle_nodes: Vec<String>,
+    analytics: BookAnalytics,
+    spine_index_markdown: String,
 }
 
-fn build_concept_book(
+fn output_format_str(format: VaultBookOutputFormat) -> &'static str {
+    match format {
+        VaultBookOutputFormat::Markdown => "markdown",
+        VaultBookOutputFormat::Latex => "latex",
+        VaultBookOutputFormat::Pdf => "pdf",
+    }
+}
+
+fn book_render_profile(profile: VaultBookProfile) -> RenderProfile {
+    match profile {
+        VaultBookProfile::Hybrid => RenderProfile::Hybrid,
+        VaultBookProfile::Diagnostic => RenderProfile::Diagnostic,
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ExplainOptions {
+    all_concepts: bool,
+    no_appendices: bool,
+    appendix_dir: String,
+    explain_path: Option<String>,
+    output_format: String,
+    book_profile: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ExplainReportV1 {
+    schema_id: &'static str,
+    explain_version: &'static str,
+    book_generator_version: String,
+    engine_version: String,
+    generated_at_utc: String,
+    vault_root: String,
+    invariant_id_set: Vec<String>,
+    options: ExplainOptions,
+    concepts: Vec<ConceptBookRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct ConceptGraphBuild {
+    concepts_by_id: HashMap<String, VaultNote>,
+    concept_key_to_id: HashMap<String, String>,
+    deps: HashMap<String, BTreeSet<String>>,
+    included: HashSet<String>,
+    seed_ids: BTreeSet<String>,
+    included_reason: HashMap<String, IncludedReason>,
+    ordered: Vec<String>,
+    has_cycles: bool,
+    cycle_nodes: Vec<String>,
+    by_layer: BTreeMap<String, Vec<String>>,
+}
+
+fn ordered_invariant_ids() -> Vec<&'static str> {
+    SpineId::all_invariants()
+        .iter()
+        .map(|s| s.as_str())
+        .collect()
+}
+
+fn normalize_invariant_id(input: &str) -> Option<String> {
+    spine_from_str(input).map(|s| s.as_str().to_string())
+}
+
+#[cfg(test)]
+fn build_concept_book(vault_root: &Path, all_concepts: bool) -> Result<BookBuild, String> {
+    build_concept_book_with_profile(vault_root, all_concepts, RenderProfile::Hybrid)
+}
+
+fn build_concept_book_with_profile(
     vault_root: &Path,
     all_concepts: bool,
+    render_profile: RenderProfile,
 ) -> Result<BookBuild, String> {
+    let graph = collect_concepts_and_graph(vault_root, all_concepts)?;
+    let (spine_index, spine_markdown) = build_concept_spine_index_and_markdown(vault_root)?;
+    let model_graph = to_book_graph_input(&graph)?;
+    let spine_rows = to_spine_rows(&spine_index);
+    let invariant_ids: Vec<String> = ordered_invariant_ids()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
+    let analytics = analyze_book_model(&model_graph, &spine_rows, &invariant_ids)?;
+    let mut ast = build_book_ast_model(&model_graph, &analytics, &invariant_ids, render_profile)?;
+    ast.orientation_pages = default_orientation_pages();
+    ast.invariants =
+        collect_invariant_sections(vault_root, &graph.included, &graph.concept_key_to_id)?;
+    ast.supplemental_pages = default_non_concept_pages();
+    let markdown = admit_book::render_markdown(&ast);
+
+    Ok(BookBuild {
+        ast,
+        concepts_included: graph.included.len(),
+        has_cycles: graph.has_cycles,
+        cycle_nodes: graph.cycle_nodes,
+        markdown,
+        analytics,
+        spine_index_markdown: spine_markdown,
+    })
+}
+
+fn collect_invariant_sections(
+    vault_root: &Path,
+    included_ids: &HashSet<String>,
+    concept_key_to_id: &HashMap<String, String>,
+) -> Result<Vec<BookInvariantSection>, String> {
+    fn fallback_invariant_id(name: &str) -> String {
+        name.to_lowercase()
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else if c.is_whitespace() {
+                    '-'
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    }
+
+    let invariants_dir = vault_root.join("invariants");
+    if !invariants_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut sections: Vec<BookInvariantSection> = load_vault_notes(&invariants_dir)?
+        .into_iter()
+        .map(|note| {
+            let id = note
+                .invariant_id
+                .as_deref()
+                .and_then(normalize_invariant_id)
+                .unwrap_or_else(|| fallback_invariant_id(&note.name));
+            let mut body =
+                rewrite_wikilinks_to_book_anchors(&note.body, included_ids, concept_key_to_id);
+            body = demote_markdown_headings(&body, 2);
+            BookInvariantSection {
+                id,
+                title: note.title,
+                markdown_body: body,
+            }
+        })
+        .collect();
+
+    let order: HashMap<String, usize> = ordered_invariant_ids()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, id)| (id.to_string(), idx))
+        .collect();
+    sections.sort_by(|a, b| {
+        order
+            .get(&a.id)
+            .copied()
+            .unwrap_or(usize::MAX)
+            .cmp(&order.get(&b.id).copied().unwrap_or(usize::MAX))
+            .then_with(|| a.title.cmp(&b.title))
+    });
+
+    Ok(sections)
+}
+
+fn default_non_concept_pages() -> Vec<BookSupplementalPage> {
+    vec![
+        BookSupplementalPage {
+            title: "Irreversibility Accounting and Agency Under Constraint".to_string(),
+            markdown_body: r#"These are projections, not appendices.
+
+Irreversibility accounting asks what happens under persistent accumulation:
+- persistent differences accumulate
+- erasure cost is asymmetric
+- displacement hides cost
+- constraint-load rises
+- feasible-set shrinks
+- collapse surfaces emerge
+
+Agency is then reframed as constrained navigation:
+not freedom from irreversibility, but selection of where the next irreversibility quantum lands."#
+                .to_string(),
+        },
+        BookSupplementalPage {
+            title: "Agency Under Constraint Accumulation".to_string(),
+            markdown_body: r#"Most frameworks begin with agency and retrofit structure.
+
+This framework does the opposite: agency is derived from constraint geometry under accumulation.
+
+Operational restatement:
+- agency is not freedom from irreversibility
+- agency is selection of where the next irreversibility quantum lands
+- accountability follows from declared control surfaces and degrees of freedom
+
+This preserves responsibility without pretending reversibility where it does not exist."#
+                .to_string(),
+        },
+        BookSupplementalPage {
+            title: "Structural Lineage".to_string(),
+            markdown_body: r#"This work is not metaphysics and not a totalizing theory.
+
+It sits in continuity with:
+- thermodynamics (irreversibility, asymmetry)
+- systems theory (constraint and accumulation)
+- cybernetics (reflexive diagnosability)
+- institutional economics (externalities, path dependence)
+- distributed systems and version control (persistence and rollback limits)
+- legal precedent (residual constraint across time)
+
+Its distinct move is compression: one substrate-agnostic abstraction for persistence plus asymmetry across domains."#
+                .to_string(),
+        },
+        BookSupplementalPage {
+            title: "Graph Structure Over Reading Order".to_string(),
+            markdown_body: r#"The ontology is a dependency graph; linear chapter order is only a projection.
+
+Interpretive rule:
+- links carry meaning
+- sequence carries convenience
+
+Example chain:
+Constraint -> Accumulation -> Constraint-load -> Saturation
+
+Removing any node in that chain collapses diagnosability. Structural dependencies are prerequisites for valid interpretation."#
+                .to_string(),
+        },
+        BookSupplementalPage {
+            title: "From Ontology to Compiler".to_string(),
+            markdown_body: r#"The framework is computable.
+
+Operational mapping:
+- concepts -> IR primitives
+- constraints -> boolean predicates
+- witness -> proof-like evidence object
+- ledger -> append-only accountability spine
+- scope -> evaluation boundary
+
+The claim is modest: if bookkeeping is taken seriously, irreversibility accounting can be checked rather than merely asserted."#
+                .to_string(),
+        },
+        BookSupplementalPage {
+            title: "Why Reversibility Narratives Fail".to_string(),
+            markdown_body: r#"Common operational narratives fail under asymmetry:
+
+- "We can clean this up later."
+- "We can always roll back."
+- "This is only temporary."
+- "This exception is harmless."
+
+Failure pattern:
+- erasure is deferred
+- costs are displaced
+- residual constraints accumulate
+- option space shrinks before the narrative updates
+
+The lens tracks this as structure, not as morality."#
+                .to_string(),
+        },
+    ]
+}
+
+fn default_orientation_pages() -> Vec<BookSupplementalPage> {
+    vec![
+        BookSupplementalPage {
+            title: "Why This Exists".to_string(),
+            markdown_body:
+                r#"Modern systems repeatedly assume that reversible narratives are sufficient.
+
+This book exists to analyze what happens when that assumption fails.
+
+Its organizing problem is practical:
+- persistent differences continue to constrain action
+- erasure is asymmetric and often displaced
+- bookkeeping of residual constraint is usually absent
+
+The goal is diagnostic clarity, not metaphysical explanation."#
+                    .to_string(),
+        },
+        BookSupplementalPage {
+            title: "How to Read This System".to_string(),
+            markdown_body: r#"The graph is primary; the chapter order is a projection.
+
+Reading rules:
+- dependency edges carry meaning
+- linear sequence is a convenience layer
+- composite concepts inherit prerequisites
+- cherry-picking without prerequisites creates interpretive drift
+
+Example dependency chain:
+Constraint -> Accumulation -> Constraint-load -> Saturation
+
+Remove one node and the chain loses interpretability."#
+                .to_string(),
+        },
+        BookSupplementalPage {
+            title: "The Invariants - The Hidden Spine".to_string(),
+            markdown_body: r#"Invariants are self-binding constraints on the method.
+
+They are not optional extras and not downstream applications.
+
+Function:
+- prevent collapse into ideology
+- preserve decomposition under scale
+- require witness-bearing accountability
+- keep diagnosis non-prescriptive
+
+These are constraints on the lens itself."#
+                .to_string(),
+        },
+    ]
+}
+
+fn collect_concepts_and_graph(
+    vault_root: &Path,
+    all_concepts: bool,
+) -> Result<ConceptGraphBuild, String> {
     let notes = load_vault_notes(vault_root)?;
     let concepts: Vec<VaultNote> = notes.into_iter().filter(is_concept_note).collect();
     if concepts.is_empty() {
@@ -2042,7 +2881,6 @@ fn build_concept_book(
         .collect();
     let concept_key_to_id = build_concept_key_map(&concept_list);
 
-    // Extract per-concept dependency edges from the structural dependencies section.
     let mut deps: HashMap<String, BTreeSet<String>> = HashMap::new();
     for (id, note) in &concepts_by_id {
         let mut set = BTreeSet::new();
@@ -2061,11 +2899,14 @@ fn build_concept_book(
         deps.insert(id.clone(), set);
     }
 
-    // Seed included set (canonical-only by default) and close over dependencies.
     let mut included: HashSet<String> = HashSet::new();
+    let mut seed_ids: BTreeSet<String> = BTreeSet::new();
+    let mut included_reason: HashMap<String, IncludedReason> = HashMap::new();
     for (id, note) in &concepts_by_id {
         if all_concepts || note.canonical {
             included.insert(id.clone());
+            seed_ids.insert(id.clone());
+            included_reason.insert(id.clone(), IncludedReason::CanonicalSeed);
         }
     }
     let mut stack: Vec<String> = included.iter().cloned().collect();
@@ -2076,15 +2917,15 @@ fn build_concept_book(
         for dep in d {
             if concepts_by_id.contains_key(dep) && !included.contains(dep) {
                 included.insert(dep.clone());
+                included_reason.insert(dep.clone(), IncludedReason::DependencyClosure);
                 stack.push(dep.clone());
             }
         }
     }
 
-    // Topological sort (deps first) with deterministic tie-breaking.
     let mut in_degree: HashMap<String, usize> = HashMap::new();
     let mut reverse: HashMap<String, BTreeSet<String>> = HashMap::new();
-    for id in included.iter() {
+    for id in &included {
         let d = deps.get(id).cloned().unwrap_or_default();
         let count = d.iter().filter(|x| included.contains(*x)).count();
         in_degree.insert(id.clone(), count);
@@ -2135,111 +2976,380 @@ fn build_concept_book(
     let cycle_nodes = remaining.clone();
     ordered.extend(remaining);
 
-    // Group in reading order by declared layer buckets.
-    let mut by_label: HashMap<&'static str, Vec<String>> = HashMap::new();
+    let mut by_layer: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for id in &ordered {
         let note = concepts_by_id
             .get(id)
             .ok_or_else(|| format!("missing concept: {}", id))?;
         let label = layer_label(note.layer.as_deref());
-        by_label.entry(label).or_default().push(id.clone());
+        by_layer
+            .entry(label.to_string())
+            .or_default()
+            .push(id.clone());
     }
 
-    let mut md = String::new();
-    md.push_str("# Irreversibility Vault - Concept Book (Linearized)\n\n");
-    md.push_str("Generated from `/concepts` using each concept's `## Structural dependencies` as prerequisite edges.\n\n");
-
-    if has_cycles {
-        md.push_str("## Cycles\n\n");
-        md.push_str("The concept graph contains cycles; those concepts are included, but no total order can satisfy all dependency edges.\n\n");
-        for id in &cycle_nodes {
-            md.push_str(&format!("- [{}](#{})\n", id, concept_anchor_id(id)));
-        }
-        md.push('\n');
-    }
-
-    md.push_str("## Contents\n\n");
-    for (label, _keys) in BOOK_LAYER_ORDER {
-        let Some(items) = by_label.get(label) else {
-            continue;
-        };
-        md.push_str(&format!("- {}\n", label));
-        for id in items {
-            let note = concepts_by_id
-                .get(id)
-                .ok_or_else(|| format!("missing concept: {}", id))?;
-            md.push_str(&format!(
-                "  - [{}](#{})\n",
-                note.name,
-                concept_anchor_id(id)
-            ));
-        }
-    }
-    if let Some(items) = by_label.get("Unclassified") {
-        md.push_str("- Unclassified\n");
-        for id in items {
-            let note = concepts_by_id
-                .get(id)
-                .ok_or_else(|| format!("missing concept: {}", id))?;
-            md.push_str(&format!(
-                "  - [{}](#{})\n",
-                note.name,
-                concept_anchor_id(id)
-            ));
-        }
-    }
-    md.push_str("\n---\n\n");
-
-    // Render each section with concept bodies.
-    for (label, _keys) in BOOK_LAYER_ORDER {
-        let Some(items) = by_label.get(label) else {
-            continue;
-        };
-        md.push_str(&format!("## {}\n\n", label));
-        for id in items {
-            let note = concepts_by_id
-                .get(id)
-                .ok_or_else(|| format!("missing concept: {}", id))?;
-            let mut body =
-                rewrite_wikilinks_to_book_anchors(&note.body, &included, &concept_key_to_id);
-            body = demote_markdown_headings(&body, 2);
-            md.push_str(&format!("<a id=\"{}\"></a>\n\n", concept_anchor_id(id)));
-            md.push_str(body.trim_end());
-            md.push_str("\n\n---\n\n");
-        }
-    }
-    if let Some(items) = by_label.get("Unclassified") {
-        md.push_str("## Unclassified\n\n");
-        for id in items {
-            let note = concepts_by_id
-                .get(id)
-                .ok_or_else(|| format!("missing concept: {}", id))?;
-            let mut body =
-                rewrite_wikilinks_to_book_anchors(&note.body, &included, &concept_key_to_id);
-            body = demote_markdown_headings(&body, 2);
-            md.push_str(&format!("<a id=\"{}\"></a>\n\n", concept_anchor_id(id)));
-            md.push_str(body.trim_end());
-            md.push_str("\n\n---\n\n");
-        }
-    }
-
-    Ok(BookBuild {
-        concepts_included: included.len(),
+    Ok(ConceptGraphBuild {
+        concepts_by_id,
+        concept_key_to_id,
+        deps,
+        included,
+        seed_ids,
+        included_reason,
+        ordered,
         has_cycles,
         cycle_nodes,
-        markdown: md,
+        by_layer,
     })
 }
 
+fn to_book_graph_input(graph: &ConceptGraphBuild) -> Result<BookGraphInput, String> {
+    let mut concepts_by_id: HashMap<String, SourceConcept> = HashMap::new();
+    for (id, note) in &graph.concepts_by_id {
+        let mut body = rewrite_wikilinks_to_book_anchors(
+            &note.body,
+            &graph.included,
+            &graph.concept_key_to_id,
+        );
+        body = demote_markdown_headings(&body, 2);
+        let mut declared_invariants: BTreeSet<String> = BTreeSet::new();
+        for raw in &note.invariants {
+            if let Some(inv) = normalize_invariant_id(raw) {
+                declared_invariants.insert(inv);
+            }
+        }
+        concepts_by_id.insert(
+            id.clone(),
+            SourceConcept {
+                id: id.clone(),
+                anchor: concept_anchor_id(id),
+                title: note.title.clone(),
+                canonical_path: note.rel_path.clone(),
+                layer: note.layer.clone(),
+                layer_label: layer_label(note.layer.as_deref()).to_string(),
+                canonical: note.canonical,
+                declared_invariants: declared_invariants.into_iter().collect(),
+                frontmatter: note.frontmatter.clone(),
+                source_markdown_body: note.body.clone(),
+                book_markdown_body: body,
+            },
+        );
+    }
+
+    let layer_order = BOOK_LAYER_ORDER
+        .iter()
+        .map(|(label, _keys)| (*label).to_string())
+        .collect::<Vec<_>>();
+
+    Ok(BookGraphInput {
+        concepts_by_id,
+        deps: graph.deps.clone(),
+        included: graph.included.clone(),
+        seed_ids: graph.seed_ids.clone(),
+        included_reason: graph.included_reason.clone(),
+        ordered: graph.ordered.clone(),
+        has_cycles: graph.has_cycles,
+        cycle_nodes: graph.cycle_nodes.clone(),
+        by_layer: graph.by_layer.clone(),
+        layer_order,
+    })
+}
+
+fn to_spine_rows(spine_index: &ConceptSpineIndex) -> Vec<SpineEvidenceRow> {
+    let mut rows: Vec<SpineEvidenceRow> = Vec::new();
+    for row in &spine_index.concepts {
+        let mut core_in: BTreeSet<String> = BTreeSet::new();
+        for inv in &row.evidence.core_in {
+            if let Some(norm) = normalize_invariant_id(inv) {
+                core_in.insert(norm);
+            }
+        }
+        let mut refs: BTreeMap<String, BookRefCounts> = BTreeMap::new();
+        for (inv, ct) in &row.evidence.refs {
+            if let Some(norm) = normalize_invariant_id(inv) {
+                refs.insert(
+                    norm,
+                    BookRefCounts {
+                        invariant: ct.invariant,
+                        diagnostic: ct.diagnostic,
+                    },
+                );
+            }
+        }
+        let mut footprint_in: BTreeSet<String> = BTreeSet::new();
+        for inv in &row.evidence.footprint_in {
+            if let Some(norm) = normalize_invariant_id(inv) {
+                footprint_in.insert(norm);
+            }
+        }
+        rows.push(SpineEvidenceRow {
+            id: row.id.clone(),
+            primary_spine: row.primary_spine.clone(),
+            core_in: core_in.into_iter().collect(),
+            footprint_in: footprint_in.into_iter().collect(),
+            refs,
+        });
+    }
+    rows
+}
+
+fn render_appendix_layer_matrix(analytics: &BookAnalytics) -> String {
+    let view = LayerInvariantMatrixView {
+        invariant_ids: ordered_invariant_ids()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        cells: analytics.matrix.cells.clone(),
+        diagnostic_note:
+            "Diagnostic matrix (declared-first); use this for strict audit and CI surfaces."
+                .to_string(),
+        marker_legend:
+            "Markers: `*` aligned (core/support), `.` aligned (footprint only), `!` declared-only, `~` drift (observed elsewhere), `^` inferred-only (dependency-of-core)."
+                .to_string(),
+    };
+    admit_book::render_layer_invariant_matrix(&view)
+}
+
+fn render_explain_json(
+    vault_root: &Path,
+    analytics: &BookAnalytics,
+    options: ExplainOptions,
+) -> Result<String, String> {
+    let report = ExplainReportV1 {
+        schema_id: "admit.book-explain/1",
+        explain_version: "1",
+        book_generator_version: env!("CARGO_PKG_VERSION").to_string(),
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
+        generated_at_utc: now_utc_rfc3339(),
+        vault_root: vault_root.to_string_lossy().replace('\\', "/"),
+        invariant_id_set: ordered_invariant_ids()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
+        options,
+        concepts: analytics.records.clone(),
+    };
+    serde_json::to_string_pretty(&report).map_err(|e| format!("json encode: {e}"))
+}
+
+fn default_book_appendix_dir(out: &Path) -> PathBuf {
+    out.parent()
+        .map(|p| p.join("appendices"))
+        .unwrap_or_else(|| PathBuf::from("appendices"))
+}
+
+fn default_book_modules_dir(out: &Path) -> PathBuf {
+    let stem = out
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("book");
+    out.parent()
+        .map(|p| p.join("modules").join(stem))
+        .unwrap_or_else(|| PathBuf::from("modules").join(stem))
+}
+
+fn default_book_modules_ref(out: &Path) -> String {
+    let stem = out
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("book");
+    format!("modules/{stem}")
+}
+
+fn default_spine_registry_path(vault_root: &Path) -> PathBuf {
+    vault_root
+        .join("meta")
+        .join("Concept Spine Index.generated.md")
+}
+
+fn default_latex_template_candidates(vault_root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    out.push(PathBuf::from("meta/design/book-template.tex"));
+    out.push(vault_root.join("meta/design/book-template.tex"));
+    if let Some(parent) = vault_root.parent() {
+        out.push(parent.join("irrev-compiler/meta/design/book-template.tex"));
+    }
+    out
+}
+
+fn sibling_irrevbook_style(template_path: &Path) -> Option<PathBuf> {
+    let style_path = template_path.parent()?.join("irrevbook.sty");
+    style_path.exists().then_some(style_path)
+}
+
+fn load_latex_template(
+    vault_root: &Path,
+    template_path: Option<&PathBuf>,
+) -> Result<(String, Option<PathBuf>, Option<PathBuf>), String> {
+    if let Some(path) = template_path {
+        let text = fs::read_to_string(path)
+            .map_err(|e| format!("read template {}: {e}", path.display()))?;
+        return Ok((text, Some(path.clone()), sibling_irrevbook_style(path)));
+    }
+    for candidate in default_latex_template_candidates(vault_root) {
+        if candidate.exists() {
+            let text = fs::read_to_string(&candidate)
+                .map_err(|e| format!("read template {}: {e}", candidate.display()))?;
+            let style = sibling_irrevbook_style(&candidate);
+            return Ok((text, Some(candidate), style));
+        }
+    }
+    Ok((admit_book::default_latex_template().to_string(), None, None))
+}
+
 fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
+    let render_profile = book_render_profile(args.book_profile);
+    let output_format = args.format;
     let vault_root = resolve_vault_root_for_book(&args.path)?;
     let out = args
         .out
         .clone()
-        .unwrap_or_else(|| default_book_out_path(&vault_root));
+        .unwrap_or_else(|| default_book_out_path(&vault_root, output_format));
+    let appendix_dir = args
+        .appendix_dir
+        .clone()
+        .unwrap_or_else(|| default_book_appendix_dir(&out));
+    let modules_dir = default_book_modules_dir(&out);
+    let modules_ref = default_book_modules_ref(&out);
+    let spine_registry = args
+        .spine_registry
+        .clone()
+        .unwrap_or_else(|| default_spine_registry_path(&vault_root));
+    let explain_path: Option<PathBuf> = match &args.explain {
+        None => None,
+        Some(Some(path)) => Some(path.clone()),
+        Some(None) => Some(appendix_dir.join("book-explain.json")),
+    };
 
-    let build = build_concept_book(&vault_root, args.all_concepts)?;
-    let bytes = build.markdown.as_bytes().len();
+    let build = build_concept_book_with_profile(&vault_root, args.all_concepts, render_profile)?;
+    let mut module_sidecars: Vec<(PathBuf, String)> = Vec::new();
+    let write_spine_registry = !args.no_appendices;
+    let spine_registry_content = build.spine_index_markdown.clone();
+    let spine_index_md = admit_book::render_spine_index_appendix(&spine_registry_content);
+    let layer_matrix_md = render_appendix_layer_matrix(&build.analytics);
+    let appendices_latex = if args.no_appendices {
+        None
+    } else {
+        Some(admit_book::render_latex_appendices(
+            &spine_index_md,
+            &layer_matrix_md,
+        ))
+    };
+    let mut sidecars: Vec<(PathBuf, String)> = Vec::new();
+    if !args.no_appendices {
+        let stale_gap_audit = appendix_dir.join("invariant-gap-audit.md");
+        if stale_gap_audit.exists() {
+            fs::remove_file(&stale_gap_audit)
+                .map_err(|e| format!("remove stale {}: {e}", stale_gap_audit.display()))?;
+        }
+        sidecars.push((appendix_dir.join("spine-index.md"), spine_index_md.clone()));
+        sidecars.push((
+            appendix_dir.join("layer-invariant-matrix.md"),
+            layer_matrix_md.clone(),
+        ));
+    }
+
+    let (main_bytes, template_resolved, tex_sidecar, style_sidecar): (
+        Vec<u8>,
+        Option<PathBuf>,
+        Option<(PathBuf, String)>,
+        Option<(PathBuf, Vec<u8>)>,
+    ) = match output_format {
+        VaultBookOutputFormat::Markdown => (build.markdown.clone().into_bytes(), None, None, None),
+        VaultBookOutputFormat::Latex => {
+            let (template, template_path, style_path) =
+                load_latex_template(&vault_root, args.template.as_ref())?;
+            let (tex, modules) = admit_book::render_latex_modular(
+                &build.ast,
+                &template,
+                appendices_latex.as_deref(),
+                &modules_ref,
+            );
+            module_sidecars = modules
+                .into_iter()
+                .map(|(rel_path, content)| (modules_dir.join(rel_path), content))
+                .collect();
+            let style_file = if let Some(path) = style_path {
+                let bytes =
+                    fs::read(&path).map_err(|e| format!("read style {}: {e}", path.display()))?;
+                let target = out
+                    .parent()
+                    .map(|p| p.join("irrevbook.sty"))
+                    .unwrap_or_else(|| PathBuf::from("irrevbook.sty"));
+                Some((target, bytes))
+            } else {
+                None
+            };
+            (tex.into_bytes(), template_path, None, style_file)
+        }
+        VaultBookOutputFormat::Pdf => {
+            let (template, template_path, style_path) =
+                load_latex_template(&vault_root, args.template.as_ref())?;
+            let (tex, modules) = admit_book::render_latex_modular(
+                &build.ast,
+                &template,
+                appendices_latex.as_deref(),
+                &modules_ref,
+            );
+            module_sidecars = modules
+                .iter()
+                .map(|(rel_path, content)| (modules_dir.join(rel_path), content.clone()))
+                .collect();
+            let mut extra_file_bytes: Vec<(String, Vec<u8>)> = Vec::new();
+            for (rel_path, content) in modules {
+                let key = format!("{}/{}", modules_ref, rel_path).replace('\\', "/");
+                extra_file_bytes.push((key, content.into_bytes()));
+            }
+            let mut style_file: Option<(PathBuf, Vec<u8>)> = None;
+            if let Some(path) = style_path.as_ref() {
+                let bytes =
+                    fs::read(path).map_err(|e| format!("read style {}: {e}", path.display()))?;
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("irrevbook.sty")
+                    .to_string();
+                extra_file_bytes.push((name, bytes.clone()));
+                let target = out
+                    .parent()
+                    .map(|p| p.join("irrevbook.sty"))
+                    .unwrap_or_else(|| PathBuf::from("irrevbook.sty"));
+                style_file = Some((target, bytes));
+            }
+            let extra_files: Vec<(&str, &[u8])> = extra_file_bytes
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+                .collect();
+            let pdf = admit_book::compile_pdf(&tex, &extra_files)?;
+            let tex_file = if args.keep_tex {
+                Some((out.with_extension("tex"), tex))
+            } else {
+                None
+            };
+            (pdf, template_path, tex_file, style_file)
+        }
+    };
+    let bytes = main_bytes.len();
+
+    let explain_json = if explain_path.is_some() {
+        Some(render_explain_json(
+            &vault_root,
+            &build.analytics,
+            ExplainOptions {
+                all_concepts: args.all_concepts,
+                no_appendices: args.no_appendices,
+                appendix_dir: appendix_dir.to_string_lossy().replace('\\', "/"),
+                explain_path: explain_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().replace('\\', "/")),
+                output_format: output_format_str(output_format).to_string(),
+                book_profile: render_profile.as_str().to_string(),
+            },
+        )?)
+    } else {
+        None
+    };
 
     if args.dry_run {
         if args.json {
@@ -2247,12 +3357,25 @@ fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
                 "command": "vault book build",
                 "vault_root": vault_root.to_string_lossy(),
                 "out": out.to_string_lossy(),
+                "appendix_dir": appendix_dir.to_string_lossy(),
+                "modules_dir": modules_dir.to_string_lossy(),
+                "appendices_enabled": !args.no_appendices,
+                "appendices": sidecars.iter().map(|(p, _)| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                "module_count": module_sidecars.len(),
+                "spine_registry": if write_spine_registry { Some(spine_registry.to_string_lossy().to_string()) } else { None },
+                "template": template_resolved.as_ref().map(|p| p.to_string_lossy().to_string()),
+                "keep_tex": args.keep_tex,
+                "tex_sidecar": tex_sidecar.as_ref().map(|(p, _)| p.to_string_lossy().to_string()),
+                "style_sidecar": style_sidecar.as_ref().map(|(p, _)| p.to_string_lossy().to_string()),
+                "explain": explain_path.as_ref().map(|p| p.to_string_lossy().to_string()),
                 "dry_run": true,
                 "all_concepts": args.all_concepts,
+                "book_profile": render_profile.as_str(),
                 "concepts": build.concepts_included,
                 "bytes": bytes,
                 "has_cycles": build.has_cycles,
                 "cycle_nodes": build.cycle_nodes.len(),
+                "output_format": output_format_str(output_format),
             });
             println!(
                 "{}",
@@ -2260,37 +3383,143 @@ fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
             );
         } else {
             println!(
-                "book_build dry_run=true concepts={} bytes={} has_cycles={} out={}",
+                "book_build dry_run=true concepts={} bytes={} has_cycles={} out={} appendices={} modules={} explain={}",
                 build.concepts_included,
                 bytes,
                 build.has_cycles,
-                out.display()
+                out.display(),
+                if args.no_appendices { 0 } else { sidecars.len() },
+                module_sidecars.len(),
+                explain_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(none)".to_string()),
             );
         }
         return Ok(());
     }
 
-    if !args.force && out.exists() {
-        return Err(format!(
-            "refusing to overwrite existing file (use --force): {}",
-            out.display()
-        ));
+    if !args.force {
+        if out.exists() {
+            return Err(format!(
+                "refusing to overwrite existing file (use --force): {}",
+                out.display()
+            ));
+        }
+        if !module_sidecars.is_empty() && modules_dir.exists() {
+            return Err(format!(
+                "refusing to overwrite existing directory (use --force): {}",
+                modules_dir.display()
+            ));
+        }
+        for (path, _content) in &sidecars {
+            if path.exists() {
+                return Err(format!(
+                    "refusing to overwrite existing file (use --force): {}",
+                    path.display()
+                ));
+            }
+        }
+        if let Some(path) = explain_path.as_ref() {
+            if path.exists() {
+                return Err(format!(
+                    "refusing to overwrite existing file (use --force): {}",
+                    path.display()
+                ));
+            }
+        }
+        if write_spine_registry && spine_registry.exists() {
+            return Err(format!(
+                "refusing to overwrite existing file (use --force): {}",
+                spine_registry.display()
+            ));
+        }
+        if let Some((path, _)) = tex_sidecar.as_ref() {
+            if path.exists() {
+                return Err(format!(
+                    "refusing to overwrite existing file (use --force): {}",
+                    path.display()
+                ));
+            }
+        }
+        if let Some((path, _)) = style_sidecar.as_ref() {
+            if path.exists() {
+                return Err(format!(
+                    "refusing to overwrite existing file (use --force): {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if args.force && !module_sidecars.is_empty() && modules_dir.exists() {
+        fs::remove_dir_all(&modules_dir)
+            .map_err(|e| format!("remove stale {}: {e}", modules_dir.display()))?;
     }
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
-    fs::write(&out, build.markdown).map_err(|e| format!("write {}: {e}", out.display()))?;
+    fs::write(&out, &main_bytes).map_err(|e| format!("write {}: {e}", out.display()))?;
+    if write_spine_registry {
+        if let Some(parent) = spine_registry.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        fs::write(&spine_registry, &spine_registry_content)
+            .map_err(|e| format!("write {}: {e}", spine_registry.display()))?;
+    }
+    for (path, content) in &sidecars {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+    for (path, content) in &module_sidecars {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+    if let Some((path, content)) = tex_sidecar.as_ref() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+    if let Some((path, content)) = style_sidecar.as_ref() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
+    if let (Some(path), Some(content)) = (explain_path.as_ref(), explain_json.as_ref()) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+        }
+        fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
+    }
 
     if args.json {
         let payload = serde_json::json!({
             "command": "vault book build",
             "vault_root": vault_root.to_string_lossy(),
             "out": out.to_string_lossy(),
+            "appendix_dir": appendix_dir.to_string_lossy(),
+            "modules_dir": modules_dir.to_string_lossy(),
+            "appendices_enabled": !args.no_appendices,
+            "appendices": sidecars.iter().map(|(p, _)| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+            "module_count": module_sidecars.len(),
+            "spine_registry": if write_spine_registry { Some(spine_registry.to_string_lossy().to_string()) } else { None },
+            "template": template_resolved.as_ref().map(|p| p.to_string_lossy().to_string()),
+            "keep_tex": args.keep_tex,
+            "tex_sidecar": tex_sidecar.as_ref().map(|(p, _)| p.to_string_lossy().to_string()),
+            "style_sidecar": style_sidecar.as_ref().map(|(p, _)| p.to_string_lossy().to_string()),
+            "explain": explain_path.as_ref().map(|p| p.to_string_lossy().to_string()),
             "all_concepts": args.all_concepts,
+            "book_profile": render_profile.as_str(),
             "concepts": build.concepts_included,
             "bytes": bytes,
             "has_cycles": build.has_cycles,
             "cycle_nodes": build.cycle_nodes.len(),
+            "output_format": output_format_str(output_format),
         });
         println!(
             "{}",
@@ -2298,11 +3527,17 @@ fn run_book_build(args: VaultBookBuildArgs) -> Result<(), String> {
         );
     } else {
         println!(
-            "book_build concepts={} bytes={} has_cycles={} out={}",
+            "book_build concepts={} bytes={} has_cycles={} out={} appendices={} modules={} explain={}",
             build.concepts_included,
             bytes,
             build.has_cycles,
-            out.display()
+            out.display(),
+            if args.no_appendices { 0 } else { sidecars.len() },
+            module_sidecars.len(),
+            explain_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(none)".to_string()),
         );
     }
     Ok(())
@@ -2320,10 +3555,66 @@ mod book_tests {
         fs::write(p, s).unwrap();
     }
 
+    fn write_invariant(vault: &Path, id: &str, body: &str) {
+        write(
+            &vault.join(format!("invariants/{}.md", id)),
+            &format!(
+                "---\nrole: invariant\ninvariant_id: {}\n---\n# {}\n\n{}",
+                id, id, body
+            ),
+        );
+    }
+
+    fn bootstrap_invariants(vault: &Path) {
+        write_invariant(
+            vault,
+            "governance",
+            "## Minimal decomposition\n\n- [[missing-governance-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "irreversibility",
+            "## Minimal decomposition\n\n- [[missing-irreversibility-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "decomposition",
+            "## Minimal decomposition\n\n- [[missing-decomposition-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "attribution",
+            "## Minimal decomposition\n\n- [[missing-attribution-core]]\n",
+        );
+    }
+
+    fn count_files_with_ext(root: &Path, ext: &str) -> usize {
+        if !root.exists() {
+            return 0;
+        }
+        let mut count = 0usize;
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(cur) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&cur) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().and_then(|s| s.to_str()) == Some(ext) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     #[test]
     fn book_orders_dependencies_and_rewrites_links() {
         let td = TempDir::new().unwrap();
         let vault = td.path();
+        bootstrap_invariants(vault);
 
         write(
             &vault.join("concepts/primitive-ok.md"),
@@ -2331,6 +3622,8 @@ mod book_tests {
 role: concept
 layer: primitive
 canonical: true
+invariants:
+  - governance
 ---
 # Primitive OK
 
@@ -2345,6 +3638,8 @@ None (primitive)
 role: concept
 layer: first-order
 canonical: true
+invariants:
+  - governance
 ---
 # Object OK
 
@@ -2359,6 +3654,8 @@ canonical: true
 role: concept
 layer: selector
 canonical: true
+invariants:
+  - governance
 ---
 # Admissibility
 
@@ -2393,6 +3690,7 @@ canonical: true
     fn book_reports_cycle_nodes() {
         let td = TempDir::new().unwrap();
         let vault = td.path();
+        bootstrap_invariants(vault);
 
         write(
             &vault.join("concepts/cycle-a.md"),
@@ -2400,6 +3698,8 @@ canonical: true
 role: concept
 layer: first-order
 canonical: true
+invariants:
+  - governance
 ---
 # Cycle A
 
@@ -2414,6 +3714,8 @@ canonical: true
 role: concept
 layer: first-order
 canonical: true
+invariants:
+  - governance
 ---
 # Cycle B
 
@@ -2428,6 +3730,788 @@ canonical: true
         assert!(build.markdown.contains("## Cycles"));
         assert!(build.markdown.contains("cycle-a"));
         assert!(build.markdown.contains("cycle-b"));
+    }
+
+    #[test]
+    fn book_includes_interlude_with_reader_contract_and_fixed_invariant_order() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        write_invariant(
+            vault,
+            "governance",
+            "## Minimal decomposition\n\n- [[g-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "irreversibility",
+            "## Minimal decomposition\n\n- [[i-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "decomposition",
+            "## Minimal decomposition\n\n- [[d-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "attribution",
+            "## Minimal decomposition\n\n- [[a-core]]\n",
+        );
+
+        write(
+            &vault.join("concepts/g-core.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# G Core
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/i-core.md"),
+            r#"---
+role: concept
+layer: first-order
+canonical: true
+invariants:
+  - irreversibility
+---
+# I Core
+
+## Structural dependencies
+
+- [[g-core]]
+"#,
+        );
+        write(
+            &vault.join("concepts/d-core.md"),
+            r#"---
+role: concept
+layer: mechanism
+canonical: true
+invariants:
+  - decomposition
+---
+# D Core
+
+## Structural dependencies
+
+- [[i-core]]
+"#,
+        );
+        write(
+            &vault.join("concepts/a-core.md"),
+            r#"---
+role: concept
+layer: selector
+canonical: true
+invariants:
+  - attribution
+---
+# A Core
+
+## Structural dependencies
+
+- [[d-core]]
+"#,
+        );
+
+        let build = build_concept_book(vault, false).unwrap();
+        let md = build.markdown;
+        assert!(md.contains("### Invariant Interlude"));
+        assert!(md.contains("This section is generated from concept metadata and spine evidence; it is a map, not a claim of importance."));
+
+        let i_g = md.find("`governance`:").unwrap();
+        let i_i = md.find("`irreversibility`:").unwrap();
+        let i_d = md.find("`decomposition`:").unwrap();
+        let i_a = md.find("`attribution`:").unwrap();
+        assert!(i_g < i_i && i_i < i_d && i_d < i_a);
+    }
+
+    #[test]
+    fn hybrid_profile_marks_declared_infrastructure_in_interlude() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        write_invariant(
+            vault,
+            "governance",
+            "## Minimal decomposition\n\n- [[g-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "irreversibility",
+            "## Minimal decomposition\n\n- [[missing-irreversibility-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "decomposition",
+            "## Minimal decomposition\n\n- [[missing-decomposition-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "attribution",
+            "## Minimal decomposition\n\n- [[missing-attribution-core]]\n",
+        );
+
+        write(
+            &vault.join("concepts/g-core.md"),
+            r#"---
+role: concept
+layer: first-order
+canonical: true
+invariants:
+  - governance
+---
+# G Core
+
+## Structural dependencies
+
+- [[infra-declared]]
+"#,
+        );
+        write(
+            &vault.join("concepts/infra-declared.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Infra Declared
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let build = build_concept_book(vault, false).unwrap();
+        assert!(build.markdown.contains("Layer navigational matrix:"));
+        assert!(build.markdown.contains("infra-declared+"));
+        assert!(build
+            .markdown
+            .contains("- declared-infrastructure: infra-declared"));
+        assert!(build.markdown.contains("- declared-gap: (none)"));
+        assert!(build
+            .analytics
+            .gaps
+            .declared_infrastructure
+            .contains(&"infra-declared".to_string()));
+        assert!(!build
+            .analytics
+            .gaps
+            .declared_only
+            .contains(&"infra-declared".to_string()));
+    }
+
+    #[test]
+    fn diagnostic_profile_keeps_declared_only_audit_hook() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        write_invariant(
+            vault,
+            "governance",
+            "## Minimal decomposition\n\n- [[g-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "irreversibility",
+            "## Minimal decomposition\n\n- [[missing-irreversibility-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "decomposition",
+            "## Minimal decomposition\n\n- [[missing-decomposition-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "attribution",
+            "## Minimal decomposition\n\n- [[missing-attribution-core]]\n",
+        );
+
+        write(
+            &vault.join("concepts/g-core.md"),
+            r#"---
+role: concept
+layer: first-order
+canonical: true
+invariants:
+  - governance
+---
+# G Core
+
+## Structural dependencies
+
+- [[infra-declared]]
+"#,
+        );
+        write(
+            &vault.join("concepts/infra-declared.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Infra Declared
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let build =
+            build_concept_book_with_profile(vault, false, RenderProfile::Diagnostic).unwrap();
+        assert!(!build.markdown.contains("Layer navigational matrix:"));
+        assert!(build.markdown.contains("- declared-only: infra-declared"));
+        assert!(!build.markdown.contains("declared-infrastructure"));
+    }
+
+    #[test]
+    fn book_matrix_renders_markers_star_bang_tilde_caret() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        write_invariant(
+            vault,
+            "governance",
+            "## Minimal decomposition\n\n- [[aligned-c]]\n",
+        );
+        write_invariant(
+            vault,
+            "irreversibility",
+            "## Minimal decomposition\n\n- [[missing-irr-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "decomposition",
+            "## Minimal decomposition\n\n- [[decomp-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "attribution",
+            "## Minimal decomposition\n\n- [[drift-c]]\n",
+        );
+
+        write(
+            &vault.join("concepts/aligned-c.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Aligned C
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/declared-gap.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - irreversibility
+---
+# Declared Gap
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/drift-c.md"),
+            r#"---
+role: concept
+layer: first-order
+canonical: true
+invariants:
+  - governance
+---
+# Drift C
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/decomp-core.md"),
+            r#"---
+role: concept
+layer: first-order
+canonical: true
+invariants:
+  - decomposition
+---
+# Decomp Core
+
+## Structural dependencies
+
+- [[inferred-base]]
+"#,
+        );
+        write(
+            &vault.join("concepts/inferred-base.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+---
+# Inferred Base
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let graph = collect_concepts_and_graph(vault, false).unwrap();
+        let (index, _md) = build_concept_spine_index_and_markdown(vault).unwrap();
+        let model_graph = to_book_graph_input(&graph).unwrap();
+        let spine_rows = to_spine_rows(&index);
+        let invariant_ids = ordered_invariant_ids()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let analytics = analyze_book_model(&model_graph, &spine_rows, &invariant_ids).unwrap();
+        let matrix = render_appendix_layer_matrix(&analytics);
+        assert!(matrix.contains("aligned-c*"));
+        assert!(matrix.contains("declared-gap!"));
+        assert!(matrix.contains("drift-c~"));
+        assert!(matrix.contains("inferred-base^"));
+    }
+
+    #[test]
+    fn inferred_only_not_reported_as_gap() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        write_invariant(
+            vault,
+            "governance",
+            "## Minimal decomposition\n\n- [[g-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "irreversibility",
+            "## Minimal decomposition\n\n- [[i-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "decomposition",
+            "## Minimal decomposition\n\n- [[d-core]]\n",
+        );
+        write_invariant(
+            vault,
+            "attribution",
+            "## Minimal decomposition\n\n- [[a-core]]\n",
+        );
+
+        write(
+            &vault.join("concepts/d-core.md"),
+            r#"---
+role: concept
+layer: first-order
+canonical: true
+invariants:
+  - decomposition
+---
+# D Core
+
+## Structural dependencies
+
+- [[infra]]
+"#,
+        );
+        write(
+            &vault.join("concepts/infra.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+---
+# Infra
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/g-core.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# G Core
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/i-core.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - irreversibility
+---
+# I Core
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        write(
+            &vault.join("concepts/a-core.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - attribution
+---
+# A Core
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let graph = collect_concepts_and_graph(vault, false).unwrap();
+        let (index, _md) = build_concept_spine_index_and_markdown(vault).unwrap();
+        let model_graph = to_book_graph_input(&graph).unwrap();
+        let spine_rows = to_spine_rows(&index);
+        let invariant_ids = ordered_invariant_ids()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let analytics = analyze_book_model(&model_graph, &spine_rows, &invariant_ids).unwrap();
+        assert!(analytics.gaps.inferred_only.contains(&"infra".to_string()));
+        assert!(!analytics.gaps.declared_only.contains(&"infra".to_string()));
+        assert!(!analytics.gaps.mismatch.contains(&"infra".to_string()));
+    }
+
+    #[test]
+    fn structural_only_is_tracked_in_analytics() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        bootstrap_invariants(vault);
+        write(
+            &vault.join("concepts/unassigned-c.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+---
+# Unassigned C
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let graph = collect_concepts_and_graph(vault, false).unwrap();
+        let (index, _md) = build_concept_spine_index_and_markdown(vault).unwrap();
+        let model_graph = to_book_graph_input(&graph).unwrap();
+        let spine_rows = to_spine_rows(&index);
+        let invariant_ids = ordered_invariant_ids()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let analytics = analyze_book_model(&model_graph, &spine_rows, &invariant_ids).unwrap();
+        assert!(analytics
+            .gaps
+            .structural_only
+            .contains(&"unassigned-c".to_string()));
+    }
+
+    #[test]
+    fn explain_json_contains_schema_and_versions() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        bootstrap_invariants(vault);
+        write(
+            &vault.join("concepts/foo.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Foo
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        let build = build_concept_book(vault, false).unwrap();
+        let json = render_explain_json(
+            vault,
+            &build.analytics,
+            ExplainOptions {
+                all_concepts: false,
+                no_appendices: false,
+                appendix_dir: "x".to_string(),
+                explain_path: None,
+                output_format: "markdown".to_string(),
+                book_profile: "hybrid".to_string(),
+            },
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value.get("schema_id").and_then(|v| v.as_str()),
+            Some("admit.book-explain/1")
+        );
+        assert_eq!(
+            value.get("explain_version").and_then(|v| v.as_str()),
+            Some("1")
+        );
+        assert!(value.get("book_generator_version").is_some());
+        assert!(value.get("engine_version").is_some());
+        assert_eq!(
+            value
+                .get("options")
+                .and_then(|v| v.get("book_profile"))
+                .and_then(|v| v.as_str()),
+            Some("hybrid")
+        );
+    }
+
+    #[test]
+    fn dependency_path_deterministic_under_ties() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        bootstrap_invariants(vault);
+        write(
+            &vault.join("concepts/seed-a.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Seed A
+
+## Structural dependencies
+
+- [[shared]]
+"#,
+        );
+        write(
+            &vault.join("concepts/seed-b.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Seed B
+
+## Structural dependencies
+
+- [[shared]]
+"#,
+        );
+        write(
+            &vault.join("concepts/shared.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: false
+---
+# Shared
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+        let build = build_concept_book(vault, false).unwrap();
+        let shared = build
+            .analytics
+            .records
+            .iter()
+            .find(|r| r.id == "shared")
+            .unwrap();
+        assert_eq!(
+            shared.dependency_path,
+            vec!["seed-a".to_string(), "shared".to_string()]
+        );
+    }
+
+    #[test]
+    fn appendices_written_by_default_and_suppressed_with_no_appendices() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        bootstrap_invariants(vault);
+        write(
+            &vault.join("concepts/foo.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Foo
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let out_default = vault.join("exports/book-default.md");
+        run_book_build(VaultBookBuildArgs {
+            path: vault.to_path_buf(),
+            out: Some(out_default.clone()),
+            appendix_dir: None,
+            spine_registry: None,
+            no_appendices: false,
+            explain: None,
+            format: VaultBookOutputFormat::Markdown,
+            template: None,
+            keep_tex: false,
+            book_profile: VaultBookProfile::Hybrid,
+            all_concepts: false,
+            dry_run: false,
+            force: false,
+            json: false,
+        })
+        .unwrap();
+        let default_appendix_dir = default_book_appendix_dir(&out_default);
+        let default_modules_dir = default_book_modules_dir(&out_default);
+        assert!(default_appendix_dir.join("spine-index.md").exists());
+        assert!(default_appendix_dir
+            .join("layer-invariant-matrix.md")
+            .exists());
+        assert!(!default_modules_dir.exists());
+        let spine_registry = vault.join("meta/Concept Spine Index.generated.md");
+        assert!(spine_registry.exists());
+        let spine = fs::read_to_string(default_appendix_dir.join("spine-index.md")).unwrap();
+        assert!(spine.contains("# Spine Index Appendix"));
+        assert!(spine.contains("Concept -> Spine Index (Generated)"));
+
+        let out_no_appendix = vault.join("exports/book-no-appendix.md");
+        let custom_appendix = vault.join("exports/custom-appendices");
+        run_book_build(VaultBookBuildArgs {
+            path: vault.to_path_buf(),
+            out: Some(out_no_appendix),
+            appendix_dir: Some(custom_appendix.clone()),
+            spine_registry: None,
+            no_appendices: true,
+            explain: None,
+            format: VaultBookOutputFormat::Markdown,
+            template: None,
+            keep_tex: false,
+            book_profile: VaultBookProfile::Hybrid,
+            all_concepts: false,
+            dry_run: false,
+            force: false,
+            json: false,
+        })
+        .unwrap();
+        assert!(!custom_appendix.join("spine-index.md").exists());
+        assert!(!custom_appendix.join("layer-invariant-matrix.md").exists());
+        let no_appendix_modules_dir =
+            default_book_modules_dir(&vault.join("exports/book-no-appendix.md"));
+        assert!(!no_appendix_modules_dir.exists());
+        assert!(spine_registry.exists());
+    }
+
+    #[test]
+    fn book_writes_latex_from_ast_template() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        bootstrap_invariants(vault);
+
+        write(
+            &vault.join("concepts/foo.md"),
+            r#"---
+role: concept
+layer: primitive
+canonical: true
+invariants:
+  - governance
+---
+# Foo
+
+## Structural dependencies
+
+None (primitive)
+"#,
+        );
+
+        let template = vault.join("book-template.tex");
+        write(
+            &template,
+            r#"\documentclass{book}
+\usepackage{irrevbook}
+\begin{document}
+% custom template sentinel
+{{BODY}}
+{{APPENDICES}}
+\end{document}
+"#,
+        );
+
+        let out_tex = vault.join("exports/book.tex");
+        run_book_build(VaultBookBuildArgs {
+            path: vault.to_path_buf(),
+            out: Some(out_tex.clone()),
+            appendix_dir: None,
+            spine_registry: None,
+            no_appendices: true,
+            explain: None,
+            format: VaultBookOutputFormat::Latex,
+            template: Some(template),
+            keep_tex: false,
+            book_profile: VaultBookProfile::Hybrid,
+            all_concepts: false,
+            dry_run: false,
+            force: false,
+            json: false,
+        })
+        .unwrap();
+
+        let tex = fs::read_to_string(out_tex).unwrap();
+        assert!(tex.contains("% custom template sentinel"));
+        assert!(tex.contains("\\input{modules/book/"));
+        let modules_dir = default_book_modules_dir(&vault.join("exports/book.tex"));
+        assert!(modules_dir.exists());
+        assert!(count_files_with_ext(&modules_dir, "tex") > 3);
+        let primitive =
+            fs::read_to_string(modules_dir.join("02-layers/01-primitives/001-foo.tex")).unwrap();
+        assert!(primitive.contains("\\begin{irrevconcept}{foo}{Foo}"));
     }
 }
 
@@ -2492,7 +4576,7 @@ invariant_id: governance
 "#,
         );
 
-        let (index, _md) = build_concept_spine_index_and_markdown(vault).unwrap();
+        let (index, md) = build_concept_spine_index_and_markdown(vault).unwrap();
         let cs = index
             .concepts
             .iter()
@@ -2507,6 +4591,63 @@ invariant_id: governance
             .unwrap();
         assert_eq!(gov.primary_spine, "governance");
         assert!(matches!(gov.tier, ConceptTier::Core));
+        assert!(md.contains("## Dependency classes (by layer)"));
+        assert!(md.contains("### Concepts :: Primitives"));
+        assert!(md.contains("[control-surface](#concept-control-surface)"));
+        assert!(md.contains("## Invariant spine index"));
+        assert!(md.contains("#### Core"));
+        assert!(md.contains("## Operator (diagnostic sequence)"));
+        assert!(md.contains("## Boundaries (distinctions)"));
+    }
+
+    #[test]
+    fn spine_generate_renders_compact_layer_inventory() {
+        let td = TempDir::new().unwrap();
+        let vault = td.path();
+        write(
+            &vault.join("concepts/base.md"),
+            r#"---
+role: concept
+layer: primitive
+summary: base primitive role
+---
+# Base
+"#,
+        );
+        write(
+            &vault.join("concepts/derived.md"),
+            r#"---
+role: concept
+layer: first-order
+description: derived role summary
+---
+# Derived
+
+## Structural dependencies
+
+- [[base]]
+"#,
+        );
+        write(
+            &vault.join("invariants/Governance.md"),
+            r#"---
+role: invariant
+invariant_id: governance
+---
+# Governance
+
+## Minimal decomposition
+
+- [[derived]]
+"#,
+        );
+
+        let (_index, md) = build_concept_spine_index_and_markdown(vault).unwrap();
+        assert!(md.contains("### Concepts :: Primitives"));
+        assert!(md.contains("[base](#concept-base)"));
+        assert!(md.contains("### Concepts :: First-order composites"));
+        assert!(md.contains("[derived](#concept-derived)"));
+        assert!(md.contains("concept count:"));
     }
 
     #[test]

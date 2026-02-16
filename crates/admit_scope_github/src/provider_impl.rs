@@ -234,10 +234,11 @@ struct CheckRow {
 fn gh_pr_view_payload(root: &Path, scope_id: &ScopeId) -> Result<Value, ProviderError> {
     let mut cmd = Command::new("gh");
     cmd.arg("pr").arg("view");
-    if let Some(pr_number) = resolve_pr_number_from_env() {
-        cmd.arg(pr_number.to_string());
+    let selector = resolve_pr_selector_from_env();
+    if let Some(selector) = selector.as_deref() {
+        cmd.arg(selector);
     }
-    if let Some(repo) = resolve_repo_from_env() {
+    if let Some(repo) = resolve_repo_from_env().filter(|_| selector.is_some()) {
         cmd.arg("--repo").arg(repo);
     }
     let output = cmd
@@ -282,6 +283,23 @@ fn resolve_pr_number_from_env() -> Option<u64> {
             }
             third.parse::<u64>().ok()
         })
+}
+
+fn resolve_pr_selector_from_env() -> Option<String> {
+    if let Some(pr_number) = resolve_pr_number_from_env() {
+        return Some(pr_number.to_string());
+    }
+    if let Some(head_ref) = std::env::var("GITHUB_HEAD_REF")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        return Some(head_ref);
+    }
+    std::env::var("GITHUB_REF_NAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn resolve_repo_from_env() -> Option<String> {

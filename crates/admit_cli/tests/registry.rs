@@ -494,12 +494,10 @@ fn registry_scope_pack_sync_writes_packs_and_increments_version() {
         !after.scope_packs.is_empty(),
         "expected synced registry to include scope_packs"
     );
-    assert!(
-        after
-            .scope_packs
-            .iter()
-            .any(|entry| entry.scope_id == "text.metrics" && entry.version == 1)
-    );
+    assert!(after
+        .scope_packs
+        .iter()
+        .any(|entry| entry.scope_id == "text.metrics" && entry.version == 1));
 
     let text_desc = TextMetricsProvider::new().describe();
     let expected = admit_core::provider_pack_hash(&text_desc).expect("hash");

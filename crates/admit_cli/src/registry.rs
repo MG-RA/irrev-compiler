@@ -500,7 +500,10 @@ pub fn registry_build(
     )
 }
 
-pub fn registry_scope_pack_sync(input_path: &Path, out_path: &Path) -> Result<(), DeclareCostError> {
+pub fn registry_scope_pack_sync(
+    input_path: &Path,
+    out_path: &Path,
+) -> Result<(), DeclareCostError> {
     let bytes = fs::read(input_path).map_err(|err| DeclareCostError::Io(err.to_string()))?;
     let registry_raw: MetaRegistryV0 = serde_json::from_slice(&bytes)
         .map_err(|err| DeclareCostError::MetaRegistryDecode(err.to_string()))?;
@@ -846,13 +849,12 @@ fn builtin_scope_packs() -> Result<Vec<MetaRegistryScopePack>, DeclareCostError>
     descriptors
         .into_iter()
         .map(|desc| {
-            let provider_pack_hash =
-                admit_core::provider_pack_hash(&desc).map_err(|err| {
-                    DeclareCostError::CanonicalEncode(format!(
-                        "provider_pack_hash {}: {}",
-                        desc.scope_id.0, err
-                    ))
-                })?;
+            let provider_pack_hash = admit_core::provider_pack_hash(&desc).map_err(|err| {
+                DeclareCostError::CanonicalEncode(format!(
+                    "provider_pack_hash {}: {}",
+                    desc.scope_id.0, err
+                ))
+            })?;
             let mut predicate_ids = desc
                 .predicates
                 .iter()

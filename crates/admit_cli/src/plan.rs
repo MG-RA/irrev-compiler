@@ -510,7 +510,9 @@ enum ManifestStatus {
     ReadyForReview,
 }
 
-pub fn autogen_plan_artifacts(input: PlanAutogenInput) -> Result<PlanAutogenOutput, DeclareCostError> {
+pub fn autogen_plan_artifacts(
+    input: PlanAutogenInput,
+) -> Result<PlanAutogenOutput, DeclareCostError> {
     if input.intent.trim().is_empty() {
         return Err(DeclareCostError::Json(
             "autogen intent cannot be empty".to_string(),
@@ -582,8 +584,8 @@ pub fn autogen_plan_artifacts(input: PlanAutogenInput) -> Result<PlanAutogenOutp
             implementer_prompt_hash: None,
         },
     };
-    let plan_hash = canonical_hash_without_field(&plan, "plan_id")
-        .map_err(DeclareCostError::Json)?;
+    let plan_hash =
+        canonical_hash_without_field(&plan, "plan_id").map_err(DeclareCostError::Json)?;
     plan.plan_id = format!("plan:{}", plan_hash);
 
     let mut manifest = ProposalManifest {
@@ -599,8 +601,8 @@ pub fn autogen_plan_artifacts(input: PlanAutogenInput) -> Result<PlanAutogenOutp
         exceptions_requested: vec![],
         status: ManifestStatus::ReadyForReview,
     };
-    let manifest_hash = canonical_hash_without_field(&manifest, "manifest_id")
-        .map_err(DeclareCostError::Json)?;
+    let manifest_hash =
+        canonical_hash_without_field(&manifest, "manifest_id").map_err(DeclareCostError::Json)?;
     manifest.manifest_id = format!("manifest:{}", manifest_hash);
 
     if let Some(parent) = input.out_plan_path.parent() {
@@ -614,9 +616,10 @@ pub fn autogen_plan_artifacts(input: PlanAutogenInput) -> Result<PlanAutogenOutp
         }
     }
 
-    let plan_json =
-        serde_json::to_string_pretty(&plan).map_err(|err| DeclareCostError::Json(err.to_string()))?;
-    fs::write(&input.out_plan_path, plan_json).map_err(|err| DeclareCostError::Io(err.to_string()))?;
+    let plan_json = serde_json::to_string_pretty(&plan)
+        .map_err(|err| DeclareCostError::Json(err.to_string()))?;
+    fs::write(&input.out_plan_path, plan_json)
+        .map_err(|err| DeclareCostError::Io(err.to_string()))?;
 
     let manifest_json = serde_json::to_string_pretty(&manifest)
         .map_err(|err| DeclareCostError::Json(err.to_string()))?;
@@ -683,11 +686,10 @@ pub fn check_plan_contract(input: PlanCheckInput) -> PlanCheckOutput {
                         validate_plan_artifact(&plan, &mut out);
                         parsed_plan = Some(plan);
                     }
-                    Err(err) => out.errors.push(format!(
-                        "plan decode '{}': {}",
-                        path.display(),
-                        err
-                    )),
+                    Err(err) => {
+                        out.errors
+                            .push(format!("plan decode '{}': {}", path.display(), err))
+                    }
                 },
                 Err(err) => out
                     .errors
@@ -697,8 +699,10 @@ pub fn check_plan_contract(input: PlanCheckInput) -> PlanCheckOutput {
             out.warnings
                 .push(format!("plan artifact not found: {}", path.display()));
             if input.enforce {
-                out.errors
-                    .push(format!("plan artifact required in enforce mode: {}", path.display()));
+                out.errors.push(format!(
+                    "plan artifact required in enforce mode: {}",
+                    path.display()
+                ));
             }
         }
     }
@@ -716,11 +720,10 @@ pub fn check_plan_contract(input: PlanCheckInput) -> PlanCheckOutput {
                         validate_manifest(&manifest, &mut out);
                         parsed_manifest = Some(manifest);
                     }
-                    Err(err) => out.errors.push(format!(
-                        "manifest decode '{}': {}",
-                        path.display(),
-                        err
-                    )),
+                    Err(err) => {
+                        out.errors
+                            .push(format!("manifest decode '{}': {}", path.display(), err))
+                    }
                 },
                 Err(err) => out
                     .errors
@@ -794,15 +797,15 @@ fn validate_plan_artifact(plan: &PlanArtifact, out: &mut PlanCheckOutput) {
             .push("plan scope_targets must include at least one path/glob".to_string());
     }
     if plan.stop_conditions.is_empty() {
-        out.warnings
-            .push("plan stop_conditions is empty; no explicit hard-stop policy declared".to_string());
+        out.warnings.push(
+            "plan stop_conditions is empty; no explicit hard-stop policy declared".to_string(),
+        );
     }
     for step in &plan.validation_steps {
         let _required = step.required;
         if step.id.trim().is_empty() || step.command.trim().is_empty() {
-            out.errors.push(
-                "plan validation_steps entries require non-empty id and command".to_string(),
-            );
+            out.errors
+                .push("plan validation_steps entries require non-empty id and command".to_string());
             break;
         }
     }
@@ -813,7 +816,8 @@ fn validate_plan_artifact(plan: &PlanArtifact, out: &mut PlanCheckOutput) {
             || !route.cost_estimate.is_finite()
         {
             out.errors.push(
-                "plan risk_routes entries require finite cost and bucket/unit/rationale".to_string(),
+                "plan risk_routes entries require finite cost and bucket/unit/rationale"
+                    .to_string(),
             );
             break;
         }
@@ -841,7 +845,8 @@ fn validate_plan_artifact(plan: &PlanArtifact, out: &mut PlanCheckOutput) {
         out.warnings.push("planner_prompt_hash missing".to_string());
     }
     if plan.generated_by.implementer_prompt_hash.is_none() {
-        out.warnings.push("implementer_prompt_hash missing".to_string());
+        out.warnings
+            .push("implementer_prompt_hash missing".to_string());
     }
 }
 
@@ -856,8 +861,10 @@ fn validate_manifest(manifest: &ProposalManifest, out: &mut PlanCheckOutput) {
     let manifest_hash = match canonical_hash_without_field(manifest, "manifest_id") {
         Ok(v) => v,
         Err(err) => {
-            out.errors
-                .push(format!("manifest canonical hash computation failed: {}", err));
+            out.errors.push(format!(
+                "manifest canonical hash computation failed: {}",
+                err
+            ));
             return;
         }
     };
@@ -870,10 +877,12 @@ fn validate_manifest(manifest: &ProposalManifest, out: &mut PlanCheckOutput) {
         ));
     }
     if manifest.base_sha.trim().is_empty() {
-        out.errors.push("manifest base_sha must be non-empty".to_string());
+        out.errors
+            .push("manifest base_sha must be non-empty".to_string());
     }
     if manifest.head_sha.trim().is_empty() {
-        out.errors.push("manifest head_sha must be non-empty".to_string());
+        out.errors
+            .push("manifest head_sha must be non-empty".to_string());
     }
     if manifest.commands_run.is_empty() {
         out.errors
@@ -999,9 +1008,7 @@ fn apply_path_stop_policies(path: &str, out: &mut PlanCheckOutput) {
 }
 
 fn is_sensitive_control_path(path: &str) -> bool {
-    path.starts_with(".github/workflows/")
-        || path == "action.yml"
-        || path.starts_with(".admit/")
+    path.starts_with(".github/workflows/") || path == "action.yml" || path.starts_with(".admit/")
 }
 
 fn classify_failures(out: &mut PlanCheckOutput) {
@@ -1043,7 +1050,10 @@ fn is_secret_like_path(path: &str) -> bool {
         || low.contains("/secrets/")
 }
 
-fn canonical_hash_without_field<T: Serialize>(value: &T, remove_field: &str) -> Result<String, String> {
+fn canonical_hash_without_field<T: Serialize>(
+    value: &T,
+    remove_field: &str,
+) -> Result<String, String> {
     let mut value = serde_json::to_value(value).map_err(|err| err.to_string())?;
     let map = value
         .as_object_mut()
@@ -1089,8 +1099,8 @@ fn parse_changed_paths_text(text: &str) -> Result<Vec<String>, String> {
         return Ok(Vec::new());
     }
     if trimmed.starts_with('[') || trimmed.starts_with('{') {
-        let value: serde_json::Value =
-            serde_json::from_str(trimmed).map_err(|err| format!("decode changed paths json: {}", err))?;
+        let value: serde_json::Value = serde_json::from_str(trimmed)
+            .map_err(|err| format!("decode changed paths json: {}", err))?;
         let rows = if let Some(arr) = value.as_array() {
             arr.iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
@@ -1514,10 +1524,7 @@ mod plan_contract_tests {
             enforce: false,
         });
         assert!(out.plan_valid);
-        assert!(out
-            .errors
-            .iter()
-            .all(|e| !e.contains("plan_id mismatch")));
+        assert!(out.errors.iter().all(|e| !e.contains("plan_id mismatch")));
     }
 
     #[test]

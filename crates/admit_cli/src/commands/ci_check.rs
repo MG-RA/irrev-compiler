@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use admit_core::provider_trait::Provider;
 use admit_core::provider_types::{FactsBundle, Rfc3339Timestamp, Sha256Hex, SnapshotRequest};
@@ -10,8 +11,8 @@ use clap::{Parser, ValueEnum};
 use sha2::Digest;
 
 use admit_cli::{
-    append_lens_activated_event, build_lens_activated_event, default_artifacts_dir,
-    check_plan_contract, load_meta_registry, store_value_artifact, PlanCheckInput, ProgramRef,
+    append_lens_activated_event, build_lens_activated_event, check_plan_contract,
+    default_artifacts_dir, load_meta_registry, store_value_artifact, PlanCheckInput, ProgramRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -204,7 +205,23 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         ));
     }
 
-    let changed_paths = observed_changed_paths(&bundles);
+    let changed_paths = match github_pr_changed_paths_via_gh(&root) {
+        Ok(Some(paths)) => paths,
+        Ok(None) => observed_changed_paths(&bundles),
+        Err(err) => {
+            if require_github {
+                return Err(format!(
+                    "ci require-github failed: changed paths unavailable ({})",
+                    err
+                ));
+            }
+            scope_warning_facts.push(build_scope_unavailable_warning_fact(
+                admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID,
+                &format!("gh changed-path source unavailable: {}", err),
+            ));
+            observed_changed_paths(&bundles)
+        }
+    };
     let runtime_overlays = build_runtime_overlays(&ruleset, &changed_paths);
     let plan_enforce = matches!(args.plan_rollout, PlanRolloutMode::Enforce);
     let mut plan_contract = check_plan_contract(PlanCheckInput {
@@ -243,7 +260,8 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
     if matches!(outcome.witness.verdict, Verdict::Inadmissible) {
         plan_contract.apply_semantic_failure("semantic_ci_failure");
     }
-    if plan_enforce && (plan_contract.requires_manual_approval || !plan_contract.errors.is_empty()) {
+    if plan_enforce && (plan_contract.requires_manual_approval || !plan_contract.errors.is_empty())
+    {
         plan_contract.exit_code = 2;
     }
     if plan_contract.requires_manual_approval
@@ -410,8 +428,8 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         LintFailOn::Warning => "warning",
         LintFailOn::Info => "info",
     };
-    let plan_contract_value =
-        serde_json::to_value(&plan_contract).map_err(|err| format!("plan_contract encode: {}", err))?;
+    let plan_contract_value = serde_json::to_value(&plan_contract)
+        .map_err(|err| format!("plan_contract encode: {}", err))?;
     let plan_requires_manual_approval = plan_contract.requires_manual_approval;
     let plan_stop_reasons = plan_contract.stop_reasons.clone();
 
@@ -719,6 +737,73 @@ fn observed_changed_paths(bundles: &BTreeMap<ScopeId, FactsBundle>) -> Vec<Strin
     observed.into_iter().collect()
 }
 
+fn github_pr_changed_paths_via_gh(root: &Path) -> Result<Option<Vec<String>>, String> {
+    let Some(pr_number) = resolve_pr_number_from_env() else {
+        return Ok(None);
+    };
+    let Some(repo) = resolve_repo_from_env() else {
+        return Ok(None);
+    };
+    let output = Command::new("gh")
+        .arg("api")
+        .arg(format!("repos/{}/pulls/{}/files", repo, pr_number))
+        .arg("--paginate")
+        .arg("--jq")
+        .arg(".[].filename")
+        .current_dir(root)
+        .output()
+        .map_err(|err| format!("gh api execution failed: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "gh api failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let raw =
+        String::from_utf8(output.stdout).map_err(|err| format!("gh api utf8 decode: {}", err))?;
+    Ok(Some(parse_gh_changed_paths_output(&raw)))
+}
+
+fn parse_gh_changed_paths_output(raw: &str) -> Vec<String> {
+    let mut paths = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn resolve_pr_number_from_env() -> Option<u64> {
+    std::env::var("GH_PR_NUMBER")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .or_else(|| {
+            let ref_name = std::env::var("GITHUB_REF").ok()?;
+            let mut parts = ref_name.split('/');
+            let first = parts.next()?;
+            let second = parts.next()?;
+            let third = parts.next()?;
+            if first != "refs" || second != "pull" {
+                return None;
+            }
+            third.parse::<u64>().ok()
+        })
+}
+
+fn resolve_repo_from_env() -> Option<String> {
+    std::env::var("GH_REPO")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("GITHUB_REPOSITORY")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+}
+
 fn build_runtime_overlays(
     ruleset: &RuleSet,
     changed_paths: &[String],
@@ -884,7 +969,10 @@ mod tests {
         );
 
         let observed = observed_changed_paths(&bundles);
-        assert_eq!(observed, vec!["Cargo.toml".to_string(), "src/lib.rs".to_string()]);
+        assert_eq!(
+            observed,
+            vec!["Cargo.toml".to_string(), "src/lib.rs".to_string()]
+        );
     }
 
     #[test]
@@ -911,6 +999,21 @@ mod tests {
         assert_eq!(
             observed,
             vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_gh_changed_paths_output_sorts_and_dedupes() {
+        let observed = parse_gh_changed_paths_output(
+            "src/lib.rs\nCargo.toml\n\nsrc/lib.rs\n.github/workflows/ci.yml\n",
+        );
+        assert_eq!(
+            observed,
+            vec![
+                ".github/workflows/ci.yml".to_string(),
+                "Cargo.toml".to_string(),
+                "src/lib.rs".to_string(),
+            ]
         );
     }
 }

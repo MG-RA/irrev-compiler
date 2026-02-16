@@ -2,6 +2,8 @@
 role: concept
 layer: primitive
 canonical: true
+invariants:
+  - irreversibility
 aliases:
   - irreversibility
 ---

@@ -21,19 +21,18 @@ use admit_cli::{
     append_checked_event, append_event, append_executed_event, append_ingest_event,
     append_lens_activated_event, append_meta_change_checked_event,
     append_meta_interpretation_delta_event, append_plan_created_event, append_projection_event,
-    build_lens_activated_event, build_meta_change_checked_event,
+    autogen_plan_artifacts, build_lens_activated_event, build_meta_change_checked_event,
     build_meta_interpretation_delta_event, build_projection_event, check_cost_declared,
-    autogen_plan_artifacts, check_plan_contract, create_plan, declare_cost, default_artifacts_dir,
-    default_ledger_path, execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache,
-    init_project, load_meta_registry, parse_plan_answers_markdown, read_changed_paths_file,
-    read_file_bytes, registry_build, registry_init, registry_migrate_v0_v1, registry_scope_pack_sync,
-    render_plan_prompt_template,
-    render_plan_text, resolve_scope_enablement, scope_add, scope_list, scope_show, scope_verify,
-    store_value_artifact, verify_ledger, verify_witness, ArtifactInput, DeclareCostInput,
-    InitProjectInput, MetaRegistryV0, PlanAutogenInput, PlanCheckInput, PlanNewInput,
-    ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode, ScopeListArgs as ScopeListArgsLib,
-    ScopeOperation, ScopeShowArgs as ScopeShowArgsLib, ScopeVerifyArgs as ScopeVerifyArgsLib,
-    VerifyWitnessInput,
+    check_plan_contract, create_plan, declare_cost, default_artifacts_dir, default_ledger_path,
+    execute_checked, export_plan_markdown, ingest_dir_protocol_with_cache, init_project,
+    load_meta_registry, parse_plan_answers_markdown, read_changed_paths_file, read_file_bytes,
+    registry_build, registry_init, registry_migrate_v0_v1, registry_scope_pack_sync,
+    render_plan_prompt_template, render_plan_text, resolve_scope_enablement, scope_add, scope_list,
+    scope_show, scope_verify, store_value_artifact, verify_ledger, verify_witness, ArtifactInput,
+    DeclareCostInput, InitProjectInput, MetaRegistryV0, PlanAutogenInput, PlanCheckInput,
+    PlanNewInput, ScopeAddArgs as ScopeAddArgsLib, ScopeGateMode,
+    ScopeListArgs as ScopeListArgsLib, ScopeOperation, ScopeShowArgs as ScopeShowArgsLib,
+    ScopeVerifyArgs as ScopeVerifyArgsLib, VerifyWitnessInput,
 };
 use admit_core::provider_types::FactsBundle;
 use admit_core::{evaluate_ruleset_with_inputs, provider_pack_hash, ProviderRegistry, RuleSet};
@@ -1062,8 +1061,21 @@ struct VaultBookArgs {
 
 #[derive(Subcommand)]
 enum VaultBookCommands {
-    /// Build a linear, dependency-ordered concept book markdown export.
+    /// Build a linear, dependency-ordered concept book export.
     Build(VaultBookBuildArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum VaultBookProfile {
+    Hybrid,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum VaultBookOutputFormat {
+    Markdown,
+    Latex,
+    Pdf,
 }
 
 #[derive(Parser)]
@@ -1072,9 +1084,41 @@ struct VaultBookBuildArgs {
     #[arg(value_name = "PATH", default_value = ".")]
     path: PathBuf,
 
-    /// Markdown output path (default: <vault>/exports/irrev-book.md)
+    /// Output path (default depends on --format)
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
+
+    /// Sidecar appendix output directory (default: sibling of --out named `appendices`)
+    #[arg(long = "appendix-dir", value_name = "PATH")]
+    appendix_dir: Option<PathBuf>,
+
+    /// Canonical spine registry markdown path (default: <vault>/meta/Concept Spine Index.generated.md)
+    #[arg(long = "spine-registry", value_name = "PATH")]
+    spine_registry: Option<PathBuf>,
+
+    /// Disable sidecar appendix generation
+    #[arg(long = "no-appendices")]
+    no_appendices: bool,
+
+    /// Emit explain JSON report (optional path; default: <appendix-dir>/book-explain.json)
+    #[arg(long = "explain", value_name = "PATH", num_args = 0..=1)]
+    explain: Option<Option<PathBuf>>,
+
+    /// Main output format
+    #[arg(long = "format", value_enum, default_value_t = VaultBookOutputFormat::Markdown)]
+    format: VaultBookOutputFormat,
+
+    /// LaTeX template path (used for --format latex|pdf)
+    #[arg(long = "template", value_name = "PATH")]
+    template: Option<PathBuf>,
+
+    /// Keep intermediate .tex file when --format pdf
+    #[arg(long = "keep-tex")]
+    keep_tex: bool,
+
+    /// Rendering profile for main book output
+    #[arg(long = "book-profile", value_enum, default_value_t = VaultBookProfile::Hybrid)]
+    book_profile: VaultBookProfile,
 
     /// Include non-canonical concepts (default: canonical-only with dependency closure)
     #[arg(long = "all-concepts")]
@@ -2055,11 +2099,19 @@ struct PlanAutogenArgs {
     root: PathBuf,
 
     /// Output path for plan artifact JSON (`plan-artifact/0`)
-    #[arg(long, value_name = "PATH", default_value = ".admit/plan/plan-artifact.json")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".admit/plan/plan-artifact.json"
+    )]
     out_plan: PathBuf,
 
     /// Output path for proposal manifest JSON (`proposal-manifest/0`)
-    #[arg(long, value_name = "PATH", default_value = ".admit/plan/proposal-manifest.json")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".admit/plan/proposal-manifest.json"
+    )]
     out_manifest: PathBuf,
 
     /// Human-readable plan intent
@@ -4248,20 +4300,11 @@ fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|err| format!("git {}: {}", args.join(" "), err))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "git {} failed: {}",
-            args.join(" "),
-            stderr.trim()
-        ));
+        return Err(format!("git {} failed: {}", args.join(" "), stderr.trim()));
     }
 
-    let stdout = String::from_utf8(output.stdout).map_err(|err| {
-        format!(
-            "git {} output was not valid utf-8: {}",
-            args.join(" "),
-            err
-        )
-    })?;
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|err| format!("git {} output was not valid utf-8: {}", args.join(" "), err))?;
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
         return Err(format!("git {} returned empty output", args.join(" ")));
@@ -4318,7 +4361,10 @@ fn run_plan_check(args: PlanCheckArgs, _dag_trace_out: Option<&Path>) -> Result<
         println!("plan_valid={}", report.plan_valid);
         println!("manifest_present={}", report.manifest_present);
         println!("manifest_valid={}", report.manifest_valid);
-        println!("requires_manual_approval={}", report.requires_manual_approval);
+        println!(
+            "requires_manual_approval={}",
+            report.requires_manual_approval
+        );
         println!("failure_classification={:?}", report.failure_classification);
         println!("stop_reasons={}", report.stop_reasons.len());
         println!("errors={}", report.errors.len());

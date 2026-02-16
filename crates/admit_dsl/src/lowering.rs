@@ -44,7 +44,12 @@ pub fn lower_to_ir_with_scope_packs(
     let mut permissions: HashMap<String, PermissionKind> = HashMap::new();
     let registered_scope_packs: HashSet<(String, u32)> = scope_packs
         .iter()
-        .map(|entry| (normalize_scope_pack_scope_id(&entry.scope_id), entry.version))
+        .map(|entry| {
+            (
+                normalize_scope_pack_scope_id(&entry.scope_id),
+                entry.version,
+            )
+        })
         .collect();
 
     for stmt in program.statements {

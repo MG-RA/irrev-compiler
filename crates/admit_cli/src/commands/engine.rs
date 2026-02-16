@@ -7,7 +7,9 @@ use admit_cli::{
 };
 use admit_surrealdb::{FunctionArtifactRow, ProjectionStoreOps, QueryArtifactRow};
 
-use crate::{commands::current_utc_rfc3339, EngineFunctionAddArgs, EngineQueryAddArgs, ProjectionCoordinator};
+use crate::{
+    commands::current_utc_rfc3339, EngineFunctionAddArgs, EngineQueryAddArgs, ProjectionCoordinator,
+};
 
 pub fn run_engine_query_add(
     args: EngineQueryAddArgs,

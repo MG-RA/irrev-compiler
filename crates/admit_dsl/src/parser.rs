@@ -214,10 +214,9 @@ pub fn parse_program(source: &str, file: &str) -> Result<Program, Vec<ParseError
             }))
         });
 
-    let scope_pack_ref = choice::<_, Simple<Token>>((string.clone(), ident.clone()))
-        .try_map(|raw: String, span| {
-            parse_scope_pack_ref(&raw)
-                .map_err(|msg| Simple::custom(span, msg))
+    let scope_pack_ref =
+        choice::<_, Simple<Token>>((string.clone(), ident.clone())).try_map(|raw: String, span| {
+            parse_scope_pack_ref(&raw).map_err(|msg| Simple::custom(span, msg))
         });
 
     let import_scope_pack_stmt = just(Token::KwImport)

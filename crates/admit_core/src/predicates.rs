@@ -76,7 +76,11 @@ pub fn eval_pred_with_provider(
                 EvalError(format!("no provider registered for scope '{}'", scope_id.0))
             })?;
             let result = provider
-                .eval_predicate(name, params, &crate::provider_types::PredicateEvalContext::default())
+                .eval_predicate(
+                    name,
+                    params,
+                    &crate::provider_types::PredicateEvalContext::default(),
+                )
                 .map_err(|e| EvalError(e.message))?;
 
             for f in &result.findings {

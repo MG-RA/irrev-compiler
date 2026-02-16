@@ -302,8 +302,8 @@ scope main
 
 import scope_pack "git.working_tree@1"
 "#;
-        let program = parse_program(source, "import-scope-pack-no-registry.adm")
-            .expect("parse program");
+        let program =
+            parse_program(source, "import-scope-pack-no-registry.adm").expect("parse program");
         let err = lower_to_ir(program).expect_err("expected missing registry context");
         assert!(err
             .iter()
@@ -319,8 +319,8 @@ scope main
 
 import scope_pack "git.working_tree@1"
 "#;
-        let program = parse_program(source, "import-scope-pack-with-registry.adm")
-            .expect("parse program");
+        let program =
+            parse_program(source, "import-scope-pack-with-registry.adm").expect("parse program");
         let ir = crate::lower_to_ir_with_scope_packs(
             program,
             &[crate::ScopePackRegistryEntry {
@@ -381,8 +381,8 @@ scope main
 
 import scope_pack "git.working_tree@1"
 "#;
-        let program = parse_program(source, "import-scope-pack-meta-registry.adm")
-            .expect("parse program");
+        let program =
+            parse_program(source, "import-scope-pack-meta-registry.adm").expect("parse program");
         let meta_registry = serde_json::json!({
             "schema_id": "meta-registry/1",
             "scope_packs": [

@@ -1,0 +1,60 @@
+name: Admit Approval Rerun
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  rerun-ci:
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/admit approve ') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse approval command and rerun CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WITNESS_HASH=$(printf '%s\n' "$COMMENT_BODY" | sed -n 's#^/admit approve \([0-9a-f]\{64\}\)$#\1#p' | head -n 1)
+          if [ -z "$WITNESS_HASH" ]; then
+            echo "No valid /admit approve command found in comment body."
+            exit 0
+          fi
+
+          PR_AUTHOR=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json author --jq '.author.login')
+          if [ "$COMMENT_AUTHOR" != "$PR_AUTHOR" ]; then
+            gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f body="Ignoring approval command from @$COMMENT_AUTHOR. Only PR author @$PR_AUTHOR can approve witness \`$WITNESS_HASH\`."
+            exit 0
+          fi
+
+          HEAD_REF=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefName --jq '.headRefName')
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')
+          RUN_ID=$(gh run list \
+            --repo "$REPO" \
+            --workflow CI \
+            --branch "$HEAD_REF" \
+            --event pull_request \
+            --json databaseId,headSha,createdAt \
+            --limit 50 \
+            --jq "[.[] | select(.headSha == \"$HEAD_SHA\")][0].databaseId")
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f body="Approval recorded for witness \`$WITNESS_HASH\`, but no matching CI pull_request run was found for head \`$HEAD_SHA\`. Please rerun CI manually."
+            exit 0
+          fi
+
+          gh run rerun "$RUN_ID" --repo "$REPO"
+          gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+            -f body="Approval recorded for witness \`$WITNESS_HASH\`. Re-ran CI workflow run \`$RUN_ID\` for head \`$HEAD_SHA\`."

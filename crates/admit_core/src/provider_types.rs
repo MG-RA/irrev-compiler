@@ -257,7 +257,11 @@ pub fn provider_pack_hash(desc: &ProviderDescriptor) -> Result<String, EvalError
             evidence_schema: pred.evidence_schema.clone(),
         })
         .collect::<Vec<_>>();
-    predicates.sort_by(|a, b| a.predicate_id.cmp(&b.predicate_id).then(a.name.cmp(&b.name)));
+    predicates.sort_by(|a, b| {
+        a.predicate_id
+            .cmp(&b.predicate_id)
+            .then(a.name.cmp(&b.name))
+    });
 
     let identity = ProviderPackIdentity {
         scope_id: desc.scope_id.clone(),
@@ -465,7 +469,10 @@ mod tests {
         b.supported_phases.reverse();
         b.required_approvals.reverse();
         b.predicates.reverse();
-        assert_eq!(provider_pack_hash(&a).unwrap(), provider_pack_hash(&b).unwrap());
+        assert_eq!(
+            provider_pack_hash(&a).unwrap(),
+            provider_pack_hash(&b).unwrap()
+        );
     }
 
     #[test]
@@ -474,7 +481,10 @@ mod tests {
         let mut b = descriptor();
         b.predicates[0].doc = "Different prose".to_string();
         b.predicates[1].doc = "Another prose".to_string();
-        assert_eq!(provider_pack_hash(&a).unwrap(), provider_pack_hash(&b).unwrap());
+        assert_eq!(
+            provider_pack_hash(&a).unwrap(),
+            provider_pack_hash(&b).unwrap()
+        );
     }
 
     #[test]
@@ -487,6 +497,9 @@ mod tests {
                 "max_lines": { "type": "integer", "minimum": 1 }
             }
         }));
-        assert_ne!(provider_pack_hash(&a).unwrap(), provider_pack_hash(&b).unwrap());
+        assert_ne!(
+            provider_pack_hash(&a).unwrap(),
+            provider_pack_hash(&b).unwrap()
+        );
     }
 }

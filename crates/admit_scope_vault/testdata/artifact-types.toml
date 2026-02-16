@@ -14,7 +14,7 @@ allowed_patterns = ["concepts/*.md"]
 allowed_extensions = [".md"]
 
 [types.metadata]
-required = ["role", "layer", "canonical"]
+required = ["role", "layer", "canonical", "invariants"]
 optional = ["aliases", "facets"]
 
 [types.metadata.constraints]
@@ -22,6 +22,7 @@ role = { type = "literal", value = "concept" }
 layer = { type = "enum", values = ["primitive", "first-order", "mechanism"] }
 canonical = { type = "boolean" }
 aliases = { type = "list", item_type = "string" }
+invariants = { type = "list", item_type = "string", allowed = ["governance", "irreversibility", "decomposition", "attribution"] }
 facets = { type = "list", item_type = "string", allowed = ["implicit-constraint", "anti-belief"] }
 
 [[types]]

@@ -1,0 +1,96 @@
+{
+  "schema_id": "plan-artifact/0",
+  "plan_id": "plan:768e8b1c79290bf4469e9c3a176800aa67e6f8797f718d13b60eda2e57034df5",
+  "intent": "Automated CI plan scaffold",
+  "scope_targets": [
+    "."
+  ],
+  "expected_changed_paths": [
+    ".admit/config.toml",
+    ".admit/plan/plan-artifact.json",
+    ".admit/plan/proposal-manifest.json",
+    ".admit/prompts/implementer.system.md",
+    ".admit/prompts/implementer.user.template.md",
+    ".admit/prompts/planner.system.md",
+    ".admit/prompts/planner.user.template.md",
+    ".admit/prompts/providers/claude/implementer.output.schema.json",
+    ".admit/prompts/providers/claude/planner.output.schema.json",
+    ".admit/prompts/providers/openai/implementer.response_format.json",
+    ".admit/prompts/providers/openai/planner.response_format.json",
+    ".admit/schemas/plan-artifact.v0.schema.json",
+    ".admit/schemas/proposal-manifest.v0.schema.json",
+    ".github/workflows/ci.yml",
+    "AGENTS.md",
+    "README.md",
+    "action.yml",
+    "crates/admit_cli/src/commands/ci_check.rs",
+    "crates/admit_cli/src/lib.rs",
+    "crates/admit_cli/src/main.rs",
+    "crates/admit_cli/src/plan.rs",
+    "crates/admit_cli/src/registry.rs",
+    "crates/admit_cli/src/scope_validation.rs",
+    "crates/admit_cli/src/types.rs",
+    "crates/admit_cli/tests/ci_command.rs",
+    "crates/admit_cli/tests/registry.rs",
+    "crates/admit_cli/tests/ruleset_check.rs",
+    "crates/admit_core/src/lib.rs",
+    "crates/admit_core/src/predicates.rs",
+    "crates/admit_core/src/provider_trait.rs",
+    "crates/admit_core/src/provider_types.rs",
+    "crates/admit_core/src/rules.rs",
+    "crates/admit_dsl/src/ast.rs",
+    "crates/admit_dsl/src/lexer.rs",
+    "crates/admit_dsl/src/lib.rs",
+    "crates/admit_dsl/src/lowering.rs",
+    "crates/admit_dsl/src/parser.rs",
+    "crates/admit_dsl/src/tests.rs",
+    "crates/admit_dsl/src/tokens.rs",
+    "crates/admit_scope_deps/src/provider_impl.rs",
+    "crates/admit_scope_git/src/provider_impl.rs",
+    "crates/admit_scope_github/src/provider_impl.rs",
+    "crates/admit_scope_ingest/src/provider_impl.rs",
+    "crates/admit_scope_rust/src/provider_impl.rs",
+    "crates/admit_scope_text/src/provider_impl.rs",
+    "docs/spec/agent-plan-contract.md",
+    "docs/spec/provider-protocol.md",
+    "meta/design/v2/v4-phase1-progress.md",
+    "meta/design/v2/v4-phase1-status.md",
+    "meta/design/v2/v4.md",
+    "meta/design/v2/v5.md"
+  ],
+  "assumptions": [
+    "auto-generated scaffold; refine before merge"
+  ],
+  "constraints_expected": [],
+  "allowed_exceptions": [],
+  "validation_steps": [
+    {
+      "id": "cmd_1",
+      "command": "admit ci --mode enforce",
+      "required": true
+    }
+  ],
+  "stop_conditions": [
+    "touches_github_workflows",
+    "meta_schema_change",
+    "secrets_detected"
+  ],
+  "risk_routes": [
+    {
+      "bucket": "bucket:trust_debt",
+      "cost_estimate": 1.0,
+      "unit": "risk_points",
+      "rationale": "auto-generated scaffold route"
+    }
+  ],
+  "unknowns": [],
+  "confidence": 0.0,
+  "generated_by": {
+    "provider": "admit_cli",
+    "model": "autogen/v1",
+    "surface": "ci",
+    "timestamp": "2026-02-14T19:56:11Z",
+    "planner_prompt_hash": null,
+    "implementer_prompt_hash": null
+  }
+}

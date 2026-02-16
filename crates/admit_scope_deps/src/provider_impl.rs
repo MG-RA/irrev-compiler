@@ -91,67 +91,81 @@ impl Provider for DepsManifestProvider {
             required_approvals: vec![],
             predicates: vec![
                 PredicateDescriptor {
+                    predicate_id: "deps.manifest/git_dependency_present@1".to_string(),
                     name: "git_dependency_present".to_string(),
                     doc: "Triggers when dependency facts indicate git-sourced dependencies."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "deps.manifest/wildcard_version_present@1".to_string(),
                     name: "wildcard_version_present".to_string(),
                     doc: "Triggers when dependency facts indicate wildcard dependency versions."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "deps.manifest/lockfile_missing@1".to_string(),
                     name: "lockfile_missing".to_string(),
                     doc: "Triggers when manifests are present without corresponding lockfiles."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "properties": {}
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "deps.manifest/unapproved_dependency@1".to_string(),
                     name: "unapproved_dependency".to_string(),
                     doc: "Triggers for dependency names that are not in params.allowed."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts", "allowed"],
+                        "required": ["allowed"],
                         "properties": {
-                            "facts": { "type": "array" },
                             "allowed": {
                                 "type": "array",
                                 "items": { "type": "string" }
                             }
                         }
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "deps.manifest/manifest_changed_without_lockfile@1".to_string(),
                     name: "manifest_changed_without_lockfile".to_string(),
                     doc: "Triggers when a manifest file appears in changed_paths without its \
                           corresponding lockfile also changed."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts"],
                         "properties": {
-                            "facts": { "type": "array" },
                             "changed_paths": {
                                 "type": "array",
                                 "items": { "type": "string" }
                             }
                         }
                     })),
+                    evidence_schema: None,
                 },
             ],
         }
@@ -351,9 +365,10 @@ impl Provider for DepsManifestProvider {
         &self,
         name: &str,
         params: &serde_json::Value,
+        ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         let scope_id = ScopeId(DEPS_MANIFEST_SCOPE_ID.to_string());
-        let facts = decode_facts(params, &scope_id)?;
+        let facts = decode_facts(params, ctx, &scope_id)?;
         let deps = extract_dependency_records(&facts);
         let manifests = extract_manifest_records(&facts);
         let locks = extract_lock_records(&facts);
@@ -375,12 +390,16 @@ impl Provider for DepsManifestProvider {
 
 fn decode_facts(
     params: &serde_json::Value,
+    ctx: &PredicateEvalContext,
     scope_id: &ScopeId,
 ) -> Result<Vec<Fact>, ProviderError> {
+    if let Some(facts) = &ctx.facts {
+        return Ok(facts.clone());
+    }
     let value = params.get("facts").cloned().ok_or_else(|| ProviderError {
         scope: scope_id.clone(),
         phase: ProviderPhase::Snapshot,
-        message: "predicate requires params.facts".to_string(),
+        message: "predicate requires context.facts or params.facts".to_string(),
     })?;
     serde_json::from_value(value).map_err(|err| ProviderError {
         scope: scope_id.clone(),
@@ -1341,6 +1360,7 @@ version = "1.0.0"
             .eval_predicate(
                 "git_dependency_present",
                 &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1364,7 +1384,11 @@ version = "1.0.0"
             })),
         }];
         let out = provider
-            .eval_predicate("lockfile_missing", &serde_json::json!({ "facts": facts }))
+            .eval_predicate(
+                "lockfile_missing",
+                &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
+            )
             .expect("predicate");
         assert!(out.triggered);
         assert_eq!(out.findings.len(), 1);
@@ -1397,6 +1421,7 @@ version = "1.0.0"
                     "facts": facts,
                     "allowed": ["anyhow"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1415,6 +1440,7 @@ version = "1.0.0"
                     "facts": facts,
                     "changed_paths": ["Cargo.toml", "src/main.rs"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1433,6 +1459,7 @@ version = "1.0.0"
                     "facts": facts,
                     "changed_paths": ["Cargo.toml", "Cargo.lock"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);
@@ -1449,6 +1476,7 @@ version = "1.0.0"
                     "facts": facts,
                     "changed_paths": ["frontend/package.json"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -1466,8 +1494,42 @@ version = "1.0.0"
                     "facts": facts,
                     "changed_paths": ["frontend/package.json", "frontend/yarn.lock"]
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(!out.triggered);
+    }
+
+    #[test]
+    fn git_dependency_predicate_uses_context_facts() {
+        let provider = DepsManifestProvider::new();
+        let facts = vec![Fact::LintFinding {
+            rule_id: RULE_DEP.to_string(),
+            severity: Severity::Info,
+            invariant: None,
+            path: "Cargo.toml".to_string(),
+            span: span_for_path("Cargo.toml"),
+            message: "dependency git_dep (git)".to_string(),
+            evidence: Some(serde_json::json!({
+                "manifest_kind": "cargo_toml",
+                "section": "dependencies",
+                "name": "git_dep",
+                "package_name": null,
+                "version_req": null,
+                "source_kind": "git"
+            })),
+        }];
+        let out = provider
+            .eval_predicate(
+                "git_dependency_present",
+                &serde_json::json!({}),
+                &PredicateEvalContext {
+                    facts: Some(facts),
+                    snapshot_hash: None,
+                    facts_schema_id: None,
+                },
+            )
+            .expect("predicate");
+        assert!(out.triggered);
     }
 }

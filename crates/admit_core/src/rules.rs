@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::error::EvalError;
 use crate::ir::LintFailOn;
 use crate::provider_registry::ProviderRegistry;
-use crate::provider_types::FactsBundle;
+use crate::provider_types::{FactsBundle, PredicateEvalContext};
 use crate::span::Span;
 use crate::symbols::{ModuleId, ScopeId};
 use crate::witness::{
@@ -168,8 +168,12 @@ pub fn evaluate_ruleset_with_inputs(
             ))
         })?;
         let mut effective_params = binding.when.params.clone();
+        let mut eval_ctx = PredicateEvalContext::default();
         if let Some(bundles) = input_bundles {
             if let Some(bundle) = bundles.get(&binding.when.scope_id) {
+                eval_ctx.facts = Some(bundle.facts.clone());
+                eval_ctx.snapshot_hash = Some(bundle.snapshot_hash.0.clone());
+                eval_ctx.facts_schema_id = Some(bundle.schema_id.clone());
                 let mut obj = match effective_params {
                     Value::Object(map) => map,
                     Value::Null => serde_json::Map::new(),
@@ -222,7 +226,7 @@ pub fn evaluate_ruleset_with_inputs(
             }
         }
         let mut result = provider
-            .eval_predicate(&binding.when.predicate, &effective_params)
+            .eval_predicate(&binding.when.predicate, &effective_params, &eval_ctx)
             .map_err(|err| {
                 EvalError(format!(
                     "ruleset binding '{}' predicate '{}.{}' failed: {}",
@@ -410,6 +414,7 @@ mod tests {
             &self,
             name: &str,
             params: &Value,
+            _ctx: &crate::provider_types::PredicateEvalContext,
         ) -> Result<PredicateResult, ProviderError> {
             match name {
                 "always_trigger" => Ok(PredicateResult {
@@ -446,6 +451,12 @@ mod tests {
                         findings: vec![],
                     })
                 }
+                "ctx_has_facts" => Ok(PredicateResult {
+                    triggered: _ctx.facts.is_some()
+                        && _ctx.snapshot_hash.as_deref() == Some("abc123")
+                        && _ctx.facts_schema_id.as_deref() == Some("facts-bundle/stub.scope@1"),
+                    findings: vec![],
+                }),
                 _ => Err(ProviderError {
                     scope: self.scope_id.clone(),
                     phase: ProviderPhase::Snapshot,
@@ -559,6 +570,56 @@ mod tests {
         );
         let out = evaluate_ruleset_with_inputs(&ruleset, &reg, Some(&bundles), None).unwrap();
         assert_eq!(out.witness.program.snapshot_hash.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn ruleset_inputs_populate_predicate_eval_context() {
+        let mut reg = ProviderRegistry::new();
+        reg.register(Arc::new(StubProvider {
+            scope_id: ScopeId("stub.scope".to_string()),
+        }))
+        .unwrap();
+
+        let ruleset = RuleSet {
+            schema_id: RULESET_SCHEMA_ID_V1.to_string(),
+            ruleset_id: "default".to_string(),
+            enabled_rules: vec!["R-CTX-100".to_string()],
+            bindings: vec![RuleBinding {
+                rule_id: "R-CTX-100".to_string(),
+                severity: Severity::Error,
+                when: RulePredicateBinding {
+                    scope_id: ScopeId("stub.scope".to_string()),
+                    predicate: "ctx_has_facts".to_string(),
+                    params: Value::Null,
+                },
+            }],
+            fail_on: LintFailOn::Error,
+            module: None,
+            scope: None,
+        };
+
+        let mut bundles = BTreeMap::new();
+        bundles.insert(
+            ScopeId("stub.scope".to_string()),
+            FactsBundle {
+                schema_id: "facts-bundle/stub.scope@1".to_string(),
+                scope_id: ScopeId("stub.scope".to_string()),
+                facts: vec![],
+                snapshot_hash: Sha256Hex::new("abc123"),
+                created_at: Rfc3339Timestamp::new("2026-02-11T00:00:00Z"),
+            },
+        );
+
+        let out = evaluate_ruleset_with_inputs(&ruleset, &reg, Some(&bundles), None).unwrap();
+        assert_eq!(out.witness.verdict, Verdict::Inadmissible);
+        assert!(out.witness.facts.iter().any(|fact| matches!(
+            fact,
+            Fact::RuleEvaluated {
+                rule_id,
+                triggered,
+                ..
+            } if rule_id == "R-CTX-100" && *triggered
+        )));
     }
 
     #[test]

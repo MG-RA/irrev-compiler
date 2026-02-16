@@ -55,7 +55,10 @@ pub use plan::*;
 pub use predicates::eval_pred;
 pub use provider_registry::ProviderRegistry;
 pub use provider_trait::Provider;
-pub use provider_types::{PredicateDescriptor, PredicateResult};
+pub use provider_types::{
+    provider_pack_hash, PredicateDescriptor, PredicateEvalContext, PredicateResult,
+    PredicateResultKind,
+};
 pub use refs::*;
 pub use rules::*;
 pub use select_path::*;

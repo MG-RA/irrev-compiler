@@ -20,6 +20,9 @@ This folder is the Rust workspace for the Irreversibility compiler/runtime.
 - Use `meta/` documents for architectural intent and protocol constraints.
 - Keep changes minimal and localized; avoid cross-crate refactors unless requested.
 - When you need product intent or scope, start in `meta/README.md`.
+- For plan-contract workflows, generate and update tracked artifacts under `.admit/plan/` (not `out/`).
+- Preferred command for scaffolding is:
+  - `admit plan autogen --root . --out-plan .admit/plan/plan-artifact.json --out-manifest .admit/plan/proposal-manifest.json`
 
 ## Plans and specs (start here)
 

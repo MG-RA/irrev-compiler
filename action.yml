@@ -5,7 +5,7 @@ inputs:
   mode:
     description: "CI mode: observe|audit|enforce"
     required: false
-    default: "observe"
+    default: "enforce"
   config-path:
     description: "Optional path to .admit/config.toml"
     required: false
@@ -13,7 +13,23 @@ inputs:
   require-github:
     description: "Require github.ceremony scope availability"
     required: false
-    default: "false"
+    default: "true"
+  plan-path:
+    description: "Plan artifact path (required when plan-rollout=enforce)"
+    required: false
+    default: ".admit/plan/plan-artifact.json"
+  manifest-path:
+    description: "Proposal manifest path (required when plan-rollout=enforce)"
+    required: false
+    default: ".admit/plan/proposal-manifest.json"
+  plan-rollout:
+    description: "Plan contract rollout: advisory|enforce"
+    required: false
+    default: "enforce"
+  scope-pack-gate:
+    description: "Scope pack gate mode: warn|error"
+    required: false
+    default: "error"
   comment:
     description: "Post PR comment via gh when possible"
     required: false
@@ -29,13 +45,75 @@ outputs:
   witness-path:
     description: "Witness artifact path"
     value: ${{ steps.parse.outputs.witness_path }}
+  requires-manual-approval:
+    description: "Whether plan contract requires manual approval"
+    value: ${{ steps.parse.outputs.requires_manual_approval }}
+  plan-valid:
+    description: "Whether plan artifact validated successfully"
+    value: ${{ steps.parse.outputs.plan_valid }}
 
 runs:
   using: "composite"
   steps:
-    - name: Build admit CLI
+    - name: Ensure admit CLI binary
       shell: bash
-      run: cargo build -p admit_cli --release
+      run: |
+        if [ -x target/debug/admit_cli ]; then
+          echo "using existing target/debug/admit_cli"
+          exit 0
+        fi
+        cargo build -p admit_cli
+
+    - name: Autogenerate plan artifacts when required
+      shell: bash
+      run: |
+        ADMIT_BIN="target/debug/admit_cli"
+        PLAN_PATH="${{ inputs.plan-path }}"
+        MANIFEST_PATH="${{ inputs.manifest-path }}"
+        PLAN_ROLLOUT="${{ inputs.plan-rollout }}"
+
+        if [ "$PLAN_ROLLOUT" != "enforce" ]; then
+          exit 0
+        fi
+
+        NEED_AUTOGEN=0
+        if [ -n "$PLAN_PATH" ] && [ ! -f "$PLAN_PATH" ]; then
+          NEED_AUTOGEN=1
+        fi
+        if [ -n "$MANIFEST_PATH" ] && [ ! -f "$MANIFEST_PATH" ]; then
+          NEED_AUTOGEN=1
+        fi
+
+        if [ "$NEED_AUTOGEN" -eq 0 ]; then
+          exit 0
+        fi
+
+        AUTOGEN_ARGS=(plan autogen --root .)
+        BASE_SHA=""
+        HEAD_SHA=""
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+        elif [ "${{ github.event_name }}" = "push" ]; then
+          BASE_SHA="${{ github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+        fi
+
+        if [ -n "$BASE_SHA" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]; then
+          AUTOGEN_ARGS+=(--base-sha "$BASE_SHA")
+        fi
+        if [ -n "$HEAD_SHA" ]; then
+          AUTOGEN_ARGS+=(--head-sha "$HEAD_SHA")
+        fi
+
+        if [ -n "$PLAN_PATH" ]; then
+          AUTOGEN_ARGS+=(--out-plan "$PLAN_PATH")
+        fi
+        if [ -n "$MANIFEST_PATH" ]; then
+          AUTOGEN_ARGS+=(--out-manifest "$MANIFEST_PATH")
+        fi
+
+        "$ADMIT_BIN" "${AUTOGEN_ARGS[@]}"
 
     - name: Run admissibility witness
       id: run_witness
@@ -47,6 +125,7 @@ runs:
         GH_REPO: ${{ github.repository }}
       run: |
         mkdir -p out/artifacts
+        ADMIT_BIN="target/debug/admit_cli"
         CONFIG_ARG=""
         if [ -n "${{ inputs.config-path }}" ]; then
           CONFIG_ARG="--config ${{ inputs.config-path }}"
@@ -55,7 +134,31 @@ runs:
         if [ "${{ inputs.require-github }}" = "true" ]; then
           REQUIRE_GH_ARG="--require-github"
         fi
-        target/release/admit_cli ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json
+        PLAN_ARG=""
+        if [ -n "${{ inputs.plan-path }}" ]; then
+          PLAN_ARG="--plan ${{ inputs.plan-path }}"
+        fi
+        MANIFEST_ARG=""
+        if [ -n "${{ inputs.manifest-path }}" ]; then
+          MANIFEST_ARG="--manifest ${{ inputs.manifest-path }}"
+        fi
+        set +e
+        $ADMIT_BIN ci --root . --mode "${{ inputs.mode }}" --json --artifacts-dir out/artifacts --plan-rollout "${{ inputs.plan-rollout }}" --scope-pack-gate "${{ inputs.scope-pack-gate }}" $PLAN_ARG $MANIFEST_ARG $CONFIG_ARG $REQUIRE_GH_ARG > out/ci-witness.json 2> out/ci-witness.stderr
+        CI_EXIT=$?
+        set -e
+        echo "ci_exit_code=$CI_EXIT" >> "$GITHUB_OUTPUT"
+        if [ ! -s out/ci-witness.json ]; then
+          jq -n --arg err "$(cat out/ci-witness.stderr)" '{
+            mode: "unknown",
+            verdict: "error",
+            integrity_failures: [],
+            stop_reasons: [],
+            top_warnings: [],
+            scope_warnings: [],
+            requires_manual_approval: false,
+            error: $err
+          }' > out/ci-witness.json
+        fi
 
     - name: Parse outputs
       id: parse
@@ -64,9 +167,59 @@ runs:
         VERDICT=$(jq -r '.verdict // ""' out/ci-witness.json)
         WITNESS_HASH=$(jq -r '.witness_hash // ""' out/ci-witness.json)
         WITNESS_PATH=$(jq -r '.witness_artifact_path // ""' out/ci-witness.json)
+        REQUIRES_MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        PLAN_VALID=$(jq -r '.plan_contract.plan_valid // false' out/ci-witness.json)
         echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
         echo "witness_hash=$WITNESS_HASH" >> "$GITHUB_OUTPUT"
         echo "witness_path=$WITNESS_PATH" >> "$GITHUB_OUTPUT"
+        echo "requires_manual_approval=$REQUIRES_MANUAL_APPROVAL" >> "$GITHUB_OUTPUT"
+        echo "plan_valid=$PLAN_VALID" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve Manual Approval
+      id: manual_approval
+      if: ${{ github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        REQUIRES_MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        WITNESS_HASH=$(jq -r '.witness_hash // ""' out/ci-witness.json)
+        REPO="${{ github.repository }}"
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+
+        APPROVAL_GRANTED="false"
+        APPROVER=""
+        APPROVAL_COMMAND=""
+        if [ -n "$WITNESS_HASH" ]; then
+          APPROVAL_COMMAND="/admit approve $WITNESS_HASH"
+        fi
+
+        if [ "$REQUIRES_MANUAL_APPROVAL" = "true" ] && [ -n "$APPROVAL_COMMAND" ]; then
+          APPROVER=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq ".[] | select(.user.login == \"$PR_AUTHOR\" and (.body | contains(\"$APPROVAL_COMMAND\"))) | .user.login" | tail -n 1)
+          if [ -n "$APPROVER" ]; then
+            APPROVAL_GRANTED="true"
+          fi
+        fi
+
+        jq -n \
+          --arg witness_hash "$WITNESS_HASH" \
+          --arg command "$APPROVAL_COMMAND" \
+          --arg required "$REQUIRES_MANUAL_APPROVAL" \
+          --arg granted "$APPROVAL_GRANTED" \
+          --arg approver "$APPROVER" \
+          '{
+            schema_id: "manual-approval/0",
+            witness_hash: $witness_hash,
+            command: $command,
+            required: ($required == "true"),
+            granted: ($granted == "true"),
+            approver: (if $approver == "" then null else $approver end)
+          }' > out/manual-approval.json
+
+        echo "granted=$APPROVAL_GRANTED" >> "$GITHUB_OUTPUT"
+        echo "approver=$APPROVER" >> "$GITHUB_OUTPUT"
+        echo "command=$APPROVAL_COMMAND" >> "$GITHUB_OUTPUT"
 
     - name: Publish summary
       shell: bash
@@ -87,6 +240,16 @@ runs:
         WITNESS_PATH=$(jq -r '.witness_artifact_path // ""' out/ci-witness.json)
         INTEGRITY_COUNT=$(jq -r '(.integrity_failures // []) | length' out/ci-witness.json)
         SCOPE_WARNING_COUNT=$(jq -r '(.scope_warnings // []) | length' out/ci-witness.json)
+        PLAN_VALID=$(jq -r '.plan_contract.plan_valid // false' out/ci-witness.json)
+        MANIFEST_VALID=$(jq -r '.plan_contract.manifest_valid // false' out/ci-witness.json)
+        MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        STOP_REASON_COUNT=$(jq -r '(.stop_reasons // []) | length' out/ci-witness.json)
+        MANUAL_APPROVAL_GRANTED="${{ steps.manual_approval.outputs.granted }}"
+        MANUAL_APPROVAL_APPROVER="${{ steps.manual_approval.outputs.approver }}"
+        MANUAL_APPROVAL_COMMAND="${{ steps.manual_approval.outputs.command }}"
+        if [ -z "$MANUAL_APPROVAL_GRANTED" ]; then
+          MANUAL_APPROVAL_GRANTED="false"
+        fi
 
         cat > out/ci-witness-comment.md <<EOF
         <!-- admit-ci-witness -->
@@ -101,7 +264,31 @@ runs:
         | witness_artifact_path | \`$WITNESS_PATH\` |
         | integrity_failures | \`$INTEGRITY_COUNT\` |
         | scope_warnings | \`$SCOPE_WARNING_COUNT\` |
+        | plan_valid | \`$PLAN_VALID\` |
+        | manifest_valid | \`$MANIFEST_VALID\` |
+        | requires_manual_approval | \`$MANUAL_APPROVAL\` |
+        | manual_approval_granted | \`$MANUAL_APPROVAL_GRANTED\` |
+        | stop_reasons | \`$STOP_REASON_COUNT\` |
 
+        EOF
+
+        if [ "$MANUAL_APPROVAL" = "true" ]; then
+          if [ "$MANUAL_APPROVAL_GRANTED" = "true" ]; then
+            cat >> out/ci-witness-comment.md <<EOF
+        Manual approval is recorded for witness \`$WITNESS_HASH\` by \`$MANUAL_APPROVAL_APPROVER\`.
+
+        EOF
+          else
+            cat >> out/ci-witness-comment.md <<EOF
+        Manual approval is required for witness \`$WITNESS_HASH\`.
+        PR author can approve by commenting:
+        \`$MANUAL_APPROVAL_COMMAND\`
+
+        EOF
+          fi
+        fi
+
+        cat >> out/ci-witness-comment.md <<EOF
         <details>
         <summary>Full Witness Summary (JSON)</summary>
 
@@ -129,3 +316,16 @@ runs:
             gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$(cat out/ci-witness-comment.md)" || true
           fi
         fi
+
+    - name: Enforce witness result
+      if: ${{ steps.run_witness.outputs.ci_exit_code != '0' }}
+      shell: bash
+      run: |
+        REQUIRES_MANUAL_APPROVAL=$(jq -r '.requires_manual_approval // false' out/ci-witness.json)
+        MANUAL_APPROVAL_GRANTED="${{ steps.manual_approval.outputs.granted }}"
+        if [ "$REQUIRES_MANUAL_APPROVAL" = "true" ] && [ "$MANUAL_APPROVAL_GRANTED" = "true" ] && grep -q "manual approval required" out/ci-witness.stderr; then
+          echo "manual approval granted for this witness; allowing CI pass"
+          exit 0
+        fi
+        echo "admit ci failed (exit=${{ steps.run_witness.outputs.ci_exit_code }})"
+        exit "${{ steps.run_witness.outputs.ci_exit_code }}"

@@ -61,51 +61,62 @@ impl Provider for TextMetricsProvider {
             required_approvals: vec![],
             predicates: vec![
                 PredicateDescriptor {
+                    predicate_id: "text.metrics/lines_exceed@1".to_string(),
                     name: "lines_exceed".to_string(),
                     doc: "Triggers for files where line count exceeds params.max_lines."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts", "max_lines"],
+                        "required": ["max_lines"],
                         "properties": {
-                            "facts": { "type": "array" },
                             "max_lines": { "type": "integer", "minimum": 0 }
                         }
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "text.metrics/bytes_exceed@1".to_string(),
                     name: "bytes_exceed".to_string(),
                     doc: "Triggers for files where byte size exceeds params.max_bytes.".to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts", "max_bytes"],
+                        "required": ["max_bytes"],
                         "properties": {
-                            "facts": { "type": "array" },
                             "max_bytes": { "type": "integer", "minimum": 0 }
                         }
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "text.metrics/line_length_exceed@1".to_string(),
                     name: "line_length_exceed".to_string(),
                     doc: "Triggers for files where max line length exceeds params.max_line_len."
                         .to_string(),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
                     param_schema: Some(serde_json::json!({
                         "type": "object",
-                        "required": ["facts", "max_line_len"],
+                        "required": ["max_line_len"],
                         "properties": {
-                            "facts": { "type": "array" },
                             "max_line_len": { "type": "integer", "minimum": 0 }
                         }
                     })),
+                    evidence_schema: None,
                 },
                 PredicateDescriptor {
+                    predicate_id: "text.metrics/todo_present@1".to_string(),
                     name: "todo_present".to_string(),
                     doc: "Triggers for files where TODO markers are present.".to_string(),
                     param_schema: Some(serde_json::json!({
-                        "type": "object",
-                        "required": ["facts"],
-                        "properties": { "facts": { "type": "array" } }
+                        "type": "object"
                     })),
+                    result_kind: PredicateResultKind::Bool,
+                    emits_findings: true,
+                    evidence_schema: None,
                 },
             ],
         }
@@ -222,9 +233,10 @@ impl Provider for TextMetricsProvider {
         &self,
         name: &str,
         params: &serde_json::Value,
+        ctx: &PredicateEvalContext,
     ) -> Result<PredicateResult, ProviderError> {
         let scope_id = ScopeId(TEXT_METRICS_SCOPE_ID.to_string());
-        let facts = decode_facts(params, &scope_id)?;
+        let facts = decode_facts(params, ctx, &scope_id)?;
         let metrics = extract_metrics(&facts);
 
         match name {
@@ -328,12 +340,16 @@ impl Provider for TextMetricsProvider {
 
 fn decode_facts(
     params: &serde_json::Value,
+    ctx: &PredicateEvalContext,
     scope_id: &ScopeId,
 ) -> Result<Vec<Fact>, ProviderError> {
+    if let Some(facts) = &ctx.facts {
+        return Ok(facts.clone());
+    }
     let value = params.get("facts").cloned().ok_or_else(|| ProviderError {
         scope: scope_id.clone(),
         phase: ProviderPhase::Snapshot,
-        message: "predicate requires params.facts".to_string(),
+        message: "predicate requires context.facts or params.facts".to_string(),
     })?;
     serde_json::from_value(value).map_err(|err| ProviderError {
         scope: scope_id.clone(),
@@ -688,6 +704,7 @@ mod tests {
                     "facts": facts,
                     "max_lines": 10
                 }),
+                &PredicateEvalContext::default(),
             )
             .expect("predicate");
         assert!(out.triggered);
@@ -714,10 +731,46 @@ mod tests {
             })),
         }];
         let out = provider
-            .eval_predicate("todo_present", &serde_json::json!({ "facts": facts }))
+            .eval_predicate(
+                "todo_present",
+                &serde_json::json!({ "facts": facts }),
+                &PredicateEvalContext::default(),
+            )
             .expect("predicate");
         assert!(out.triggered);
         assert_eq!(out.findings.len(), 1);
         assert_eq!(out.findings[0].rule_id, RULE_TODO_PRESENT);
+    }
+
+    #[test]
+    fn lines_exceed_predicate_uses_context_facts() {
+        let provider = TextMetricsProvider::new();
+        let facts = vec![Fact::LintFinding {
+            rule_id: RULE_FILE_METRICS.to_string(),
+            severity: Severity::Info,
+            invariant: None,
+            path: "src/lib.rs".to_string(),
+            span: span_for_path("src/lib.rs"),
+            message: "text file metrics".to_string(),
+            evidence: Some(serde_json::json!({
+                "bytes": 120,
+                "lines": 12,
+                "nonempty_lines": 11,
+                "max_line_len": 40,
+                "todo_count": 0
+            })),
+        }];
+        let out = provider
+            .eval_predicate(
+                "lines_exceed",
+                &serde_json::json!({ "max_lines": 10 }),
+                &PredicateEvalContext {
+                    facts: Some(facts),
+                    snapshot_hash: None,
+                    facts_schema_id: None,
+                },
+            )
+            .expect("predicate");
+        assert!(out.triggered);
     }
 }

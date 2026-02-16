@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use admit_core::provider_trait::Provider;
@@ -11,7 +11,7 @@ use sha2::Digest;
 
 use admit_cli::{
     append_lens_activated_event, build_lens_activated_event, default_artifacts_dir,
-    store_value_artifact, ProgramRef,
+    check_plan_contract, load_meta_registry, store_value_artifact, PlanCheckInput, ProgramRef,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -42,6 +42,9 @@ pub(crate) struct CiArgs {
     /// Artifact store root (default: out/artifacts)
     #[arg(long)]
     pub artifacts_dir: Option<PathBuf>,
+    /// Optional path to meta registry JSON (fallback: ADMIT_META_REGISTRY env)
+    #[arg(long, value_name = "PATH")]
+    pub meta_registry: Option<PathBuf>,
     /// CI mode: observe|audit|enforce
     #[arg(long, value_enum)]
     pub mode: Option<CiMode>,
@@ -51,6 +54,30 @@ pub(crate) struct CiArgs {
     /// Require GitHub scope to be available when ruleset references github.ceremony
     #[arg(long)]
     pub require_github: bool,
+    /// Optional plan artifact path (`plan-artifact/0`) for typed contract validation
+    #[arg(long, value_name = "PATH")]
+    pub plan: Option<PathBuf>,
+    /// Optional proposal manifest path (`proposal-manifest/0`) for typed contract validation
+    #[arg(long, value_name = "PATH")]
+    pub manifest: Option<PathBuf>,
+    /// Rollout mode for plan contract validation
+    #[arg(long, value_enum, default_value = "advisory")]
+    pub plan_rollout: PlanRolloutMode,
+    /// Scope pack gate mode: warn emits witness warnings, error fails CI
+    #[arg(long, value_enum, default_value = "warn")]
+    pub scope_pack_gate: ScopePackGateModeArg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum PlanRolloutMode {
+    Advisory,
+    Enforce,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ScopePackGateModeArg {
+    Warn,
+    Error,
 }
 
 #[derive(Debug, Clone)]
@@ -177,15 +204,28 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         ));
     }
 
-    let changed_paths = bundles
-        .get(&ScopeId(
-            admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string(),
-        ))
-        .map(extract_changed_paths)
-        .unwrap_or_default();
+    let changed_paths = observed_changed_paths(&bundles);
     let runtime_overlays = build_runtime_overlays(&ruleset, &changed_paths);
+    let plan_enforce = matches!(args.plan_rollout, PlanRolloutMode::Enforce);
+    let mut plan_contract = check_plan_contract(PlanCheckInput {
+        plan_path: args.plan.clone(),
+        manifest_path: args.manifest.clone(),
+        changed_paths_observed: changed_paths.clone(),
+        enforce: plan_enforce,
+    });
 
     let registry = crate::build_ruleset_provider_registry(&ruleset)?;
+    let scope_pack_gate_mode = match args.scope_pack_gate {
+        ScopePackGateModeArg::Warn => admit_cli::ScopeGateMode::Warn,
+        ScopePackGateModeArg::Error => admit_cli::ScopeGateMode::Error,
+    };
+    let meta_registry = load_meta_registry(args.meta_registry.as_deref())
+        .map_err(|err| err.to_string())?
+        .map(|(registry, _hash)| registry);
+    let scope_pack_issues = crate::collect_scope_pack_issues(meta_registry.as_ref(), &registry)?;
+    if scope_pack_gate_mode == admit_cli::ScopeGateMode::Error && !scope_pack_issues.is_empty() {
+        return Err(crate::format_scope_pack_gate_error(&scope_pack_issues));
+    }
     let mut outcome = evaluate_ruleset_with_inputs(
         &ruleset,
         &registry,
@@ -194,6 +234,55 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
     )
     .map_err(|err| err.0)?;
     append_scope_warning_facts(&mut outcome.witness.facts, &scope_warning_facts);
+    if scope_pack_gate_mode == admit_cli::ScopeGateMode::Warn && !scope_pack_issues.is_empty() {
+        outcome
+            .witness
+            .facts
+            .extend(crate::scope_pack_issue_facts(&scope_pack_issues));
+    }
+    if matches!(outcome.witness.verdict, Verdict::Inadmissible) {
+        plan_contract.apply_semantic_failure("semantic_ci_failure");
+    }
+    if plan_enforce && (plan_contract.requires_manual_approval || !plan_contract.errors.is_empty()) {
+        plan_contract.exit_code = 2;
+    }
+    if plan_contract.requires_manual_approval
+        || !plan_contract.errors.is_empty()
+        || !plan_contract.warnings.is_empty()
+    {
+        let plan_contract_evidence = serde_json::to_value(&plan_contract).unwrap_or_else(|_| {
+            serde_json::json!({
+                "requires_manual_approval": plan_contract.requires_manual_approval,
+                "stop_reasons": plan_contract.stop_reasons,
+                "errors": plan_contract.errors,
+                "warnings": plan_contract.warnings,
+            })
+        });
+        outcome.witness.facts.push(Fact::LintFinding {
+            rule_id: "plan/contract".to_string(),
+            severity: if plan_contract.requires_manual_approval {
+                Severity::Warning
+            } else {
+                Severity::Info
+            },
+            invariant: Some("ci.plan_contract".to_string()),
+            path: ".".to_string(),
+            span: admit_core::Span {
+                file: ".".to_string(),
+                start: None,
+                end: None,
+                line: None,
+                col: None,
+            },
+            message: format!(
+                "plan_contract plan_valid={} manifest_valid={} manual_approval={}",
+                plan_contract.plan_valid,
+                plan_contract.manifest_valid,
+                plan_contract.requires_manual_approval
+            ),
+            evidence: Some(plan_contract_evidence),
+        });
+    }
 
     let github_context = bundles
         .get(&ScopeId(
@@ -271,6 +360,12 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         )
         .map_err(|err| err.0)?;
         append_scope_warning_facts(&mut second.witness.facts, &scope_warning_facts);
+        if scope_pack_gate_mode == admit_cli::ScopeGateMode::Warn && !scope_pack_issues.is_empty() {
+            second
+                .witness
+                .facts
+                .extend(crate::scope_pack_issue_facts(&scope_pack_issues));
+        }
         apply_ci_witness_metadata(
             &mut second.witness,
             &input_id,
@@ -315,6 +410,10 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
         LintFailOn::Warning => "warning",
         LintFailOn::Info => "info",
     };
+    let plan_contract_value =
+        serde_json::to_value(&plan_contract).map_err(|err| format!("plan_contract encode: {}", err))?;
+    let plan_requires_manual_approval = plan_contract.requires_manual_approval;
+    let plan_stop_reasons = plan_contract.stop_reasons.clone();
 
     let summary = serde_json::json!({
         "mode": resolved.mode.as_str(),
@@ -339,6 +438,9 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
             "head_sha": ctx.head_sha,
             "payload_hash": ctx.payload_hash
         })),
+        "plan_contract": plan_contract_value,
+        "requires_manual_approval": plan_requires_manual_approval,
+        "stop_reasons": plan_stop_reasons,
     });
 
     if args.json {
@@ -385,6 +487,12 @@ pub(crate) fn run_ci_check(args: CiArgs) -> Result<(), String> {
     if resolved.mode == CiMode::Enforce && matches!(outcome.witness.verdict, Verdict::Inadmissible)
     {
         return Err("ci enforce failed: witness verdict is inadmissible".to_string());
+    }
+    if plan_enforce && plan_contract.exit_code == 2 {
+        return Err(format!(
+            "ci plan enforce failed: manual approval required ({})",
+            plan_contract.stop_reasons.join(", ")
+        ));
     }
 
     Ok(())
@@ -537,7 +645,7 @@ fn parse_ci_mode(raw: &str) -> Result<CiMode, String> {
     }
 }
 
-fn extract_changed_paths(bundle: &FactsBundle) -> Vec<String> {
+fn extract_git_changed_paths(bundle: &FactsBundle) -> Vec<String> {
     let mut paths = Vec::new();
     for fact in &bundle.facts {
         if let Fact::LintFinding {
@@ -561,6 +669,54 @@ fn extract_changed_paths(bundle: &FactsBundle) -> Vec<String> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn extract_github_changed_paths(bundle: &FactsBundle) -> Vec<String> {
+    let mut paths = Vec::new();
+    for fact in &bundle.facts {
+        if let Fact::LintFinding {
+            rule_id,
+            evidence: Some(evidence),
+            ..
+        } = fact
+        {
+            if rule_id == "github/changed_files" {
+                if let Some(arr) = evidence.get("files").and_then(|v| v.as_array()) {
+                    for item in arr {
+                        if let Some(path) = item.as_str() {
+                            paths.push(path.to_string());
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn observed_changed_paths(bundles: &BTreeMap<ScopeId, FactsBundle>) -> Vec<String> {
+    let mut github_paths = Vec::new();
+    if let Some(bundle) = bundles.get(&ScopeId(
+        admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID.to_string(),
+    )) {
+        github_paths = extract_github_changed_paths(bundle);
+    }
+    if !github_paths.is_empty() {
+        return github_paths;
+    }
+
+    let mut observed = BTreeSet::new();
+    if let Some(bundle) = bundles.get(&ScopeId(
+        admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string(),
+    )) {
+        for path in extract_git_changed_paths(bundle) {
+            observed.insert(path);
+        }
+    }
+    observed.into_iter().collect()
 }
 
 fn build_runtime_overlays(
@@ -675,4 +831,86 @@ fn apply_ci_witness_metadata(
 fn canonical_sha256(value: &serde_json::Value) -> Result<String, String> {
     let bytes = admit_core::encode_canonical_value(value).map_err(|err| err.0)?;
     Ok(hex::encode(sha2::Sha256::digest(&bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use admit_core::provider_types::FactsBundle;
+    use admit_core::witness::Fact;
+
+    fn mk_bundle(scope_id: &str, rule_id: &str, evidence: serde_json::Value) -> FactsBundle {
+        FactsBundle {
+            schema_id: format!("facts-bundle/{}@1", scope_id),
+            scope_id: ScopeId(scope_id.to_string()),
+            facts: vec![Fact::LintFinding {
+                rule_id: rule_id.to_string(),
+                severity: Severity::Info,
+                invariant: None,
+                path: ".".to_string(),
+                span: admit_core::Span {
+                    file: ".".to_string(),
+                    start: None,
+                    end: None,
+                    line: None,
+                    col: None,
+                },
+                message: "fixture".to_string(),
+                evidence: Some(evidence),
+            }],
+            snapshot_hash: Sha256Hex::new("abc123"),
+            created_at: Rfc3339Timestamp::new("2026-02-14T00:00:00Z"),
+        }
+    }
+
+    #[test]
+    fn observed_changed_paths_prefers_github_when_available() {
+        let mut bundles = BTreeMap::new();
+        bundles.insert(
+            ScopeId(admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID,
+                "git/changed_paths",
+                serde_json::json!({ "paths": ["Cargo.toml", "tmp/generated.json"] }),
+            ),
+        );
+        bundles.insert(
+            ScopeId(admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID,
+                "github/changed_files",
+                serde_json::json!({ "files": ["src/lib.rs", "Cargo.toml"] }),
+            ),
+        );
+
+        let observed = observed_changed_paths(&bundles);
+        assert_eq!(observed, vec!["Cargo.toml".to_string(), "src/lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn observed_changed_paths_falls_back_to_git_when_github_missing() {
+        let mut bundles = BTreeMap::new();
+        bundles.insert(
+            ScopeId(admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_git::backend::GIT_WORKING_TREE_SCOPE_ID,
+                "git/changed_paths",
+                serde_json::json!({ "paths": ["src/main.rs", "Cargo.toml", "src/main.rs"] }),
+            ),
+        );
+        bundles.insert(
+            ScopeId(admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID.to_string()),
+            mk_bundle(
+                admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID,
+                "github/scope_unavailable",
+                serde_json::json!({ "scope_id": admit_scope_github::backend::GITHUB_CEREMONY_SCOPE_ID }),
+            ),
+        );
+
+        let observed = observed_changed_paths(&bundles);
+        assert_eq!(
+            observed,
+            vec!["Cargo.toml".to_string(), "src/main.rs".to_string()]
+        );
+    }
 }

@@ -41,6 +41,20 @@ Default `plan/execute/verify` stubs may return structured `ProviderError` when u
 - `closure` (`requires_fs`, `requires_network`, `requires_db`, `requires_process`)
 - `predicates` (if provider supports extension predicates)
 
+Each `PredicateDescriptor` SHOULD declare:
+
+- `predicate_id` (`<scope_id>/<predicate_name>@<major>`)
+- `result_kind` (currently `bool`)
+- `emits_findings`
+- `param_schema` (policy inputs only; no transport plumbing like `facts`)
+- `evidence_schema` (optional)
+
+Provider pack identity hash:
+
+- `admit_core::provider_pack_hash()` computes canonical descriptor identity hash.
+- `doc` text is excluded from identity hash.
+- Hash input normalization sorts schema IDs, approvals, phases, and predicates.
+
 ## Extension Predicate Contract
 
 Kernel predicates may delegate to providers through:
@@ -53,6 +67,12 @@ Normative requirements:
 2. Missing registry or missing provider MUST hard-fail evaluation.
 3. The kernel MUST emit `Fact::PredicateEvaluated` for all predicates.
 4. Provider findings returned from `eval_predicate` MUST be recorded as witness findings.
+
+Predicate evaluation context:
+
+- Kernel passes `PredicateEvalContext { facts, snapshot_hash, facts_schema_id }`.
+- Providers SHOULD read facts from context first.
+- Compatibility window: providers MAY still accept legacy `params.facts`.
 
 ## Identity and Metadata Rules
 
@@ -76,4 +96,3 @@ Provider failures MUST return `ProviderError` with:
 - `message`
 
 Errors MUST be serializable and stable across surfaces (CLI/LSP/RPC).
-

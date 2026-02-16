@@ -42,7 +42,10 @@ pub use artifact::{
 };
 
 // Registry operations
-pub use registry::{load_meta_registry, registry_build, registry_init, registry_migrate_v0_v1};
+pub use registry::{
+    load_meta_registry, registry_build, registry_init, registry_migrate_v0_v1,
+    registry_scope_pack_sync,
+};
 
 // Witness & cost lifecycle
 pub use witness::{check_cost_declared, declare_cost, execute_checked, verify_witness};
@@ -52,8 +55,11 @@ pub use verify::verify_ledger;
 
 // Plan operations
 pub use plan::{
-    append_plan_created_event, create_plan, diagnostic_prompts, export_plan_markdown,
-    parse_plan_answers_markdown, render_plan_prompt_template, render_plan_text,
+    append_plan_created_event, autogen_plan_artifacts, check_plan_contract, create_plan,
+    diagnostic_prompts, export_plan_markdown, parse_plan_answers_markdown,
+    read_changed_paths_file, render_plan_prompt_template, render_plan_text,
+    FailureClassification, PlanAutogenInput, PlanAutogenOutput, PlanCheckInput, PlanCheckOutput,
+    PLAN_ARTIFACT_SCHEMA_ID, PROPOSAL_MANIFEST_SCHEMA_ID,
 };
 pub use project_init::{init_project, InitProjectInput, InitProjectOutput};
 
